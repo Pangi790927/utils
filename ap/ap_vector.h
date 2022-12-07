@@ -48,6 +48,10 @@ struct ap_vector_t {
         if (init(ap_static_ctx) < 0)
             AP_EXCEPT("Failed constructor");
     }
+
+    ~ap_vector_t() {
+        uninit();
+    }
 #endif
 
     /* this init function should only be called when this structure is placed inside the shared
@@ -63,14 +67,15 @@ private:
         datap = 0;
         return 0;
     }
-#ifdef AP_ENABLE_AUTOINIT
-public:
-#endif
 
     void uninit() {
         clear();
         ctx_id = 0;
     }
+#ifdef AP_ENABLE_AUTOINIT
+public:
+#endif
+
 
     bool is_init() {
         return ctx_id != 0;

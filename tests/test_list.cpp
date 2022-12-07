@@ -41,7 +41,7 @@ struct node_t {
     int next;
     int prev;
 };
-static node_t nodes[64] = {0};
+static node_t nodes[128] = {0};
 
 struct list_ctx_t {
     using ptr_t = int;
@@ -334,7 +334,7 @@ int main(int argc, char const *argv[])
 {
     DBG_SCOPE();
     /* 0 is not a valid node */
-    for (int i = 0; i < 128; i++)
+    for (int i = 0; i < ARR_SZ(nodes); i++)
         nodes[i].id = i;
 
     simple_list_t l1;

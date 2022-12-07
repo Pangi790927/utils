@@ -20,8 +20,14 @@ inline const char *ap_except_info_str(ap_except_info_t *exc_inf) {
 
 #define AP_EXC_HDR "[EXCEPTION:AP] "
 
+/* This is a mandatory module for using the ap_* objects, you must choose one of the bellow modes
+of handling exceptions or you won't be able to compile the project. */
+
+/* AP_EXCEPT_CBK_PTR
+================================================================================================= */
 /* in this case you must fill the ap_except_ptr before any code that can cause an exception is
 called */
+
 #ifdef AP_EXCEPT_CBK_PTR
 #include "misc_utils.h"
 
@@ -32,7 +38,10 @@ inline ap_except_cbk_t ap_except_cbk;
 		ap_except_info());
 #endif
 
+/* AP_EXCEPT_THROW
+================================================================================================= */
 /* in this case a cpp exception will be called on error */
+
 #ifdef AP_EXCEPT_THROW
 #include "misc_utils.h"
 #include <stdexcept>
@@ -43,7 +52,10 @@ inline ap_except_cbk_t ap_except_cbk;
 
 #endif
 
+/* AP_EXCEPT_STATIC_CBK
+================================================================================================= */
 /* in this case the function ap_except_cbk must be implemented and it will be called */
+
 #ifdef AP_EXCEPT_STATIC_CBK
 #include "misc_utils.h"
 
@@ -53,7 +65,10 @@ extern void ap_except_cbk(const char *str, ap_except_info_t *exc_inf);
 
 #endif
 
+/* AP_EXCEPT_SEGFAULT
+================================================================================================= */
 /* in this case the program will segfault intentionally after printing a message */
+
 #ifdef AP_EXCEPT_SEGFAULT
 #define AP_EXCEPT(fmt, ...) do {
 	DBG(AP_EXC_HDR fmt, ##__VA_ARGS__);
@@ -62,7 +77,10 @@ extern void ap_except_cbk(const char *str, ap_except_info_t *exc_inf);
 #endif
 
 
+/* AP_EXCEPT_NONE
+================================================================================================= */
 /* in this case no exception will be called(must be explicit about it) */
+
 #ifdef AP_EXCEPT_NONE
 #define AP_EXCEPT(fmt, ...)
 #endif

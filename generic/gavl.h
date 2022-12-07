@@ -3,9 +3,9 @@
 
 #include "debug.h"
 
-/* TODO: change the whole function thing: make a class that holds the required functions for
-a generic*-struct, make sure the functions are present using c++ concepts, hold only a single ctx
-member inside each generic*-struct. This way we will be able to hold those implementations inside
+/* changed the whole function thing: made a class that holds the required functions for
+a generic*-struct, made sure the functions are present using c++ concepts, hold only a single ctx
+member inside each generic*-struct. This way we are able to hold those implementations inside
 shared memory locations, kernel space, alloc-free spaces, custom alloced spaces, mapped files, etc.
 */
 

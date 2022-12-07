@@ -42,7 +42,7 @@ inline uint64_t logger_get_time() {
             strerror(errno), errnoname(errno), errno)
 
 #define ASSERT_FN(fn_call)\
-if ((fn_call) < 0) {\
+if (intptr_t(fn_call) < 0) {\
     DBGE("FAILED: " #fn_call);\
     return -1;\
 }

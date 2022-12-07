@@ -139,6 +139,10 @@ struct ap_map_t {
         if (init(ap_static_ctx) < 0)
             AP_EXCEPT("Failed constructor");
     }
+
+    ~ap_map_t() {
+        uninit();
+    }
 #endif
 
 #ifdef AP_ENABLE_AUTOINIT
@@ -147,6 +151,10 @@ private:
     int init(ap_ctx_t *ctx) {
         cnt = 0;
         return avl.o.init(ctx);
+    }
+
+    void uninit() {
+        clear();
     }
 #ifdef AP_ENABLE_AUTOINIT
 public:

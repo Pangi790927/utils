@@ -21,6 +21,10 @@ struct ap_string_t {
         if (init(ap_static_ctx) < 0)
             AP_EXCEPT("Failed constructor");
     }
+
+    ~ap_string_t() {
+        uninit();
+    }
 #endif
 
 #ifdef AP_ENABLE_AUTOINIT
@@ -33,13 +37,14 @@ private:
         vec.push_back('\0');
         return 0;
     }
-#ifdef AP_ENABLE_AUTOINIT
-public:
-#endif
 
     void uninit() {
         vec.uninit();
     }
+#ifdef AP_ENABLE_AUTOINIT
+public:
+#endif
+
 
     ap_string_t &append(const std::string& s) {
         vec.insert(end(), s.begin(), s.end());

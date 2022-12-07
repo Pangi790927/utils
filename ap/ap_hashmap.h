@@ -134,9 +134,18 @@ private:
         /* buckets.ctx_id - must be given to each list */
         return 0;
     }
+    void uninit() {
+        clear();
+    }
 #ifdef AP_ENABLE_AUTOINIT
 public:
 #endif
+
+    void clear() {
+        buckets.clear();
+        elems = ap::hmap_glist_t{};
+        elems.o.ctx_id = buckets.ctx_id;
+    }
 
 /* TODO: all the members bellow should be internals */
     void resize(uint32_t newsz) {

@@ -1,6 +1,8 @@
 INCLCUDES := -I../ -I../ap -I../generic -I.
 LIBS      := -lpthread -ldl -lglfw -lcurl
 
+CXX       := g++-11
+
 SRCS      := $(wildcard ../*.cpp)
 SRCS      += $(wildcard ../ap/*.cpp)
 OBJS      := $(SRCS:.cpp=.o)
@@ -20,7 +22,7 @@ $(info OBJS: ${OBJS})
 $(info DEPS: ${OBJS})
 
 ${TESTS}:%.bin:%.o ${DEPS} ${OBJS} 
-	g++ ${CXX_FLAGS} ${INCLCUDES} ${OBJS} $< ${LIBS} -o $@
+	${CXX} ${CXX_FLAGS} ${INCLCUDES} ${OBJS} $< ${LIBS} -o $@
 	
 ${TEST_CALLS}:%-call:%
 	./$<
@@ -29,15 +31,15 @@ ${DEPS}: makefile
 ${OBJS}: makefile
 
 ${DEPS}:%.d:%.cpp
-	g++ -c ${CXX_FLAGS} ${INCLCUDES} -MM $< -MF $@
+	${CXX} -c ${CXX_FLAGS} ${INCLCUDES} -MM $< -MF $@
 
 include ${DEPS}
 
 ${OBJS}:%.o:%.cpp
-	g++ -c ${CXX_FLAGS} ${INCLCUDES} $< -o $@
+	${CXX} -c ${CXX_FLAGS} ${INCLCUDES} $< -o $@
 
 ${TEST_OBJS}:%.o:%.cpp
-	g++ -c ${CXX_FLAGS} ${INCLCUDES} $< -o $@
+	${CXX} -c ${CXX_FLAGS} ${INCLCUDES} $< -o $@
 
 clean:
 	rm -f ${OBJS}
