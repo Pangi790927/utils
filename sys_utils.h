@@ -86,4 +86,54 @@ inline select_wrap_ret_t select_wrap(IterIn&& in_fds, IterOut&& out_fds,
 	return ret;
 }
 
+
+inline int read_sz(int fd, void *dst, size_t len) {
+    /* reads the exact len into buffer */
+    auto buff = (char *)dst;
+    while (true) {
+#ifdef WINDOWS_BUILD
+        int sent = _read(fd, buff, (int)len);
+#elif defined(LINUX_BUILD)
+        int sent = read(fd, buff, (int)len);
+#endif
+        if (sent < 0) {
+            DBGE("Failed to read data: %d", sent);
+            return -1;
+        }
+        if (sent == 0) {
+            DBG("Connection was closed");
+            return -1;
+        }
+        len -= sent;
+        buff += sent;
+        if (len == 0)
+            return 0;
+    }
+}
+
+inline int write_sz(int fd, const void *src, size_t len) {
+    /* writes the exact len into buffer */
+    auto buff = (const char *)src;
+    while (true) {
+#ifdef WINDOWS_BUILD
+        int sent = _write(fd, buff, (int)len);
+#elif defined(LINUX_BUILD)
+        int sent = write(fd, buff, (int)len);
+#endif
+        if (sent < 0) {
+            DBGE("Failed to write data: %d", sent);
+            return -1;
+        }
+        if (sent == 0) {
+            DBG("Connection was closed");
+            return -1;
+        }
+        len -= sent;
+        buff += sent;
+        if (len == 0)
+            return 0;
+    }
+}
+
+
 #endif

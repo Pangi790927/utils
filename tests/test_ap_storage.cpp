@@ -2,10 +2,12 @@
 #include "ap_storage.h"
 #include "ap_vector.h"
 #include "debug.h"
+#include "misc_utils.h"
 
 #include <sys/wait.h>
 #include <unistd.h>
 #include <map>
+#include <sys/socket.h>
 
 #define SOCK_PATH "./ap_storage_test_comm"
 
@@ -52,11 +54,89 @@ static int run_program(const char *prog_name, const char *param) {
     return 0;
 }
 
-static int do_host_stuff(const char *prog_name) {
-    int comm_fd;
+static int bind_host() {
+    int fd;
+    struct sockaddr_un un_addr = {};
+
+    ASSERT_FN(fd = socket(AF_UNIX, SOCK_STREAM, 0));
+
+    addr.sun_family = AF_UNIX;
+    strncpy(un_addr.sun_path, MY_SOCK_PATH, sizeof(un_addr.sun_path) - 1);
+
+    ASSERT_FN(bind(fd, (struct sockaddr *)&un_addr), sizeof(struct sockaddr_un));
+    ASSERT_FN(listen(fd, 5));
+
+    return fd;
+}
+
+static int host_accept(int host_fd) {
+    int fd;
+    socklen_t sz;
+    struct sockaddr_un un_addr = {};
+
+    sz = sizeof(struct sockaddr_un);
+    ASSERT_FN(fd = accept(host_fd, (struct sockaddr *)&un_addr, &sz));
+    return 0;
+}
+
+static int connect_guest() {
+    int fd;
+    ASSERT_FN(fd = socket(AF_UNIX, SOCK_STREAM, 0));
+    ASSERT_FN(connect(fd, (struct sockaddr *)&un_addr, sizeof(struct sockaddr_un)));
+    return fd;
+}
+
+enum {
+    MSG_TYPE_STOP,
+};
+
+struct msg_hdr_t {
+    int type;
+    int sz;
+};
+
+static Semaphore comm_sem(0);
+
+static int host_comm_worker(bool *alive, int *host_fd, int *guest_fd) {
+    /* This thread will stay here only to act as a storage device for the running tests */
+    /* bind in host, connect in guest - this will be our channel of communication for sudden */
+    char buff[1024*1024];
 
     unlink(SOCK_PATH);
-    ASSERT_FN(comm_fd = socket(AF_UNIX, SOCK_STREAM, 0));
+    ASSERT_FN(*host_fd = bind_host());
+
+    comm_sem.sig();
+    while (*alive) {
+        ASSERT_FN(*guest_fd = host_accept(*host_fd));
+
+        while (*alive) {
+            bool stopped = false;
+            msg_hdr_t *hdr = (msg_hdr_t *)buff;
+            ASSERT_FN(read_sz(*guest_fd, buff, sizeof(msg_hdr_t)));
+
+            switch(hdr->type) {
+                case MSG_TYPE_STOP:
+                    stopped = true;
+                    break;
+                default:
+                    DBG("Unknown message type");
+                    return -1;
+            }
+            if (stopped) {
+                close(*guest_fd);
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+static int do_host_stuff(const char *prog_name) {
+    bool alive = true;
+    int host_fd = -1, int guest_fd = -1;
+
+    std::thread comm_th(host_comm_worker, &alive, &host_fd, &guest_fd);
+    comm_sem.wait();
 
     unlink("data/storage");
     unlink("data/storage_0.data");
@@ -75,6 +155,14 @@ static int do_host_stuff(const char *prog_name) {
     ASSERT_FN(unlink("data/storage"));
     ASSERT_FN(unlink("data/storage_0.data"));
     ASSERT_FN(unlink("data/storage_1.data"));
+
+    /* I know there is a small chance of UB with those closes usually, but tests and don't care */
+    close(host_fd);
+    close(guest_fd);
+    alive = false;
+    if (comm_th.joinable())
+        comm_th.join();
+
     return 0;
 }
 
