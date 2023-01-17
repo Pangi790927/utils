@@ -19,6 +19,13 @@ inline std::string path_get_module_dir() {
     return str.substr(0, found + 1);
 }
 
+inline std::string path_get_abs(std::string path) {
+    char path_buff[PATH_MAX] = {0};
+    if (!realpath(path.c_str(), path_buff))
+        return "[path_error]";
+    return path_buff;
+}
+
 inline std::string path_get_module_name() {
     std::string str = path_get_module_path();
     std::size_t found = str.find_last_of("/\\");
