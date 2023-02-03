@@ -8,7 +8,7 @@
 #include <chrono>
 #include <string>
 #include <vector>
-
+#include <inttypes.h>
 
 #define LOGGER_BUFF_SIZE 1024
 
@@ -28,9 +28,9 @@ inline uint64_t logger_get_time() {
 ([&](const char *dbg_filename, int dbg_line, const char *dbg_funcname) {                           \
     std::vector<char> logger_buff;                                                                 \
     uint64_t time_ms = logger_get_time();                                                          \
-    logger_buff.resize(snprintf(NULL, 0, "[%lu] %s:%d %s() :> " fmt "\n",                          \
+    logger_buff.resize(snprintf(NULL, 0, "[%" PRIu64 "] %s:%d %s() :> " fmt "\n",                  \
             time_ms, dbg_filename, dbg_line, dbg_funcname, ##__VA_ARGS__) + 1);                    \
-    snprintf(logger_buff.data(), logger_buff.size(), "[%lu] %s:%d %s() :> " fmt "\n",              \
+    snprintf(logger_buff.data(), logger_buff.size(), "[%" PRIu64 "] %s:%d %s() :> " fmt "\n",      \
             time_ms, dbg_filename, dbg_line, dbg_funcname, ##__VA_ARGS__);                         \
     logger_log_message(logger_buff.data());                                                        \
 }(dbg_filename_, dbg_line_, dbg_funcname_));

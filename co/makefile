@@ -1,4 +1,5 @@
-INCLUDE += -I../../personal/utils
+INCLUDE += -I../
+
 LIB := -lpthread
 CXX_FLAGS := -O3 -std=c++2a -g
 
