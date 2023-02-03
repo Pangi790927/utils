@@ -501,7 +501,8 @@ struct sleep_awaiter_t {
 };
 
 task_t sleep_us(uint64_t timeo_us) {
-    ASSERT_COFN(co_await sleep_awaiter_t{ .sleep_us = timeo_us });
+    sleep_awaiter_t sleep_awaiter{ .sleep_us = timeo_us };
+    ASSERT_COFN(co_await sleep_awaiter);
     co_return 0;
 }
 
@@ -563,6 +564,10 @@ struct sem_t {
         }
     }
 
+    void dec() {
+        counter--;
+    }
+
     void rel_all() {
         if (counter > 0)
             return ;
@@ -577,5 +582,23 @@ private:
         to_awake.promise().pool->waiting_tasks.push(to_awake);
     }
 };
+
+template <typename ...Args>
+task_t when_all(Args&&...arg) {
+    DBG_SCOPE();
+    sem_t sem(0);
+    std::vector<task_t> tasks{ arg... };
+    int ret = 0;
+    for (auto &t : tasks) {
+        sem.dec();
+        co_await sched([&sem, &ret](task_t h) -> task_t {
+            ret |= co_await h;
+            sem.rel();
+            co_return ret;
+        }(t));
+    }
+    co_await sem;
+    co_return ret;
+}
 
 }

@@ -202,26 +202,69 @@ co::task_t consumer() {
     co_return 0;
 }
 
+co::task_t sleep_multiple() {
+    auto task = [](int ms, std::string to_print) -> co::task_t {
+        ASSERT_COFN(co_await co::sleep_ms(ms));
+        DBG(" <:> %s ", to_print.c_str());
+        co_return 0;
+    };
+    co_return co_await when_all(
+        task(4, "reverse"),
+        task(3, "in"),
+        task(2, "print"),
+        task(1, "will")
+    );
+}
+
+co::task_t force_order_multiple() {
+    co::sem_t initial_sem(1);
+    std::vector<co::sem_t> sems(4);
+    auto task = [](std::string to_print, co::sem_t &before, co::sem_t &after) -> co::task_t {
+        co_await before;
+        DBG(" <:> %s ", to_print.c_str());
+        after.rel();
+        co_return 0;
+    };
+    co_return co_await when_all(
+        task("0 -> 1", sems[0], sems[1]),
+        task("1 -> 2", sems[1], sems[2]),
+        task("initial -> 0", initial_sem, sems[0]),
+        task("2 -> 3", sems[2], sems[3])
+    );
+}
+
 int main(int argc, char const *argv[])
 {
     co::pool_t pool;
 
-    DBG("Will schedule server");
-    pool.sched(server());
+    // DBG("Will schedule server");
+    // pool.sched(server());
 
-    close_sem = co::sem_t(-3);
+    // close_sem = co::sem_t(-3);
 
-    DBG("Will schedule client");
-    pool.sched(client("client_1"));
-    pool.sched(client("client_2"));
-    pool.sched(client("client_3"));
+    // DBG("Will schedule client");
+    // pool.sched(client("client_1"));
+    // pool.sched(client("client_2"));
+    // pool.sched(client("client_3"));
 
-    pool.sched(close_task());
+    // pool.sched(close_task());
+
+    /*-------------------------------------*/
 
     // DBG("Will schedule producer:");
     // pool.sched(producer());
     // DBG("Will schedule consumer:");
     // pool.sched(consumer());
+
+    /*-------------------------------------*/
+
+    // DBG("Will sleep multiple");
+    // pool.sched(sleep_multiple());
+
+    /*-------------------------------------*/
+
+    DBG("Will force order multiple");
+    pool.sched(force_order_multiple());
 
     DBG("Will run the pool");
 
