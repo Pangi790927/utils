@@ -29,20 +29,6 @@ enum {
     MSG_TYPE_ACK,
 };
 
-/* The semaphore is an object with an internal counter and is usefull in signaling and mutual
-exclusion:
-    1. co_await - suspends the current coroutine if the counter is zero, else decrements the counter
-                  returns an unlocker_t object that has a member function .unlock()
-    2. rel      - increments the counter.
-    3. rel_all  - increments the counter with the amount of waiting coroutines on this semaphore
-
-    At a suspension point coroutines that suspended on a wait are candidates for rescheduling. Upon
-    rescheduling the internal counter will be decremented.
-
-    You must manually use (co_await co::yield()) to suspend the current coroutine if you want the
-    notified coroutine to have a chance to be rescheduled. 
-*/
-
 co::sem_t close_sem;
 
 co::task_t client_handle(int sock_fd) {
@@ -209,6 +195,10 @@ co::task_t sleep_multiple() {
         co_return 0;
     };
     co_return co_await when_all(
+        task(8, "works"),
+        task(7, "sleep"),
+        task(6, "if"),
+        task(5, "order"),
         task(4, "reverse"),
         task(3, "in"),
         task(2, "print"),
@@ -237,29 +227,38 @@ int main(int argc, char const *argv[])
 {
     co::pool_t pool;
 
-    // DBG("Will schedule server");
-    // pool.sched(server());
+    DBG("Will schedule server");
+    pool.sched(server());
 
-    // close_sem = co::sem_t(-3);
+    close_sem = co::sem_t(-3);
 
-    // DBG("Will schedule client");
-    // pool.sched(client("client_1"));
-    // pool.sched(client("client_2"));
-    // pool.sched(client("client_3"));
+    DBG("Will schedule clients");
+    pool.sched(client("client_1"));
+    pool.sched(client("client_2"));
+    pool.sched(client("client_3"));
 
-    // pool.sched(close_task());
+    pool.sched(close_task());
 
-    /*-------------------------------------*/
-
-    // DBG("Will schedule producer:");
-    // pool.sched(producer());
-    // DBG("Will schedule consumer:");
-    // pool.sched(consumer());
+    DBG("Will run the pool");
+    pool.run();
 
     /*-------------------------------------*/
 
-    // DBG("Will sleep multiple");
-    // pool.sched(sleep_multiple());
+    DBG("Will schedule producer:");
+    pool.sched(producer());
+    DBG("Will schedule consumer:");
+    pool.sched(consumer());
+
+    DBG("Will run the pool");
+    pool.run();
+
+    /*-------------------------------------*/
+
+    DBG("Will sleep multiple");
+    pool.sched(sleep_multiple());
+
+    DBG("Will run the pool");
+    pool.run();
 
     /*-------------------------------------*/
 
@@ -267,10 +266,7 @@ int main(int argc, char const *argv[])
     pool.sched(force_order_multiple());
 
     DBG("Will run the pool");
-
-    uint64_t start_us = get_time_us();
     pool.run();
-    uint64_t stop_us = get_time_us();
-    DBG("Run time diff: %ld", stop_us - start_us);
+
     return 0;
 }

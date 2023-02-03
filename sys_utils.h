@@ -35,6 +35,12 @@ inline int systemctl_enable(const char *service_name);
 inline int systemctl_create_service(const char *service_name, const char *target_exec,
         bool replace = false);
 
+inline sockaddr_in create_sa_ipv4(std::string addr, uint16_t port);
+inline sockaddr_in create_sa_ipv4(uint32_t addr, uint16_t port);
+
+/* IMPLEMENTATION:
+================================================================================================= */
+
 template <typename IterIn, typename IterOut, typename IterExc>
 inline select_wrap_ret_t select_wrap(IterIn&& in_fds, IterOut&& out_fds,
         IterExc&& exc_fds, uint64_t timeout_us)
@@ -254,6 +260,18 @@ inline int systemctl_create_service(const char *service_name, const char *target
 
     ASSERT_FN(write(fd, service_desc.c_str(), service_desc.size()));
     return 0;
+}
+
+inline sockaddr_in create_sa_ipv4(uint32_t addr, uint16_t port) {
+    sockaddr_in sa_addr = {};
+    sa_addr.sin_family = AF_INET;
+    sa_addr.sin_addr.s_addr = INADDR_ANY;
+    sa_addr.sin_port = htons(SERVER_PORT);
+    return sa_addr;
+}
+
+inline sockaddr_in create_sa_ipv4(std::string addr, uint16_t port) {
+    return create_sa_ipv4(inet_addr(addr.c_str()), port);
 }
 
 
