@@ -37,6 +37,10 @@ struct promise_t;
 using handle_t = std::coroutine_handle<promise_t>;
 using handle_vt = std::coroutine_handle<void>;
 
+struct sleep_handle_t {
+    int *fd_ptr = NULL;
+};
+
 /* main awaiter and main promise handle. */
 struct task_t {
     using promise_type = promise_t;
@@ -70,7 +74,6 @@ struct promise_t {
     void                unhandled_exception();
 
     int ret_val;
-    int call_fd;
     int call_res;
     pool_t *pool = nullptr;
 
@@ -213,10 +216,10 @@ you know how to stop your blocking call.
     The fd_ref parameter holds a pointer to a pointer, in it the pool will place the fd that was
 used to schedule that sleep.
     It is a feature(patch mostly, but I don't know how to avoid it) meant for advanced users. */
-inline task_t sleep_us_fd(uint64_t timeo_us, int **fd_ref);
-inline task_t sleep_ms_fd(uint64_t timeo_ms, int **fd_ref);
-inline task_t sleep_s_fd(uint64_t timeo_s, int **fd_ref);
-inline int stop_sleep(int fd);
+inline task_t sleep_us_fd(uint64_t timeo_us, sleep_handle_t *sleep_handle);
+inline task_t sleep_ms_fd(uint64_t timeo_ms, sleep_handle_t *sleep_handle);
+inline task_t sleep_s_fd(uint64_t timeo_s, sleep_handle_t *sleep_handle);
+inline int stop_sleep(sleep_handle_t *sleep_handle);
 
 template <typename ...Args>
 inline task_t when_all(Args&&...arg);
@@ -328,6 +331,7 @@ inline int fd_sched_t::wait_events() {
 inline int fd_sched_t::insert_wait(handle_t to_wait, int fd, int wait_cond) {
     struct epoll_event ev = {};
     ev.events = wait_cond;
+    to_wait.promise().call_res = -1;
     ev.data.ptr = to_wait.address();
     ASSERT_FN(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev));
     fds.insert({fd, to_wait});
@@ -734,27 +738,32 @@ inline task_t sleep_s(uint64_t timeo_s) {
     co_return 0;
 }
 
-inline task_t sleep_us_fd(uint64_t timeo_us, int **fd) {
-    sleep_awaiter_t sleep_awaiter{ .fd_ref = fd, .sleep_us = timeo_us };
+inline task_t sleep_us_fd(uint64_t timeo_us, sleep_handle_t *sleep_handle) {
+    sleep_awaiter_t sleep_awaiter{ .fd_ref = &sleep_handle->fd_ptr, .sleep_us = timeo_us };
     ASSERT_COFN(co_await sleep_awaiter);
+    sleep_handle->fd_ptr = NULL;
     co_return 0;
 }
 
-inline task_t sleep_ms_fd(uint64_t timeo_ms, int **fd) {
-    ASSERT_COFN(co_await sleep_us_fd(timeo_ms * 1000, fd));
+inline task_t sleep_ms_fd(uint64_t timeo_ms, sleep_handle_t *sleep_handle) {
+    ASSERT_COFN(co_await sleep_us_fd(timeo_ms * 1000, sleep_handle));
     co_return 0;
 }
 
-inline task_t sleep_s_fd(uint64_t timeo_s, int **fd) {
-    ASSERT_COFN(co_await sleep_us_fd(timeo_s * 1000'000, fd));
+inline task_t sleep_s_fd(uint64_t timeo_s, sleep_handle_t *sleep_handle) {
+    ASSERT_COFN(co_await sleep_us_fd(timeo_s * 1000'000, sleep_handle));
     co_return 0;
 }
 
-inline int stop_sleep(int fd) {
+inline int stop_sleep(sleep_handle_t *sleep_handle) {
+    if (!sleep_handle->fd_ptr) {
+        DBG("Timer was already stopped...");
+        return 0;
+    }
     itimerspec its = {};
     its.it_value.tv_nsec = 1;
     its.it_value.tv_sec = 0;
-    ASSERT_FN(timerfd_settime(fd, 0, &its, NULL));
+    ASSERT_FN(timerfd_settime(*sleep_handle->fd_ptr, 0, &its, NULL));
     return 0;
 }
 
