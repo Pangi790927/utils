@@ -57,7 +57,7 @@ struct final_awaiter_t {
     handle_vt await_suspend(handle_t oth) noexcept;
     void      await_resume() noexcept;
 
-    pool_t *pool;
+    pool_t *pool = nullptr;
 };
 
 /* this holds the task metadata */
@@ -72,7 +72,7 @@ struct promise_t {
     int ret_val;
     int call_fd;
     int call_res;
-    pool_t *pool;
+    pool_t *pool = nullptr;
 
     handle_t caller;
 };
@@ -154,6 +154,7 @@ struct sleep_awaiter_t {
     handle_vt await_suspend(handle_t caller_handle);
     int       await_resume();
 
+    int **fd_ref = NULL;
     uint64_t sleep_us;
     int timer_fd;
 
@@ -198,12 +199,24 @@ inline const char *co_str(handle_vt handle);
 inline std::string epoll_ev2str(uint32_t code);
 
 inline task_t accept(int fd, sockaddr *sa, socklen_t *len);
+inline task_t read(int fd, void *buff, size_t len);
+inline task_t write(int fd, const void *buff, size_t len);
 inline task_t read_sz(int fd, void *buff, size_t len);
 inline task_t write_sz(int fd, const void *buff, size_t len);
 
 inline task_t sleep_us(uint64_t timeo_us);
 inline task_t sleep_ms(uint64_t timeo_ms);
 inline task_t sleep_s(uint64_t timeo_s);
+
+/*  Those fns are meant to create interuptible sleeps, usefull when you want to acieve a timeout and
+you know how to stop your blocking call.
+    The fd_ref parameter holds a pointer to a pointer, in it the pool will place the fd that was
+used to schedule that sleep.
+    It is a feature(patch mostly, but I don't know how to avoid it) meant for advanced users. */
+inline task_t sleep_us_fd(uint64_t timeo_us, int **fd_ref);
+inline task_t sleep_ms_fd(uint64_t timeo_ms, int **fd_ref);
+inline task_t sleep_s_fd(uint64_t timeo_s, int **fd_ref);
+inline int stop_sleep(int fd);
 
 template <typename ...Args>
 inline task_t when_all(Args&&...arg);
@@ -232,7 +245,8 @@ inline int task_t::await_resume() noexcept {
 
 /* final_awaiter_t: ----------------------------------------------------------------------------- */
 
-inline final_awaiter_t::final_awaiter_t(pool_t *pool) : pool(pool) {}
+inline final_awaiter_t::final_awaiter_t(pool_t *pool) : pool(pool) {
+}
 
 inline bool final_awaiter_t::await_ready() noexcept {
     return false;
@@ -240,12 +254,14 @@ inline bool final_awaiter_t::await_ready() noexcept {
 
 inline handle_vt final_awaiter_t::await_suspend(handle_t ending_task) noexcept {
     auto caller = ending_task.promise().caller;
-    ending_task.destroy();
     if (caller) {
+        ending_task.destroy();
         return caller;
     }
     else {
-        return pool->next_task();
+        auto ret = pool->next_task();
+        ending_task.destroy();
+        return ret;
     }
 }
 
@@ -501,6 +517,8 @@ inline handle_vt sleep_awaiter_t::await_suspend(handle_t caller_handle) {
     itimerspec its = {};
     its.it_value.tv_nsec = (sleep_us % 1000'000) * 1000ULL;
     its.it_value.tv_sec = sleep_us / 1000'000ULL;
+    if (fd_ref)
+        *fd_ref = &timer_fd;
     if (timerfd_settime(timer_fd, 0, &its, NULL) < 0) {
         DBGE("Failed to set expiration date");
         return std::noop_coroutine();
@@ -632,6 +650,24 @@ inline task_t accept(int fd, sockaddr *sa, socklen_t *len) {
     co_return ::accept(fd, sa, len);
 }
 
+inline task_t read(int fd, void *buff, size_t len) {
+    fd_awaiter_t awaiter {
+        .wait_cond = EPOLLIN,
+        .fd = fd,
+    };
+    ASSERT_COFN(co_await awaiter);
+    co_return ::read(fd, buff, len);
+}
+
+inline task_t write(int fd, const void *buff, size_t len) {
+    fd_awaiter_t awaiter {
+        .wait_cond = EPOLLOUT,
+        .fd = fd,
+    };
+    ASSERT_COFN(co_await awaiter);
+    co_return ::write(fd, buff, len);
+}
+
 inline task_t read_sz(int fd, void *buff, size_t len) {
     fd_awaiter_t awaiter {
         .wait_cond = EPOLLIN,
@@ -642,7 +678,7 @@ inline task_t read_sz(int fd, void *buff, size_t len) {
         if (!len)
             break ;
         ASSERT_COFN(co_await awaiter);
-        int ret = read(fd, buff, len);
+        int ret = ::read(fd, buff, len);
         if (ret == 0) {
             DBG("Read failed, closed peer");
             co_return 0;
@@ -669,7 +705,7 @@ inline task_t write_sz(int fd, const void *buff, size_t len) {
         if (!len)
             break ;
         ASSERT_COFN(co_await awaiter);
-        int ret = write(fd, buff, len);
+        int ret = ::write(fd, buff, len);
         if (ret < 0) {
             DBGE("Failed write");
             co_return -1;
@@ -696,6 +732,30 @@ inline task_t sleep_ms(uint64_t timeo_ms) {
 inline task_t sleep_s(uint64_t timeo_s) {
     ASSERT_COFN(co_await sleep_us(timeo_s * 1000'000));
     co_return 0;
+}
+
+inline task_t sleep_us_fd(uint64_t timeo_us, int **fd) {
+    sleep_awaiter_t sleep_awaiter{ .fd_ref = fd, .sleep_us = timeo_us };
+    ASSERT_COFN(co_await sleep_awaiter);
+    co_return 0;
+}
+
+inline task_t sleep_ms_fd(uint64_t timeo_ms, int **fd) {
+    ASSERT_COFN(co_await sleep_us_fd(timeo_ms * 1000, fd));
+    co_return 0;
+}
+
+inline task_t sleep_s_fd(uint64_t timeo_s, int **fd) {
+    ASSERT_COFN(co_await sleep_us_fd(timeo_s * 1000'000, fd));
+    co_return 0;
+}
+
+inline int stop_sleep(int fd) {
+    itimerspec its = {};
+    its.it_value.tv_nsec = 1;
+    its.it_value.tv_sec = 0;
+    ASSERT_FN(timerfd_settime(fd, 0, &its, NULL));
+    return 0;
 }
 
 template <typename ...Args>
