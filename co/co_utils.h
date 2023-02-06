@@ -213,12 +213,12 @@ inline task_t sleep_s(uint64_t timeo_s);
 
 /*  Those fns are meant to create interuptible sleeps, usefull when you want to acieve a timeout and
 you know how to stop your blocking call.
-    The fd_ref parameter holds a pointer to a pointer, in it the pool will place the fd that was
-used to schedule that sleep.
-    It is a feature(patch mostly, but I don't know how to avoid it) meant for advanced users. */
-inline task_t sleep_us_fd(uint64_t timeo_us, sleep_handle_t *sleep_handle);
-inline task_t sleep_ms_fd(uint64_t timeo_ms, sleep_handle_t *sleep_handle);
-inline task_t sleep_s_fd(uint64_t timeo_s, sleep_handle_t *sleep_handle);
+    It is a feature(patch mostly, but I don't know how to avoid it) meant for advanced users.
+    Be aware that the sleep does not remember it's stopped state, meaning that if you signal it
+while it is not sleeping it will simply ignore the command */
+inline task_t var_sleep_us(uint64_t timeo_us, sleep_handle_t *sleep_handle);
+inline task_t var_sleep_ms(uint64_t timeo_ms, sleep_handle_t *sleep_handle);
+inline task_t var_sleep_s(uint64_t timeo_s, sleep_handle_t *sleep_handle);
 inline int stop_sleep(sleep_handle_t *sleep_handle);
 
 template <typename ...Args>
@@ -738,20 +738,20 @@ inline task_t sleep_s(uint64_t timeo_s) {
     co_return 0;
 }
 
-inline task_t sleep_us_fd(uint64_t timeo_us, sleep_handle_t *sleep_handle) {
+inline task_t var_sleep_us(uint64_t timeo_us, sleep_handle_t *sleep_handle) {
     sleep_awaiter_t sleep_awaiter{ .fd_ref = &sleep_handle->fd_ptr, .sleep_us = timeo_us };
     ASSERT_COFN(co_await sleep_awaiter);
     sleep_handle->fd_ptr = NULL;
     co_return 0;
 }
 
-inline task_t sleep_ms_fd(uint64_t timeo_ms, sleep_handle_t *sleep_handle) {
-    ASSERT_COFN(co_await sleep_us_fd(timeo_ms * 1000, sleep_handle));
+inline task_t var_sleep_ms(uint64_t timeo_ms, sleep_handle_t *sleep_handle) {
+    ASSERT_COFN(co_await var_sleep_us(timeo_ms * 1000, sleep_handle));
     co_return 0;
 }
 
-inline task_t sleep_s_fd(uint64_t timeo_s, sleep_handle_t *sleep_handle) {
-    ASSERT_COFN(co_await sleep_us_fd(timeo_s * 1000'000, sleep_handle));
+inline task_t var_sleep_s(uint64_t timeo_s, sleep_handle_t *sleep_handle) {
+    ASSERT_COFN(co_await var_sleep_us(timeo_s * 1000'000, sleep_handle));
     co_return 0;
 }
 
