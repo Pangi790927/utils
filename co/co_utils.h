@@ -1,4 +1,3 @@
-// #include <coro/coro.hpp>
 #include <iostream>
 #include <unordered_map>
 #include <sys/socket.h>
@@ -7,6 +6,7 @@
 #include <stack>
 #include <map>
 #include <queue>
+#include <list>
 #include <coroutine>
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
@@ -16,9 +16,6 @@
 #include "time_utils.h"
 
 #include "demangle.h"
-
-// maybe check this?
-// https://stackoverflow.com/questions/67446478/symmetric-transfer-does-not-prevent-stack-overflow-for-c20-coroutines
 
 #define MAX_TIMER_POOL_SIZE 64
 
@@ -33,12 +30,98 @@ namespace co
 
 struct pool_t;
 struct promise_t;
+struct co_mod_t;
+struct sem_t;
 
 using handle_t = std::coroutine_handle<promise_t>;
 using handle_vt = std::coroutine_handle<void>;
+using co_mod_ptr_t = std::shared_ptr<co_mod_t>;
+using sem_it_t = std::list<handle_t>::iterator;
+
+using trace_ctx_t = void *;
+using trace_fn_t = void (*)(int moment, void *coro_addr, trace_ctx_t ctx);
+
+enum {
+    CO_MOD_NONE = 0,
+    CO_MOD_TIMEOUT,
+    CO_MOD_TRACE,
+
+    CO_MOD_TIMEO_STATE_RUNNING,
+    CO_MOD_TIMEO_STATE_FD,
+    CO_MOD_TIMEO_STATE_SEM,
+    CO_MOD_TIMEO_STATE_TIMEO,
+    CO_MOD_TIMEO_STATE_STOPPED,
+
+    CO_MOD_TRACE_MOMENT_CALL,       /* When a function called is  */
+    CO_MOD_TRACE_MOMENT_LEAVE,
+    CO_MOD_TRACE_MOMENT_RETURN,
+    CO_MOD_TRACE_MOMENT_REENTRY,
+    CO_MOD_TRACE_MOMENT_FD_WAIT,
+    CO_MOD_TRACE_MOMENT_FD_UNWAIT,
+    CO_MOD_TRACE_MOMENT_SEM_WAIT,
+    CO_MOD_TRACE_MOMENT_SEM_UNWAIT,
+
+    CO_MOD_ERR_GENERIC = -1,
+    CO_MOD_ERR_TIMEO = -2,
+};
 
 struct sleep_handle_t {
     int *fd_ptr = NULL;
+
+    int stop();
+};
+
+/* Struct to remember registered actions for child coroutines spawned in the future. Usefull for
+registering cancelation functions, for registering traces, etc. New actions are registered by
+inserting into the chain and are inherited by copying the chain at it's current root. */
+static uint64_t como_num_g = 0;
+struct co_mod_t {
+    int type;
+    co_mod_ptr_t next;
+
+    uint64_t como_num;
+    co_mod_t(int type);
+    ~co_mod_t();
+
+    co_mod_t(const co_mod_t &) = delete;
+    co_mod_t(co_mod_t &&) = delete;
+    co_mod_t &operator = (const co_mod_t &) = delete;
+    co_mod_t &operator = (co_mod_t &&) = delete;
+
+    union {
+        struct { /* used by CO_MOD_TIMEOUT */
+            char sem_it_data[sizeof(sem_it_t)];
+            char sleep_handle_data[sizeof(sem_it_t)];
+
+            uint64_t timeo_us;
+            bool timer_started;
+            int state;
+            sem_it_t *sem_it;
+            sleep_handle_t *sleep_handle;
+            int wait_fd;
+            sem_t *sem;         /* if the blocking is by an semaphore */
+            void *leaf_coro;    /* the lowest coro that is currently waiting */
+            void *root_coro;    /* the coro that initiated the sleep, on timeo it will be
+                                        rescheduled */
+        } timeo;
+        struct {
+            trace_ctx_t ctx;
+            trace_fn_t  fn;
+        } trace;
+    }m;
+
+    static co_mod_ptr_t attach(co_mod_ptr_t origin, co_mod_ptr_t other);
+
+    /* TODO: figure out if those need to return void or int, some of them should return void */
+    static int handle_pmods_call(handle_t handle);
+    static int handle_pmods_ret(handle_t handle);
+    static int handle_pmods_leave(handle_t handle);
+    static int handle_pmods_reentry(handle_t handle);
+
+    static int handle_pmods_fd_wait(handle_t handle, int fd);
+    static int handle_pmods_fd_unwait(handle_t handle);
+    static int handle_pmods_sem_wait(handle_t handle, sem_t *sem, sem_it_t it);
+    static int handle_pmods_sem_unwait(handle_t handle);
 };
 
 /* main awaiter and main promise handle. */
@@ -47,11 +130,17 @@ struct task_t {
 
     task_t(handle_t handle);
 
-    bool     await_ready() noexcept;
-    handle_t await_suspend(handle_t caller) noexcept;
-    int      await_resume() noexcept;
+    bool      await_ready() noexcept;
+    handle_vt await_suspend(handle_t caller) noexcept;
+    int       await_resume() noexcept;
 
     handle_t handle;
+};
+
+struct initial_awaiter_t {
+    bool await_ready() noexcept;
+    void await_suspend(handle_t self) noexcept;
+    void await_resume() noexcept;
 };
 
 struct final_awaiter_t {
@@ -68,16 +157,17 @@ struct final_awaiter_t {
 struct promise_t {
     task_t get_return_object();
 
-    std::suspend_always initial_suspend() noexcept;
-    final_awaiter_t     final_suspend() noexcept;
-    void                return_value(int ret_val);
-    void                unhandled_exception();
+    initial_awaiter_t initial_suspend() noexcept;
+    final_awaiter_t   final_suspend() noexcept;
+    void              return_value(int ret_val);
+    void              unhandled_exception();
 
     int ret_val;
     int call_res;
     pool_t *pool = nullptr;
 
     handle_t caller;
+    co_mod_ptr_t pmods;
 };
 
 struct fd_sched_t {
@@ -101,14 +191,14 @@ struct fd_sched_t {
     std::vector<struct epoll_event> ret_evs;
     int epoll_fd;
 
-    std::map<int, handle_t> fds;
+    // std::map<int, handle_t> fds; /* TODO: remove? maybe? */
 };
 
 struct pool_t {
     using task_it_t = std::set<handle_t>::iterator;
 
-    void sched(handle_t handle);
-    void sched(task_t task);
+    void sched(handle_t handle, co_mod_ptr_t pmods = nullptr);
+    void sched(task_t task, co_mod_ptr_t pmods = nullptr);
 
     int  run();
 
@@ -119,8 +209,8 @@ struct pool_t {
     ~pool_t();
 
     std::queue<handle_t> waiting_tasks;
-    fd_sched_t fd_sched;
     std::stack<int> timer_fd_pool;
+    fd_sched_t fd_sched;
 };
 
 struct fd_awaiter_t {
@@ -167,7 +257,7 @@ struct sleep_awaiter_t {
 
 /* The semaphore is an object with an internal counter and is usefull in signaling and mutual
 exclusion:
-    TODO: fix lie at 1.
+    TODO: fix lie at 1. no unlocker_t is yet returned
     1. co_await - suspends the current coroutine if the counter is zero, else decrements the counter
                   returns an unlocker_t object that has a member function .unlock()
     2. rel      - increments the counter.
@@ -183,23 +273,50 @@ exclusion:
 struct sem_t {
     sem_t(int64_t counter = 0);
 
-    bool      await_ready();
-    handle_vt await_suspend(handle_t to_suspend);
-    int       await_resume();
+    /* TODO: make it move safe and delete-copy because in the semaphore it is very important that
+    internal pointers don't break and for now on copy you loose the pointer */
+    // sem_t(const sem_t &) = delete;
+    // sem_t(sem_t &&) = delete;
+    // sem_t &operator = (const sem_t &) = delete;
+    // sem_t &operator = (sem_t &&) = delete;
 
+    struct sem_awaiter_t {
+        sem_awaiter_t(sem_t *sem);
+
+        bool      await_ready();
+        handle_vt await_suspend(handle_t to_suspend);
+        int       await_resume();
+
+        sem_t *sem;
+    };
+
+    sem_awaiter_t operator co_await () noexcept;
+
+    void use();
     void rel();
     void rel_all();
-    void dec();
+    
+    void _dec();                      /* this is not private but don't use it */
+    void _erase_waiting(sem_it_t it); /* this is not private but don't use it */
 
 private:
-    int64_t counter;
-    std::queue<handle_t> waiting_on_sem;
-
     void _awake_one();
+
+    int64_t counter;
+    std::list<handle_t> waiting_on_sem;
 };
 
+inline const char *co_str(void *addr);
 inline const char *co_str(handle_vt handle);
+inline const char *enum_str(int e);
 inline std::string epoll_ev2str(uint32_t code);
+
+inline sched_awaiter_t sched(task_t to_sched, co_mod_ptr_t pmods = nullptr);
+inline yield_awaiter_t yield();
+
+inline task_t mod_task(task_t task, co_mod_ptr_t pmods);
+inline task_t timed(task_t task, uint64_t timeo_us);
+inline task_t trace(task_t task, trace_fn_t fn, trace_ctx_t ctx = NULL);
 
 inline task_t accept(int fd, sockaddr *sa, socklen_t *len);
 inline task_t read(int fd, void *buff, size_t len);
@@ -213,7 +330,8 @@ inline task_t sleep_s(uint64_t timeo_s);
 
 /*  Those fns are meant to create interuptible sleeps, usefull when you want to acieve a timeout and
 you know how to stop your blocking call.
-    It is a feature(patch mostly, but I don't know how to avoid it) meant for advanced users.
+    It is a feature(patch mostly, but I don't know how to avoid it, TODO: fix) meant for advanced
+users.
     Be aware that the sleep does not remember it's stopped state, meaning that if you signal it
 while it is not sleeping it will simply ignore the command */
 inline task_t var_sleep_us(uint64_t timeo_us, sleep_handle_t *sleep_handle);
@@ -224,9 +342,237 @@ inline int stop_sleep(sleep_handle_t *sleep_handle);
 template <typename ...Args>
 inline task_t when_all(Args&&...arg);
 
+inline void default_trace_fn(int moment, void *addr, void *);
 
 /* IMPLEMENTATION:
 ================================================================================================= */
+
+inline int sleep_handle_t::stop() {
+    ASSERT_FN(stop_sleep(this));
+    return 0;
+}
+
+inline co_mod_t::co_mod_t(int type) : type(type), como_num(como_num_g++) {
+    memset(&m, 0, sizeof(m));
+    if (type == CO_MOD_TIMEOUT) {
+        m.timeo.sem_it = new (m.timeo.sem_it_data) sem_it_t();
+        m.timeo.sleep_handle = new (m.timeo.sleep_handle_data) sleep_handle_t();
+    }
+}
+
+inline co_mod_t::~co_mod_t() {
+    if (type == CO_MOD_TIMEOUT) {
+        m.timeo.sem_it->~sem_it_t();
+        m.timeo.sleep_handle->~sleep_handle_t();
+    }
+}
+
+inline co_mod_ptr_t co_mod_t::attach(co_mod_ptr_t origin, co_mod_ptr_t other) {
+    if (!origin)
+        return other;
+    auto curr = origin;
+    while (curr) {
+        if (!curr->next) {
+            curr->next = other;
+            break;
+        }
+        curr = curr->next;
+    }
+    return origin;
+}
+
+/* The handle is the handle to the pmod  */
+inline int co_mod_t::handle_pmods_call(handle_t handle) {
+    co_mod_ptr_t curr = handle.promise().pmods;
+    while (curr) {
+        switch (curr->type) {
+            case CO_MOD_TIMEOUT: {
+                if (!curr->m.timeo.timer_started) {
+                    handle.promise().pool->sched([](co_mod_ptr_t pmod) -> task_t {
+                        ASSERT_COFN(co_await var_sleep_us(pmod->m.timeo.timeo_us,
+                                pmod->m.timeo.sleep_handle));
+                        if (pmod->m.timeo.state == CO_MOD_TIMEO_STATE_STOPPED) {
+                            /* If we are in this case it means that the action concluded before the
+                            timeout so there is nothing more to do */
+                            DBG("Timeo stopped");
+                            co_return 0;
+                        }
+                        int state = pmod->m.timeo.state;
+                        pmod->m.timeo.state = CO_MOD_TIMEO_STATE_TIMEO;
+
+                        auto root_coro = handle_t::from_address(pmod->m.timeo.root_coro);
+                        auto pool = root_coro.promise().pool;
+                        /*  At this point we know that the timer elapsed while the coroutine was
+                        waiting for some event to complete. We must now stop that event and we must
+                        unwrap the call such that the coroutine that made the 'timed' call will be
+                        rescheduled and the return value in the respective task will be nagative. */
+
+                        if (state == CO_MOD_TIMEO_STATE_RUNNING) {
+                            /* nothing to do here? check in yield maybe? */
+                        }
+                        if (state == CO_MOD_TIMEO_STATE_FD) {
+                            int ret = pool->fd_sched.remove_wait(pmod->m.timeo.wait_fd);
+                            if (ret < 0) {
+                                DBG("Failed to remove fd from wating list, will ignore");
+                            }
+                        }
+                        if (state == CO_MOD_TIMEO_STATE_SEM) {
+                            pmod->m.timeo.sem->_erase_waiting(*pmod->m.timeo.sem_it);
+                        }
+
+                        /* unwind all the coroutines from leaf to root */
+                        auto leaf = handle_t::from_address(pmod->m.timeo.leaf_coro);
+                        while (leaf && leaf.address() != root_coro.address()) {
+                            auto caller = leaf.promise().caller;
+                            leaf.destroy();
+                            leaf = caller;
+                        }
+                        if (!leaf) {
+                            DBG("This makes no sense");
+                            co_return CO_MOD_ERR_GENERIC; 
+                        }
+
+                        /* schedule the caller of co::timed to be awakened with timeo */
+                        root_coro.promise().ret_val = CO_MOD_ERR_TIMEO;
+                        pool->waiting_tasks.push(handle_t::from_address(
+                                final_awaiter_t(pool).await_suspend(root_coro).address()));
+                        co_return 0;
+                    }(curr));
+                    curr->m.timeo.timer_started = true;
+                    curr->m.timeo.root_coro = handle.address();
+                    curr->m.timeo.state = CO_MOD_TIMEO_STATE_RUNNING;
+                }
+                /* The root_coro is set only once, but the leaf_coro is set every time a new coro
+                is spawned. That's because the coro chain must be unwinded on an abort from the
+                last called coroutine to the original coroutine. */
+                curr->m.timeo.leaf_coro = handle.address();
+            } break;
+            case CO_MOD_TRACE: {
+                curr->m.trace.fn(CO_MOD_TRACE_MOMENT_CALL, handle.address(), curr->m.trace.ctx);
+            } break;
+        }
+        curr = curr->next;
+    }
+    return 0;
+}
+
+inline int co_mod_t::handle_pmods_ret(handle_t handle) {
+    co_mod_ptr_t curr = handle.promise().pmods;
+    while (curr) {
+        switch (curr->type) {
+            case CO_MOD_TIMEOUT: {
+                curr->m.timeo.leaf_coro = handle.address();
+                if (curr->m.timeo.leaf_coro == curr->m.timeo.root_coro) {
+                    ASSERT_FN(stop_sleep(curr->m.timeo.sleep_handle));
+                    curr->m.timeo.state = CO_MOD_TIMEO_STATE_STOPPED;
+                }
+            } break;
+            case CO_MOD_TRACE: {
+                curr->m.trace.fn(CO_MOD_TRACE_MOMENT_RETURN, handle.address(), curr->m.trace.ctx);
+            } break;
+        }
+        curr = curr->next;
+    }
+    return 0;
+}
+
+inline int co_mod_t::handle_pmods_leave(handle_t handle) {
+    co_mod_ptr_t curr = handle.promise().pmods;
+    while (curr) {
+        switch (curr->type) {
+            case CO_MOD_TRACE: {
+                curr->m.trace.fn(CO_MOD_TRACE_MOMENT_LEAVE, handle.address(), curr->m.trace.ctx);
+            } break;
+        }
+        curr = curr->next;
+    }
+    return 0;
+}
+
+inline int co_mod_t::handle_pmods_reentry(handle_t handle) {
+    co_mod_ptr_t curr = handle.promise().pmods;
+    while (curr) {
+        switch (curr->type) {
+            case CO_MOD_TIMEOUT: {
+                curr->m.timeo.leaf_coro = handle.address();
+            } break;
+            case CO_MOD_TRACE: {
+                curr->m.trace.fn(CO_MOD_TRACE_MOMENT_REENTRY, handle.address(), curr->m.trace.ctx);
+            } break;
+        }
+        curr = curr->next;
+    }
+    return 0;
+}
+
+inline int co_mod_t::handle_pmods_fd_wait(handle_t handle, int fd) {
+    co_mod_ptr_t curr = handle.promise().pmods;
+    while (curr) {
+        switch (curr->type) {
+            case CO_MOD_TIMEOUT: {
+                curr->m.timeo.state = CO_MOD_TIMEO_STATE_FD;
+                curr->m.timeo.wait_fd = fd;
+            } break;
+            case CO_MOD_TRACE: {
+                curr->m.trace.fn(CO_MOD_TRACE_MOMENT_FD_WAIT, handle.address(), curr->m.trace.ctx);
+            } break;
+        }
+        curr = curr->next;
+    }
+    return 0;
+}
+
+inline int co_mod_t::handle_pmods_fd_unwait(handle_t handle) {
+    co_mod_ptr_t curr = handle.promise().pmods;
+    while (curr) {
+        switch (curr->type) {
+            case CO_MOD_TIMEOUT: {
+                curr->m.timeo.state = CO_MOD_TIMEO_STATE_RUNNING;
+            } break;
+            case CO_MOD_TRACE: {
+                curr->m.trace.fn(CO_MOD_TRACE_MOMENT_FD_UNWAIT, handle.address(), curr->m.trace.ctx);
+            } break;
+        }
+        curr = curr->next;
+    }
+    return 0;
+}
+
+inline int co_mod_t::handle_pmods_sem_wait(handle_t handle, co::sem_t *sem, sem_it_t it) {
+    co_mod_ptr_t curr = handle.promise().pmods;
+    while (curr) {
+        switch (curr->type) {
+            case CO_MOD_TIMEOUT: {
+                curr->m.timeo.state = CO_MOD_TIMEO_STATE_SEM;
+                curr->m.timeo.sem = sem;
+                *curr->m.timeo.sem_it = it;
+            } break;
+            case CO_MOD_TRACE: {
+                curr->m.trace.fn(CO_MOD_TRACE_MOMENT_SEM_WAIT, handle.address(), curr->m.trace.ctx);
+            } break;
+        }
+        curr = curr->next;
+    }
+    return 0;
+}
+
+inline int co_mod_t::handle_pmods_sem_unwait(handle_t handle) {
+    co_mod_ptr_t curr = handle.promise().pmods;
+    while (curr) {
+        switch (curr->type) {
+            case CO_MOD_TIMEOUT: {
+                curr->m.timeo.state = CO_MOD_TIMEO_STATE_RUNNING;
+            } break;
+            case CO_MOD_TRACE: {
+                curr->m.trace.fn(CO_MOD_TRACE_MOMENT_SEM_UNWAIT, handle.address(),
+                        curr->m.trace.ctx);
+            } break;
+        }
+        curr = curr->next;
+    }
+    return 0;
+}
+
 
 /* task_t: -------------------------------------------------------------------------------------- */
 
@@ -236,14 +582,37 @@ inline bool task_t::await_ready() noexcept {
     return false;
 }
 
-inline handle_t task_t::await_suspend(handle_t caller) noexcept {
+inline handle_vt task_t::await_suspend(handle_t caller) noexcept {
     handle.promise().caller = caller;
+    handle.promise().pmods = co_mod_t::attach(handle.promise().pmods, caller.promise().pmods);
     handle.promise().pool = caller.promise().pool;
+
+    co_mod_t::handle_pmods_leave(caller);
+    int ret = co_mod_t::handle_pmods_call(handle);
+    if (ret < 0) {
+        DBG("Failed to handle moded corutine");
+        return std::noop_coroutine();
+    }
+
     return handle;
 }
 
 inline int task_t::await_resume() noexcept {
-    return handle.promise().ret_val;
+    int ret = handle.promise().ret_val;
+    handle.destroy();
+    return ret;
+}
+
+/* initial_awaiter_t: --------------------------------------------------------------------------- */
+
+inline bool initial_awaiter_t::await_ready() noexcept {
+    return false;
+}
+
+inline void initial_awaiter_t::await_suspend(handle_t self) noexcept {
+}
+
+inline void initial_awaiter_t::await_resume() noexcept {
 }
 
 /* final_awaiter_t: ----------------------------------------------------------------------------- */
@@ -257,8 +626,12 @@ inline bool final_awaiter_t::await_ready() noexcept {
 
 inline handle_vt final_awaiter_t::await_suspend(handle_t ending_task) noexcept {
     auto caller = ending_task.promise().caller;
+    if (co_mod_t::handle_pmods_ret(ending_task) < 0) {
+        DBG("Pmods ret failed for some reason");
+        return std::noop_coroutine();
+    }
     if (caller) {
-        ending_task.destroy();
+        co_mod_t::handle_pmods_reentry(caller);
         return caller;
     }
     else {
@@ -269,7 +642,7 @@ inline handle_vt final_awaiter_t::await_suspend(handle_t ending_task) noexcept {
 }
 
 inline void final_awaiter_t::await_resume() noexcept {
-    DBG("Shouldn't reach await_resume in caller_info_t?");
+    DBG("Exceptions are not my coup of tea, if it goes it goes");
     std::terminate();
 }
 
@@ -279,7 +652,7 @@ inline task_t promise_t::get_return_object() {
     return task_t{handle_t::from_promise(*this)};
 }
 
-inline std::suspend_always promise_t::initial_suspend() noexcept {
+inline initial_awaiter_t promise_t::initial_suspend() noexcept {
     return {};
 }
 
@@ -334,14 +707,12 @@ inline int fd_sched_t::insert_wait(handle_t to_wait, int fd, int wait_cond) {
     to_wait.promise().call_res = -1;
     ev.data.ptr = to_wait.address();
     ASSERT_FN(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev));
-    fds.insert({fd, to_wait});
     ret_evs.push_back(epoll_event{});
     return 0;
 }
 
 inline int fd_sched_t::remove_wait(int fd) {
     ASSERT_FN(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, NULL));
-    fds.erase(fd);
     ret_evs.pop_back();
     return 0;
 }
@@ -359,26 +730,24 @@ inline int fd_sched_t::handle_events(int num_evs) {
 
 /* pool_t: -------------------------------------------------------------------------------------- */
 
-inline void pool_t::sched(handle_t handle) {
+inline void pool_t::sched(handle_t handle, co_mod_ptr_t pmods) {
     // DBG("scheduling: %s", co_str(handle));
     handle.promise().pool = this;
+    handle.promise().pmods = pmods; /* sched is async, so non blocking in regards to the caller */
     waiting_tasks.push(handle);
 }
 
-inline void pool_t::sched(task_t task) {
-    sched(task.handle);
+inline void pool_t::sched(task_t task, co_mod_ptr_t pmods) {
+    sched(task.handle, pmods);
 }
 
 inline int pool_t::run() {
-    /* TODO: add logic to make it run only once, such that current_task will not be replaced
-    by running 'run' twice */
-    if (waiting_tasks.size()) {
-        handle_t first_task = waiting_tasks.front();
-        waiting_tasks.pop();
-        first_task.resume();
-        /* here we can know that  */
-    }
-    return 0;
+    if (!waiting_tasks.size())
+        return 0;
+    handle_t first_task = waiting_tasks.front();
+    waiting_tasks.pop();
+    first_task.resume();
+    return 0; /* not sure what I should return */
 }
 
 inline handle_vt pool_t::next_task() {
@@ -455,6 +824,7 @@ inline handle_vt fd_awaiter_t::await_suspend(handle_t caller_handle) {
     let the next coroutine to continue on this thread */
     pool = caller_handle.promise().pool;
     this->caller_handle = caller_handle;
+    co_mod_t::handle_pmods_fd_wait(caller_handle, fd);
     return pool->resched_wait_fd(caller_handle, fd, wait_cond);
 }
 
@@ -463,6 +833,7 @@ inline int fd_awaiter_t::await_resume() {
     take controll of this coroutine and we know that 'sched' and 'handle' are set, as such
     we can request the return value for the fd we just queried */
 
+    co_mod_t::handle_pmods_fd_unwait(caller_handle);
     return caller_handle.promise().call_res;
 }
 
@@ -551,25 +922,39 @@ inline int sleep_awaiter_t::await_resume() {
 
 /* sem_t ---------------------------------------------------------------------------------------- */
 
-inline sem_t::sem_t(int64_t counter) : counter(counter) {}
+inline sem_t::sem_t(int64_t counter) : counter(counter) {
 
-inline bool sem_t::await_ready() {
-    if (counter > 0) {
-        counter--;
+}
+
+inline sem_t::sem_awaiter_t::sem_awaiter_t(sem_t *sem) : sem(sem) {
+
+}
+
+inline bool sem_t::sem_awaiter_t::await_ready() {
+    if (sem->counter > 0) {
+        sem->counter--;
         return true;
     }
     return false;
 }
 
-inline handle_vt sem_t::await_suspend(handle_t to_suspend) {
+inline handle_vt sem_t::sem_awaiter_t::await_suspend(handle_t to_suspend) {
     /* if we are here it must mean that the counter was zero and as such we must yield */
-    waiting_on_sem.push(to_suspend);
+    sem->waiting_on_sem.push_front(to_suspend);
+    sem_it_t it = sem->waiting_on_sem.begin();
+    co_mod_t::handle_pmods_sem_wait(to_suspend, sem, it);
+
     return to_suspend.promise().pool->next_task();
 }
 
-inline int sem_t::await_resume() {
+inline int sem_t::sem_awaiter_t::await_resume() {
     return 0;
 }
+
+inline sem_t::sem_awaiter_t sem_t::operator co_await () noexcept {
+    return sem_t::sem_awaiter_t(this);
+}
+
 
 inline void sem_t::rel() {
     if (counter == 0 && waiting_on_sem.size())
@@ -581,7 +966,7 @@ inline void sem_t::rel() {
     }
 }
 
-inline void sem_t::dec() {
+inline void sem_t::_dec() {
     counter--;
 }
 
@@ -592,13 +977,49 @@ inline void sem_t::rel_all() {
         _awake_one();
 }
 
+inline void sem_t::_erase_waiting(sem_it_t it) {
+    waiting_on_sem.erase(it);
+}
+
 inline void sem_t::_awake_one() {
-    auto to_awake = waiting_on_sem.front();
-    waiting_on_sem.pop();
+    auto to_awake = waiting_on_sem.back();
+    waiting_on_sem.pop_back();
+    co_mod_t::handle_pmods_sem_unwait(to_awake);
     to_awake.promise().pool->waiting_tasks.push(to_awake);
 }
 
 /* usefull functions ---------------------------------------------------------------------------- */
+
+inline const char *enum_str(int e) {
+    switch (e) {
+        case CO_MOD_NONE:                    return "CO_MOD_NONE";
+        case CO_MOD_TIMEOUT:                 return "CO_MOD_TIMEOUT";
+        case CO_MOD_TRACE:                   return "CO_MOD_TRACE";
+
+        case CO_MOD_TIMEO_STATE_RUNNING:     return "CO_MOD_TIMEO_STATE_RUNNING";
+        case CO_MOD_TIMEO_STATE_FD:          return "CO_MOD_TIMEO_STATE_FD";
+        case CO_MOD_TIMEO_STATE_SEM:         return "CO_MOD_TIMEO_STATE_SEM";
+        case CO_MOD_TIMEO_STATE_TIMEO:       return "CO_MOD_TIMEO_STATE_TIMEO";
+        case CO_MOD_TIMEO_STATE_STOPPED:     return "CO_MOD_TIMEO_STATE_STOPPED";
+
+        case CO_MOD_TRACE_MOMENT_CALL:       return "CO_MOD_TRACE_MOMENT_CALL";
+        case CO_MOD_TRACE_MOMENT_LEAVE:      return "CO_MOD_TRACE_MOMENT_LEAVE";
+        case CO_MOD_TRACE_MOMENT_RETURN:     return "CO_MOD_TRACE_MOMENT_RETURN";
+        case CO_MOD_TRACE_MOMENT_REENTRY:    return "CO_MOD_TRACE_MOMENT_REENTRY";
+        case CO_MOD_TRACE_MOMENT_FD_WAIT:    return "CO_MOD_TRACE_MOMENT_FD_WAIT";
+        case CO_MOD_TRACE_MOMENT_FD_UNWAIT:  return "CO_MOD_TRACE_MOMENT_FD_UNWAIT";
+        case CO_MOD_TRACE_MOMENT_SEM_WAIT:   return "CO_MOD_TRACE_MOMENT_SEM_WAIT";
+        case CO_MOD_TRACE_MOMENT_SEM_UNWAIT: return "CO_MOD_TRACE_MOMENT_SEM_UNWAIT";
+
+        case CO_MOD_ERR_GENERIC:             return "CO_MOD_ERR_GENERIC";
+        case CO_MOD_ERR_TIMEO:               return "CO_MOD_ERR_TIMEO";
+        default: return "CO_UNKNOWN";
+    }
+}
+
+inline const char *co_str(void *addr) {
+    return co_str(handle_vt::from_address(addr));
+}
 
 inline const char *co_str(handle_vt handle) {
     static std::map<void *, std::string> id_str;
@@ -635,14 +1056,45 @@ inline std::string epoll_ev2str(uint32_t code) {
     return ret;
 }
 
-inline sched_awaiter_t sched(task_t to_sched) {
-    DBG("Will sched: %s", co_str(to_sched.handle));
+inline sched_awaiter_t sched(task_t to_sched, co_mod_ptr_t pmods) {
+    to_sched.handle.promise().pmods = pmods;
     return sched_awaiter_t{to_sched.handle};
 }
 
 inline yield_awaiter_t yield() {
-    DBG("Will yield");
     return yield_awaiter_t{};
+}
+
+inline task_t mod_task(task_t task, co_mod_ptr_t pmods) {
+    task.handle.promise().pmods = pmods;
+    return task;
+}
+
+inline task_t timed(task_t task, uint64_t timeo_us) {
+    /* here most often then not the promise is allocated but it doesn't yet know what is the pool
+    that it is running on. Still, we have access to some pmods. */
+    /* What we will do is the following: add the CO_MOD_TIMEOUT to this task and return it to the
+    caller. When co_awaited by another task this coroutine will have the timeo flag set with the
+    max time it can elapse from that point. The task responsable for the timeout will schedule a
+    sleep in paralel to the scheduled coroutine pointing to this co_mod_t.   */
+
+    auto timeo_pmod = std::make_shared<co_mod_t>(CO_MOD_TIMEOUT);
+    /* TODO: maybe check if alloc failed? */
+
+    timeo_pmod->m.timeo.timeo_us = timeo_us;
+
+    task.handle.promise().pmods = co_mod_t::attach(timeo_pmod, task.handle.promise().pmods);
+    return task;
+}
+
+inline task_t trace(task_t task, trace_fn_t fn, trace_ctx_t ctx) {
+    auto trace_pmod = std::make_shared<co_mod_t>(CO_MOD_TRACE);
+
+    trace_pmod->m.trace.fn = fn;
+    trace_pmod->m.trace.ctx = ctx;
+
+    task.handle.promise().pmods = co_mod_t::attach(trace_pmod, task.handle.promise().pmods);
+    return task;
 }
 
 inline task_t accept(int fd, sockaddr *sa, socklen_t *len) {
@@ -739,9 +1191,18 @@ inline task_t sleep_s(uint64_t timeo_s) {
 }
 
 inline task_t var_sleep_us(uint64_t timeo_us, sleep_handle_t *sleep_handle) {
+    if (timeo_us == 0)
+        co_return 0;
+    if (sleep_handle->fd_ptr != (int *)(intptr_t)(-1) && sleep_handle->fd_ptr != NULL) {
+        DBG("sleep_handle can't be used for multiple var_sleeps at once");
+        co_return -1; /* TODO: who receives this return value? */
+    }
+    if (sleep_handle->fd_ptr == (int *)(intptr_t)(-1)) {
+        co_return 0;
+    }
     sleep_awaiter_t sleep_awaiter{ .fd_ref = &sleep_handle->fd_ptr, .sleep_us = timeo_us };
     ASSERT_COFN(co_await sleep_awaiter);
-    sleep_handle->fd_ptr = NULL;
+    sleep_handle->fd_ptr = (int *)(intptr_t)(-1);
     co_return 0;
 }
 
@@ -756,25 +1217,30 @@ inline task_t var_sleep_s(uint64_t timeo_s, sleep_handle_t *sleep_handle) {
 }
 
 inline int stop_sleep(sleep_handle_t *sleep_handle) {
-    if (!sleep_handle->fd_ptr) {
-        DBG("Timer was already stopped...");
+    if (sleep_handle->fd_ptr == NULL) {
+        /* Timer is stopped apriori */
+        sleep_handle->fd_ptr = (int *)(intptr_t)(-1);
+        return 0;
+    }
+    if (sleep_handle->fd_ptr == (int *)(intptr_t)(-1)) {
+        /* Timer was stopped, either here or in var_sleep after the timer elapsed */
         return 0;
     }
     itimerspec its = {};
     its.it_value.tv_nsec = 1;
     its.it_value.tv_sec = 0;
     ASSERT_FN(timerfd_settime(*sleep_handle->fd_ptr, 0, &its, NULL));
+    sleep_handle->fd_ptr = (int *)(intptr_t)(-1);
     return 0;
 }
 
 template <typename ...Args>
 inline task_t when_all(Args&&...arg) {
-    DBG_SCOPE();
     sem_t sem(0);
     std::vector<task_t> tasks{ arg... };
     int ret = 0;
     for (auto &t : tasks) {
-        sem.dec();
+        sem._dec();
         co_await sched([&sem, &ret](task_t h) -> task_t {
             ret |= co_await h;
             sem.rel();
@@ -783,6 +1249,10 @@ inline task_t when_all(Args&&...arg) {
     }
     co_await sem;
     co_return ret;
+}
+
+inline void default_trace_fn(int e, void *coaddr, void *) {
+    DBG("[TRACE] %s at %s", co::enum_str(e), co::co_str(coaddr));
 }
 
 }
