@@ -15,8 +15,6 @@
 #include "misc_utils.h"
 #include "time_utils.h"
 
-#include "demangle.h"
-
 #define MAX_TIMER_POOL_SIZE 64
 
 #define ASSERT_COFN(fn_call)\
@@ -70,6 +68,8 @@ struct sleep_handle_t {
 
     int stop();
 };
+
+/* TODO: make internal vars private and mark functions as friend functions */
 
 /* Struct to remember registered actions for child coroutines spawned in the future. Usefull for
 registering cancelation functions, for registering traces, etc. New actions are registered by
@@ -190,8 +190,6 @@ struct fd_sched_t {
     std::queue<handle_t> ready_tasks;
     std::vector<struct epoll_event> ret_evs;
     int epoll_fd;
-
-    // std::map<int, handle_t> fds; /* TODO: remove? maybe? */
 };
 
 struct pool_t {
@@ -257,9 +255,10 @@ struct sleep_awaiter_t {
 
 /* The semaphore is an object with an internal counter and is usefull in signaling and mutual
 exclusion:
-    TODO: fix lie at 1. no unlocker_t is yet returned
     1. co_await - suspends the current coroutine if the counter is zero, else decrements the counter
-                  returns an unlocker_t object that has a member function .unlock()
+                  returns an unlocker_t object that has a member function .unlock() which calls
+                  rel(). unlocker_t also has a function lock() that does nothing, this is to allow
+                  unlocker_t to be used inside std::lock_guard.
     2. rel      - increments the counter.
     3. rel_all  - increments the counter with the amount of waiting coroutines on this semaphore
 
@@ -267,7 +266,7 @@ exclusion:
     rescheduling the internal counter will be decremented.
 
     You must manually use (co_await co::yield()) to suspend the current coroutine if you want the
-    notified coroutine to have a chance to be rescheduled. 
+    notified coroutine to have a chance to be rescheduled or to call a suspending coro.
 */
 
 struct sem_t {
@@ -280,19 +279,27 @@ struct sem_t {
     // sem_t &operator = (const sem_t &) = delete;
     // sem_t &operator = (sem_t &&) = delete;
 
+    struct unlocker_t {
+        unlocker_t(sem_t *sem);
+
+        void lock();
+        void unlock();
+
+        sem_t *sem;
+    };
+
     struct sem_awaiter_t {
         sem_awaiter_t(sem_t *sem);
 
-        bool      await_ready();
-        handle_vt await_suspend(handle_t to_suspend);
-        int       await_resume();
+        bool       await_ready();
+        handle_vt  await_suspend(handle_t to_suspend);
+        unlocker_t await_resume();
 
         sem_t *sem;
     };
 
     sem_awaiter_t operator co_await () noexcept;
 
-    void use();
     void rel();
     void rel_all();
     
@@ -306,6 +313,7 @@ private:
     std::list<handle_t> waiting_on_sem;
 };
 
+/* helper functions to convert co:: variables to string */
 inline const char *co_str(void *addr);
 inline const char *co_str(handle_vt handle);
 inline const char *enum_str(int e);
@@ -314,26 +322,31 @@ inline std::string epoll_ev2str(uint32_t code);
 inline sched_awaiter_t sched(task_t to_sched, co_mod_ptr_t pmods = nullptr);
 inline yield_awaiter_t yield();
 
+/* tasks call other tasks, creating call-chains. A modifier can be attached to a task to be
+propagated to it and called tasks. The modifiers do not propagate to tasks that are scheduled by
+using co::sched or pool->sched, but you can modify the task to contain a modifier. */
 inline task_t mod_task(task_t task, co_mod_ptr_t pmods);
+
+/* add a timer for an entire call-chain, on suspension points the whole chain will be destroied if
+the timer reached zero and the root task will return CO_MOD_ERR_TIMEO */
 inline task_t timed(task_t task, uint64_t timeo_us);
+
+/* add a callback to be called when a call-chain reaches one of the stages CO_MOD_TRACE_MOMENT_* */
 inline task_t trace(task_t task, trace_fn_t fn, trace_ctx_t ctx = NULL);
 
+/* Functions for rw from file descriptors if needed you can use them as an example */
 inline task_t accept(int fd, sockaddr *sa, socklen_t *len);
 inline task_t read(int fd, void *buff, size_t len);
 inline task_t write(int fd, const void *buff, size_t len);
 inline task_t read_sz(int fd, void *buff, size_t len);
 inline task_t write_sz(int fd, const void *buff, size_t len);
 
+/* Normal sleeps */
 inline task_t sleep_us(uint64_t timeo_us);
 inline task_t sleep_ms(uint64_t timeo_ms);
 inline task_t sleep_s(uint64_t timeo_s);
 
-/*  Those fns are meant to create interuptible sleeps, usefull when you want to acieve a timeout and
-you know how to stop your blocking call.
-    It is a feature(patch mostly, but I don't know how to avoid it, TODO: fix) meant for advanced
-users.
-    Be aware that the sleep does not remember it's stopped state, meaning that if you signal it
-while it is not sleeping it will simply ignore the command */
+/* Those fns are meant to create interuptible sleeps */
 inline task_t var_sleep_us(uint64_t timeo_us, sleep_handle_t *sleep_handle);
 inline task_t var_sleep_ms(uint64_t timeo_ms, sleep_handle_t *sleep_handle);
 inline task_t var_sleep_s(uint64_t timeo_s, sleep_handle_t *sleep_handle);
@@ -751,7 +764,6 @@ inline int pool_t::run() {
 }
 
 inline handle_vt pool_t::next_task() {
-    /* TODO: refactor this code, if epoll errors out simply tell all coroutines to close */
     if (waiting_tasks.size()) {
         /* We run an already scheduled task */
         handle_t to_resume = waiting_tasks.front();
@@ -922,6 +934,14 @@ inline int sleep_awaiter_t::await_resume() {
 
 /* sem_t ---------------------------------------------------------------------------------------- */
 
+inline sem_t::unlocker_t::unlocker_t(sem_t *sem) : sem(sem) {}
+
+inline void sem_t::unlocker_t::lock() {}
+
+inline void sem_t::unlocker_t::unlock() {
+    sem->rel();
+}
+
 inline sem_t::sem_t(int64_t counter) : counter(counter) {
 
 }
@@ -947,8 +967,8 @@ inline handle_vt sem_t::sem_awaiter_t::await_suspend(handle_t to_suspend) {
     return to_suspend.promise().pool->next_task();
 }
 
-inline int sem_t::sem_awaiter_t::await_resume() {
-    return 0;
+inline sem_t::unlocker_t sem_t::sem_awaiter_t::await_resume() {
+    return sem_t::unlocker_t(sem);
 }
 
 inline sem_t::sem_awaiter_t sem_t::operator co_await () noexcept {
