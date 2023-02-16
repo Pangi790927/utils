@@ -1,10 +1,11 @@
 NAME      := a.out
 
-INCLCUDES := -Iutils -Iutils/ap -Iutils/co -Iutils/generic -I.
+UTILS     := ./utils/
+INCLCUDES := -I${UTILS} -I${UTILS}/ap -I${UTILS}/co -I${UTILS}/generic -I.
 LIBS      := -lpthread -ldl -lglfw -lcurl
 
 SRCS      := $(wildcard ./*.cpp)
-SRCS      += $(wildcard ./utils/*.cpp)
+SRCS      += $(wildcard ${UTILS}/*.cpp)
 OBJS      := $(SRCS:.cpp=.o)
 DEPS      := $(SRCS:.cpp=.d)
 CXX 	  := g++-11
