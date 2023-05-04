@@ -1,3 +1,6 @@
+#ifndef CO_UTILS_H
+#define CO_UTILS_H
+
 #include <iostream>
 #include <unordered_map>
 #include <sys/socket.h>
@@ -436,6 +439,7 @@ inline int co_mod_t::handle_pmods_call(handle_t handle) {
                         /* unwind all the coroutines from leaf to root */
                         auto leaf = handle_t::from_address(pmod->m.timeo.leaf_coro);
                         while (leaf && leaf.address() != root_coro.address()) {
+                            leaf.promise().call_res = CO_MOD_ERR_TIMEO;
                             auto caller = leaf.promise().caller;
                             leaf.destroy();
                             leaf = caller;
@@ -446,6 +450,7 @@ inline int co_mod_t::handle_pmods_call(handle_t handle) {
                         }
 
                         /* schedule the caller of co::timed to be awakened with timeo */
+                        root_coro.promise().call_res = CO_MOD_ERR_TIMEO;
                         root_coro.promise().ret_val = CO_MOD_ERR_TIMEO;
                         pool->waiting_tasks.push(handle_t::from_address(
                                 final_awaiter_t(pool).await_suspend(root_coro).address()));
@@ -717,7 +722,7 @@ inline int fd_sched_t::wait_events() {
 inline int fd_sched_t::insert_wait(handle_t to_wait, int fd, int wait_cond) {
     struct epoll_event ev = {};
     ev.events = wait_cond;
-    to_wait.promise().call_res = -1;
+    to_wait.promise().call_res = CO_MOD_ERR_GENERIC;
     ev.data.ptr = to_wait.address();
     ASSERT_FN(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev));
     ret_evs.push_back(epoll_event{});
@@ -746,7 +751,8 @@ inline int fd_sched_t::handle_events(int num_evs) {
 inline void pool_t::sched(handle_t handle, co_mod_ptr_t pmods) {
     // DBG("scheduling: %s", co_str(handle));
     handle.promise().pool = this;
-    handle.promise().pmods = pmods; /* sched is async, so non blocking in regards to the caller */
+    if (pmods)
+        handle.promise().pmods = pmods; /* sched is async, so non blocking in regards to the caller */
     waiting_tasks.push(handle);
 }
 
@@ -850,7 +856,8 @@ inline int fd_awaiter_t::await_resume() {
 }
 
 inline fd_awaiter_t::~fd_awaiter_t() {
-    pool->fd_sched.remove_wait(fd);
+    if (caller_handle.promise().call_res != CO_MOD_ERR_TIMEO)
+        pool->fd_sched.remove_wait(fd);
 }
 
 /* sched_awaiter_t ------------------------------------------------------------------------------ */
@@ -1077,7 +1084,8 @@ inline std::string epoll_ev2str(uint32_t code) {
 }
 
 inline sched_awaiter_t sched(task_t to_sched, co_mod_ptr_t pmods) {
-    to_sched.handle.promise().pmods = pmods;
+    if (pmods)
+        to_sched.handle.promise().pmods = pmods;
     return sched_awaiter_t{to_sched.handle};
 }
 
@@ -1276,3 +1284,5 @@ inline void default_trace_fn(int e, void *coaddr, void *) {
 }
 
 }
+
+#endif

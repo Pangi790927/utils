@@ -14,6 +14,10 @@
 
 #define DIV_UP(x, d)            ({decltype(d) ds = (d); (x + d - 1) / d;})
 #define ALIGN(x, a)             ({decltype(a) as = (a); DIV_UP(x, as) * as;})
+
+#define UP_ALIGN(nr, align)     ((nr + align - 1) / align * align)
+#define DOWN_ALIGN(nr, align)   (nr / align * align)
+
 #define ARR_SZ(a)               (sizeof((a)) / sizeof((a)[0]))
 
 #define KNRM                "\x1B[0m"
