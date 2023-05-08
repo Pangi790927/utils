@@ -13,8 +13,9 @@ this specific shortcomming of coroutines.
     To do this I assumed the blocking IO would be handled by a separate thread. As such thread-coro
 comms need to be established. This task will probably be usually achieved by using pipes. */
 
+/* thread to coro queue */
 template <typename T>
-struct thco_queue_t {
+struct thco_t2c_queue_t {
     std::queue<T>   que;
     std::mutex      que_mu;
     int             que_sig[2];
@@ -48,7 +49,7 @@ struct thco_queue_t {
 
     co::task_t pop(T &ret) {
         uint8_t aux;
-        co_await co::read(que_sig[0], &aux, 1);
+        co_await CO_REG_INTERN(co::read(que_sig[0], &aux, 1));
         std::lock_guard guard(que_mu);
         ret = que.front();
         que.pop();

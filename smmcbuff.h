@@ -129,77 +129,91 @@ struct co_smmcbuff_t {
     co::sem_t read_sem;
     co::sem_t write_sem;
 
-    int init(size_t _sz) {
-        ASSERT_FN(cbuff.init(_sz));
-        write_sz = cbuff.capacity();
-        read_sz = 0;
-        cbuff.head.change_cbk = mmcbuff_cbk_t{
-            .fn = +[](void *_own, size_t len){
-                auto own = (co_smmcbuff_t *)_own;
-                own->write_sz += len;
-                own->read_sz -= len;
-                if (own->req_write && own->write_sz >= own->req_write) {
-                    own->write_sem.rel();
-                    own->req_write = 0;
-                }
-            },
-            .ctx = this
-        };
-        cbuff.tail.change_cbk = mmcbuff_cbk_t{
-            .fn = +[](void *_own, size_t len){
-                auto own = (co_smmcbuff_t *)_own;
-                own->write_sz -= len;
-                own->read_sz += len;
-                if (own->req_read && own->read_sz >= own->req_read) {
-                    own->read_sem.rel();
-                    own->req_read = 0;
-                }
-            },
-            .ctx = this
-        };
-        return 0;
-    }
+    int init(size_t _sz);
+    void uninit();
+    size_t size();
+    size_t capacity();
 
-    void uninit() {
-        cbuff.uninit();
-    }
-
-    size_t size() {
-        return cbuff.size();
-    }
-    size_t capacity() {
-        return cbuff.capacity();
-    }
-
-    co::task_t ref_read(mmcbuff_t::head_t **ret, size_t minsz) {
-        if (read_sz < minsz) {
-            req_read = minsz;
-            co_await read_sem;
-        }
-        if (ret)
-            *ret = &cbuff.ref_read();
-        co_return 0;
-    }
-
-    co::task_t ref_write(mmcbuff_t::head_t **ret, size_t minsz) {
-        if (minsz > cbuff.capacity()) {
-            DBG("Can't wait for more space than the capacity of the cbuff req: %ld capacity: %ld",
-                    minsz, cbuff.capacity());
-            co_return -1;
-        }
-        if (write_sz < minsz) {
-            req_write = minsz;
-            co_await write_sem;
-        }
-        if (ret)
-            *ret = &cbuff.ref_write();
-        co_return 0;
-    }
+    co::task_t ref_read(mmcbuff_t::head_t **ret, size_t minsz);
+    co::task_t ref_write(mmcbuff_t::head_t **ret, size_t minsz);
 };
 
 
 /* IMPLEMENTATION:
 ================================================================================================= */
+
+mmcbuff_t::head_t::head_t() {}
+
+/* This makes a fake copy(maybe I should invent a different type for this operation?) This copy has
+a pointer to the other current valid head, but the other head does not have a valid copy to this one
+ */
+mmcbuff_t::head_t::head_t(const head_t& oth) {
+    base = oth.base;
+    cbuff = oth.cbuff;
+    other = oth.other;
+}
+
+mmcbuff_t::head_t &mmcbuff_t::head_t::operator = (const mmcbuff_t::head_t& oth) {
+    if (!cbuff) {
+        cbuff = oth.cbuff;
+        other = oth.other;
+    }
+    if (cbuff != oth.cbuff)
+        throw std::runtime_error("Can't have transfers between heads of different cbufs");
+    if (change_cbk.fn && base != oth.base) {
+        size_t adv_len = 0;
+        if (oth.base > base)
+            adv_len = oth.base - base;
+        else
+            adv_len = cbuff->sz + oth.base - base;
+        change_cbk.fn(change_cbk.ctx, adv_len);
+    }
+    base = oth.base;
+    return *this;
+}
+
+mmcbuff_t::head_t &mmcbuff_t::head_t::operator = (mmcbuff_t::head_t&& oth) {
+    return (*this) = oth;
+}
+
+inline mmcbuff_t::head_t &mmcbuff_t::ref_read() {
+    return head;
+}
+
+inline mmcbuff_t::head_t &mmcbuff_t::ref_write() {
+    return tail;
+}
+
+inline int mmcbuff_t::head_t::advance(size_t adv_len) {
+    // for read this pops data, for write this pushes data, it does both operations without actually
+    // changing the buffer, you need to call commit to achieve that
+    size_t curr_sz = size();
+    if (adv_len > curr_sz)
+        return -1;
+    if (change_cbk.fn && adv_len)
+        change_cbk.fn(change_cbk.ctx, adv_len);
+    base = (base + adv_len) % cbuff->sz;
+    return 0;
+}
+
+inline void *mmcbuff_t::head_t::addr() {
+    return cbuff->cbase() + base;
+}
+
+inline size_t mmcbuff_t::head_t::size() {
+    if (other != &cbuff->tail.base) {
+        if (*other > base)
+            return *other - base;
+        else
+            return cbuff->sz + *other - base;
+    }
+    else {
+        if (*other >= base)
+            return *other - base;
+        else
+            return cbuff->sz + *other - base;
+    }
+}
 
 inline mmcbuff_t::mmcbuff_t() {
     fd = -1;
@@ -274,77 +288,72 @@ inline size_t mmcbuff_t::capacity() {
     return sz;
 }
 
-mmcbuff_t::head_t::head_t() {}
-
-/* This makes a fake copy(maybe I should invent a different type for this operation?) This copy has
-a pointer to the other current valid head, but the other head does not have a valid copy to this one
- */
-mmcbuff_t::head_t::head_t(const head_t& oth) {
-    base = oth.base;
-    cbuff = oth.cbuff;
-    other = oth.other;
-}
-
-mmcbuff_t::head_t &mmcbuff_t::head_t::operator = (const mmcbuff_t::head_t& oth) {
-    if (!cbuff) {
-        cbuff = oth.cbuff;
-        other = oth.other;
-    }
-    if (cbuff != oth.cbuff)
-        throw std::runtime_error("Can't have transfers between heads of different cbufs");
-    if (change_cbk.fn && base != oth.base) {
-        size_t adv_len = 0;
-        if (oth.base > base)
-            adv_len = oth.base - base;
-        else
-            adv_len = cbuff->sz + oth.base - base;
-        change_cbk.fn(change_cbk.ctx, adv_len);
-    }
-    base = oth.base;
-    return *this;
-}
-
-mmcbuff_t::head_t &mmcbuff_t::head_t::operator = (mmcbuff_t::head_t&& oth) {
-    return (*this) = oth;
-}
-
-inline mmcbuff_t::head_t &mmcbuff_t::ref_read() {
-    return head;
-}
-
-inline mmcbuff_t::head_t &mmcbuff_t::ref_write() {
-    return tail;
-}
-
-inline int mmcbuff_t::head_t::advance(size_t adv_len) {
-    // for read this pops data, for write this pushes data, it does both operations without actually
-    // changing the buffer, you need to call commit to achieve that
-    size_t curr_sz = size();
-    if (adv_len > curr_sz)
-        return -1;
-    if (change_cbk.fn && adv_len)
-        change_cbk.fn(change_cbk.ctx, adv_len);
-    base = (base + adv_len) % cbuff->sz;
+inline int co_smmcbuff_t::init(size_t _sz) {
+    ASSERT_FN(cbuff.init(_sz));
+    write_sz = cbuff.capacity();
+    read_sz = 0;
+    cbuff.head.change_cbk = mmcbuff_cbk_t{
+        .fn = +[](void *_own, size_t len){
+            auto own = (co_smmcbuff_t *)_own;
+            own->write_sz += len;
+            own->read_sz -= len;
+            if (own->req_write && own->write_sz >= own->req_write) {
+                own->write_sem.rel();
+                own->req_write = 0;
+            }
+        },
+        .ctx = this
+    };
+    cbuff.tail.change_cbk = mmcbuff_cbk_t{
+        .fn = +[](void *_own, size_t len){
+            auto own = (co_smmcbuff_t *)_own;
+            own->write_sz -= len;
+            own->read_sz += len;
+            if (own->req_read && own->read_sz >= own->req_read) {
+                own->read_sem.rel();
+                own->req_read = 0;
+            }
+        },
+        .ctx = this
+    };
     return 0;
 }
 
-inline void *mmcbuff_t::head_t::addr() {
-    return cbuff->cbase() + base;
+inline void co_smmcbuff_t::uninit() {
+    cbuff.uninit();
 }
 
-inline size_t mmcbuff_t::head_t::size() {
-    if (other != &cbuff->tail.base) {
-        if (*other > base)
-            return *other - base;
-        else
-            return cbuff->sz + *other - base;
+inline size_t co_smmcbuff_t::size() {
+    return cbuff.size();
+}
+
+inline size_t co_smmcbuff_t::capacity() {
+    return cbuff.capacity();
+}
+
+inline co::task_t co_smmcbuff_t::ref_read(mmcbuff_t::head_t **ret, size_t minsz) {
+    if (read_sz < minsz) {
+        req_read = minsz;
+        co_await read_sem;
     }
-    else {
-        if (*other >= base)
-            return *other - base;
-        else
-            return cbuff->sz + *other - base;
+    if (ret)
+        *ret = &cbuff.ref_read();
+    co_return 0;
+}
+
+inline co::task_t co_smmcbuff_t::ref_write(mmcbuff_t::head_t **ret, size_t minsz) {
+    if (minsz > cbuff.capacity()) {
+        DBG("Can't wait for more space than the capacity of the cbuff req: %ld capacity: %ld",
+                minsz, cbuff.capacity());
+        co_return -1;
     }
+    if (write_sz < minsz) {
+        req_write = minsz;
+        co_await write_sem;
+    }
+    if (ret)
+        *ret = &cbuff.ref_write();
+    co_return 0;
 }
 
 #endif
