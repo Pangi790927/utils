@@ -8,7 +8,7 @@
 
 #define LOGGER_DEFAULT_MAXSZ	(16*1024*1024)
 #define LOGGER_DEFAULT_NAME		"./logfile"
-#define LOGGER_DEFAULT_PERM		0644
+#define LOGGER_DEFAULT_PERM		0666
 
 struct logger_spinlock_t {
 	std::atomic_flag locked = ATOMIC_FLAG_INIT;

@@ -20,22 +20,22 @@ struct thco_t2c_queue_t {
     std::mutex      que_mu;
     int             que_sig[2];
 
-    thco_queue_t() {
+    thco_t2c_queue_t() {
         int ret = pipe(que_sig);
         if (ret < 0) {
             DBGE("Very unusual pipe fail");
         }
     }
 
-    ~thco_queue_t() {
+    ~thco_t2c_queue_t() {
         close(que_sig[0]);
         close(que_sig[1]);
     }
 
-    thco_queue_t(const thco_queue_t&) = delete;
-    thco_queue_t(thco_queue_t&&) = delete;
-    thco_queue_t& operator = (const thco_queue_t&) = delete;
-    thco_queue_t& operator = (thco_queue_t&&) = delete;
+    thco_t2c_queue_t(const thco_t2c_queue_t&) = delete;
+    thco_t2c_queue_t(thco_t2c_queue_t&&) = delete;
+    thco_t2c_queue_t& operator = (const thco_t2c_queue_t&) = delete;
+    thco_t2c_queue_t& operator = (thco_t2c_queue_t&&) = delete;
 
     void push(const T& t) {
         select_wrap(std::vector<int>{}, std::vector<int>{(int)que_sig[1]}, std::vector<int>{});

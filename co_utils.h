@@ -18,28 +18,44 @@
 #include "misc_utils.h"
 #include "time_utils.h"
 
+/* TODO: define to disable task_t::ever_called */
+
 #define CO_MAX_TIMER_POOL_SIZE  64
 
-#define CO_REG(task)            co::dbg_register(task, sformat("%20s:%5d:%s", \
-        __FILE__, __LINE__, #task))
 
 /*  - provide CO_NEXT to have all coro traced
     - provide co_REG_INTERN to have internal coroutines named as well
     - add CO_REG when calling a coro to actually register it's name */
 
-// #define CO_REG_INTERN(task)     task
+#define CO_REG(t)         t
+#define CO_REG_INTERN(t)  t
+#define CO_NEXT(h)        h
+
+#ifndef CO_REG
+# define CO_REG(t)        co::dbg_register(t, sformat("%20s:%5d:%s", __FILE__, __LINE__, #t))
+#endif
+
 #ifndef CO_REG_INTERN
-#define CO_REG_INTERN(task)     co::dbg_register(task, sformat("%26d:__%s", __LINE__, #task))
+# define CO_REG_INTERN(t) co::dbg_register(t, sformat("%26d:__%s", __LINE__, #t))
 #endif
 
-// #define CO_NEXT(handle)         handle
 #ifndef CO_NEXT
-# define CO_NEXT(handle)        co::dbg_coro_str_forward(handle)
+# define CO_NEXT(h)       co::dbg_coro_str_forward(h)
 #endif
 
+/* ASSERT COroutine FuNction */
 #define ASSERT_COFN(fn_call)\
 if (intptr_t(fn_call) < 0) {\
     DBGE("FAILED: " #fn_call);\
+    co_return -1;\
+}
+
+/* ASSERT End COroutine FuNction (used on the function that you want to use to return the final
+result) */
+#define ASSERT_ECOFN(fn_call)\
+if (intptr_t(fn_call) < 0) {\
+    DBGE("FAILED: " #fn_call);\
+    co_await co::force_stop(-1);\
     co_return -1;\
 }
 
@@ -149,12 +165,19 @@ struct task_t {
     using promise_type = promise_t;
 
     task_t(handle_t handle);
+    ~task_t();
+
+    task_t(task_t& oth);
+    task_t(task_t&& oth);
+    task_t &operator = (task_t& oth);
+    task_t &operator = (task_t&& oth);
 
     bool      await_ready() noexcept;
     handle_vt await_suspend(handle_t caller) noexcept;
     int       await_resume() noexcept;
 
     handle_t handle;
+    bool ever_called = false;
 };
 
 struct initial_awaiter_t {
@@ -230,6 +253,7 @@ struct pool_t {
     std::queue<handle_t> waiting_tasks;
     std::stack<int> timer_fd_pool;
     fd_sched_t fd_sched;
+    int ret_val;
 };
 
 struct fd_awaiter_t {
@@ -369,6 +393,9 @@ inline task_t trace(task_t task, trace_fn_t fn = dbg_trace_fn, trace_ctx_t ctx =
 template <typename Awaiter>
 inline task_t await(Awaiter& awaiter);
 
+/* causes the running pool::run to return */
+inline task_t force_stop(int ret);
+
 /* Functions for rw from file descriptors if needed you can use them as an example */
 inline task_t accept(int fd, sockaddr *sa, socklen_t *len);
 inline task_t read(int fd, void *buff, size_t len);
@@ -440,7 +467,6 @@ inline int co_mod_t::handle_pmods_call(handle_t handle) {
                         if (pmod->m.timeo.state == CO_MOD_TIMEO_STATE_STOPPED) {
                             /* If we are in this case it means that the action concluded before the
                             timeout so there is nothing more to do */
-                            DBG("Timeo stopped for: %s", co_str(pmod->m.timeo.root_coro));
                             co_return 0;
                         }
                         int state = pmod->m.timeo.state;
@@ -627,11 +653,41 @@ inline int co_mod_t::handle_pmods_sem_unwait(handle_t handle) {
 
 inline task_t::task_t(handle_t handle) : handle(handle) {}
 
+inline task_t::~task_t() {
+    if (!ever_called) {
+        DBG("This coroutine was never called, that's not ok");
+    }
+}
+
+inline task_t::task_t(task_t& oth) {
+    handle = oth.handle;
+    oth.ever_called = true;
+}
+
+inline task_t::task_t(task_t&& oth) {
+    handle = std::move(oth.handle);
+    oth.ever_called = true;
+}
+
+inline task_t &task_t::operator = (task_t& oth) {
+    handle = oth.handle;
+    oth.ever_called = true;
+    return *this;
+}
+
+inline task_t &task_t::operator = (task_t&& oth) {
+    handle = std::move(oth.handle);
+    oth.ever_called = true;
+    return *this;
+}
+
+
 inline bool task_t::await_ready() noexcept {
     return false;
 }
 
 inline handle_vt task_t::await_suspend(handle_t caller) noexcept {
+    ever_called = true;
     handle.promise().caller = caller;
     handle.promise().pmods = co_mod_t::attach(handle.promise().pmods, caller.promise().pmods);
     handle.promise().pool = caller.promise().pool;
@@ -647,6 +703,7 @@ inline handle_vt task_t::await_suspend(handle_t caller) noexcept {
 }
 
 inline int task_t::await_resume() noexcept {
+    ever_called = true;
     int ret = handle.promise().ret_val;
     handle.destroy();
     return ret;
@@ -792,6 +849,7 @@ inline void pool_t::sched(handle_t handle, co_mod_ptr_t pmods) {
 }
 
 inline void pool_t::sched(task_t task, co_mod_ptr_t pmods) {
+    task.ever_called = true;
     sched(task.handle, pmods);
 }
 
@@ -803,7 +861,7 @@ inline int pool_t::run() {
     handle_t first_task = waiting_tasks.front();
     waiting_tasks.pop();
     first_task.resume();
-    return 0; /* not sure what I should return */
+    return ret_val;
 }
 
 inline handle_vt pool_t::next_task() {
@@ -1132,6 +1190,7 @@ inline std::string epoll_ev2str(uint32_t code) {
 inline sched_awaiter_t sched(task_t to_sched, co_mod_ptr_t pmods) {
     if (pmods)
         to_sched.handle.promise().pmods = pmods;
+    to_sched.ever_called = true;
     return sched_awaiter_t{to_sched.handle};
 }
 
@@ -1175,6 +1234,21 @@ template <typename Awaiter>
 inline task_t await(Awaiter& awaiter) {
     co_await awaiter;
     co_return 0; 
+}
+
+inline task_t force_stop(int ret) {
+    struct stop_awaiter_t {
+        bool        await_ready() { return false; }
+        handle_vt   await_suspend(handle_t curr) {
+            curr.promise().pool->ret_val = ret;
+            return std::noop_coroutine();
+        }
+        void        await_resume() {}
+
+        int ret;
+    };
+    co_await stop_awaiter_t{ret};
+    co_return 0;
 }
 
 inline task_t accept(int fd, sockaddr *sa, socklen_t *len) {
