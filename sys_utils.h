@@ -266,7 +266,7 @@ inline sockaddr_in create_sa_ipv4(uint32_t addr, uint16_t port) {
     sockaddr_in sa_addr = {};
     sa_addr.sin_family = AF_INET;
     sa_addr.sin_addr.s_addr = INADDR_ANY;
-    sa_addr.sin_port = htons(SERVER_PORT);
+    sa_addr.sin_port = htons(port);
     return sa_addr;
 }
 

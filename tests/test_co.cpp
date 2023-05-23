@@ -1,18 +1,7 @@
 #include "co_utils.h"
+#include "sys_utils.h"
 
 #define SERVER_PORT 5123
-
-sockaddr_in create_sa_ipv4(uint32_t addr, uint16_t port) {
-    sockaddr_in sa_addr = {};
-    sa_addr.sin_family = AF_INET;
-    sa_addr.sin_addr.s_addr = INADDR_ANY;
-    sa_addr.sin_port = htons(SERVER_PORT);
-    return sa_addr;
-}
-
-sockaddr_in create_sa_ipv4(std::string addr, uint16_t port) {
-    return create_sa_ipv4(inet_addr(addr.c_str()), port);
-}
 
 struct PACKED_STRUCT msg_t {
     int magic = 'goku';
