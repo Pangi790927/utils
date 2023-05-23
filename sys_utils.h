@@ -38,6 +38,8 @@ inline int systemctl_create_service(const char *service_name, const char *target
 inline sockaddr_in create_sa_ipv4(std::string addr, uint16_t port);
 inline sockaddr_in create_sa_ipv4(uint32_t addr, uint16_t port);
 
+inline bool check_file_exists(const std::string& name);
+
 /* IMPLEMENTATION:
 ================================================================================================= */
 
@@ -274,5 +276,9 @@ inline sockaddr_in create_sa_ipv4(std::string addr, uint16_t port) {
     return create_sa_ipv4(inet_addr(addr.c_str()), port);
 }
 
+inline bool check_file_exists(const std::string& name) {
+    std::ifstream f(name.c_str());
+    return f.good();
+}
 
 #endif

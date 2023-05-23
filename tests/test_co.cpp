@@ -4,7 +4,7 @@
 #define SERVER_PORT 5123
 
 struct PACKED_STRUCT msg_t {
-    int magic = 'goku';
+    int magic = 123;
     int type;
     char str[256] = "Invalid string";
 };
@@ -212,6 +212,40 @@ co::task_t force_order_multiple() {
     );
 }
 
+co::task_t test_comods_timeo_trace(uint64_t var_sleep1_us, uint64_t var_sleep2_us) {
+    co::sem_t break_sem(0);
+    co::sem_t wait_done(0);
+
+    co::sleep_handle_t sleep_handle;
+
+    /* test wait on semaphore */
+    co_await co::sched([&]() -> co::task_t {
+        int ret = co_await co::trace(
+            co::timed(
+                [&]() -> co::task_t {
+                    co_await break_sem;
+                    co_return 0;
+                }(),
+                var_sleep1_us
+            ),
+            co::default_trace_fn
+        );
+        sleep_handle.stop();
+        DBG("timeo: %ld sig_time: %ld After semaphore wait, return val: %d",
+                var_sleep1_us, var_sleep2_us, ret);
+
+        wait_done.rel();
+        co_return 0;
+    }());
+
+    co_await co::var_sleep_us(var_sleep2_us, &sleep_handle);
+    break_sem.rel();
+    co_await co::yield();
+
+    co_await wait_done; /* makes sure local variables are not released before usage */
+    co_return 0;
+}
+
 int main(int argc, char const *argv[])
 {
     co::pool_t pool;
@@ -253,6 +287,19 @@ int main(int argc, char const *argv[])
 
     DBG("Will force order multiple");
     pool.sched(force_order_multiple());
+
+    DBG("Will run the pool");
+    pool.run();
+
+    /*-------------------------------------*/
+
+    DBG("Will test comods");
+    pool.sched(test_comods_timeo_trace(1'000'000, 0));
+    pool.sched(test_comods_timeo_trace(0, 0));
+    pool.sched(test_comods_timeo_trace(0, 1'000'000));
+    pool.sched(test_comods_timeo_trace(1'000'000, 1'000'000));
+    pool.sched(test_comods_timeo_trace(2'000'000, 1'000'000));
+    pool.sched(test_comods_timeo_trace(1'000'000, 2'000'000));
 
     DBG("Will run the pool");
     pool.run();
