@@ -1,0 +1,19 @@
+IMGUI     := imgui_repo/imgui/
+IMPLOT    := imgui_repo/implot/
+
+IMGUI_SRC := ${IMGUI}/imgui.cpp
+IMGUI_SRC += ${IMGUI}/imgui_draw.cpp
+IMGUI_SRC += ${IMGUI}/imgui_tables.cpp
+IMGUI_SRC += ${IMGUI}/imgui_widgets.cpp
+IMGUI_SRC += ${IMGUI}/imgui_demo.cpp
+
+IMPLOT_SRC := ${IMPLOT}/implot.cpp
+IMPLOT_SRC += ${IMPLOT}/implot_demo.cpp
+IMPLOT_SRC += ${IMPLOT}/implot_items.cpp
+
+BACKEND_SRC := ${IMGUI}/backends/imgui_impl_glfw.cpp
+BACKEND_SRC += ${IMGUI}/backends/imgui_impl_opengl3.cpp
+
+INCLCUDES += -I${IMGUI} -I${IMGUI}/backends/ -I${IMPLOT}
+SRCS      += ${IMGUI_SRC} ${BACKEND_SRC} ${IMPLOT_SRC}
+LIBS      += -lglfw -lGL
