@@ -47,11 +47,15 @@ if (intptr_t(fn_call) < 0) {\
     return -1;\
 }
 
-#define ASSERT_PTR(fn_call)                                                                        \
-if (!(fn_call)) {                                                                                  \
-    DBGE("FAILED: " #fn_call);                                                                     \
-    return -1;                                                                                     \
-}
+// #define ASSERT_PTR(fn_call)                                                                        \
+// if (!(fn_call)) {                                                                                  \
+//     DBGE("FAILED: " #fn_call);                                                                     \
+//     return -1;                                                                                     \
+// }
+
+#define CHK_MMAP(x) ((x) == MAP_FAILED ? -1 : 0)
+#define CHK_BOOL(x) ((x) ? 0 : -1)
+#define CHK_PTR(x)  ((x) == NULL ? -1 : 0)
 
 struct DbgScope {
     std::string file;

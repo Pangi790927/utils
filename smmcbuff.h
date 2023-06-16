@@ -266,11 +266,11 @@ inline int mmcbuff_t::init(size_t _sz, mmcbuff_cbk_t change_read, mmcbuff_cbk_t 
     int prot = PROT_READ | PROT_WRITE;
 
     /* reserve twice as much virtual memory as needed for the circular buffer */
-    ASSERT_FN(intptr_t(base = mmap(NULL, sz * 2, prot, MAP_ANONYMOUS | MAP_SHARED, -1, 0)));
+    ASSERT_FN(CHK_MMAP(base = mmap(NULL, sz * 2, prot, MAP_ANONYMOUS | MAP_SHARED, -1, 0)));
     
     /* map the memory file twice inside our reserved virtual mapping */
-    ASSERT_FN(intptr_t(mmap(cbase(), sz, prot, MAP_FIXED | MAP_SHARED, fd, 0)));
-    ASSERT_FN(intptr_t(mmap(cbase() + sz, sz, prot, MAP_FIXED | MAP_SHARED, fd, 0)));
+    ASSERT_FN(CHK_MMAP(mmap(cbase(), sz, prot, MAP_FIXED | MAP_SHARED, fd, 0)));
+    ASSERT_FN(CHK_MMAP(mmap(cbase() + sz, sz, prot, MAP_FIXED | MAP_SHARED, fd, 0)));
     return 0;
 }
 
