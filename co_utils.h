@@ -97,6 +97,9 @@ enum {
 
     CO_MOD_ERR_GENERIC = -1,
     CO_MOD_ERR_TIMEO = -2,
+    CO_WAKEUP_ERR = -4,
+
+    CO_WAKEUP_ALL = 0xffff'ffff,
 };
 
 struct sleep_handle_t {
@@ -217,24 +220,31 @@ struct promise_t {
 
 struct fd_sched_t {
     struct fd_data_t {
-        int fd;
-        handle_t handl;
+        struct waiter_t {
+            uint32_t mask = 0;
+            void *ptr = nullptr;
+        };
+        uint32_t mask = 0;
+        std::vector<waiter_t> waiters;
     };
 
     fd_sched_t();
     handle_t get_next();
 
-    int  insert_wait(handle_t to_wait, int fd, int wait_cond);
-    int  remove_wait(int fd);
+    int  insert_wait(handle_t to_wait, int fd, uint32_t wait_cond);
+    int  remove_wait(int fd, uint32_t wait_cond);
+    int  wakeup_wait(int fd, uint32_t mask = CO_WAKEUP_ALL);
 
     bool pending();
     int  check_events_noblock();
     int  wait_events();
     int  handle_events(int num_evs);
 
+    std::map<int, fd_data_t> waiting_tasks;
     std::queue<handle_t> ready_tasks;
     std::vector<struct epoll_event> ret_evs;
     int epoll_fd;
+
 };
 
 struct pool_t {
@@ -402,6 +412,7 @@ inline task_t read(int fd, void *buff, size_t len);
 inline task_t write(int fd, const void *buff, size_t len);
 inline task_t read_sz(int fd, void *buff, size_t len);
 inline task_t write_sz(int fd, const void *buff, size_t len);
+inline task_t stopfd(int fd);
 
 /* Normal sleeps */
 inline task_t sleep_us(uint64_t timeo_us);
@@ -483,7 +494,7 @@ inline int co_mod_t::handle_pmods_call(handle_t handle) {
                             /* nothing to do here? check in yield maybe? */
                         }
                         if (state == CO_MOD_TIMEO_STATE_FD) {
-                            int ret = pool->fd_sched.remove_wait(pmod->m.timeo.wait_fd);
+                            int ret = pool->fd_sched.remove_wait(pmod->m.timeo.wait_fd, EPOLLIN);
                             if (ret < 0) {
                                 DBG("Failed to remove fd from wating list, will ignore");
                             }
@@ -807,32 +818,117 @@ inline handle_t fd_sched_t::get_next() {
 
 inline int fd_sched_t::wait_events() {
     int num_evs;
-    ASSERT_FN(num_evs = epoll_wait(epoll_fd, ret_evs.data(), ret_evs.size(), -1));
+    do {
+        num_evs = epoll_wait(epoll_fd, ret_evs.data(), ret_evs.size(), -1);
+    } while (num_evs < 0 && errno == EINTR);
+    ASSERT_FN(num_evs);
     return handle_events(num_evs);
 }
 
-inline int fd_sched_t::insert_wait(handle_t to_wait, int fd, int wait_cond) {
-    struct epoll_event ev = {};
-    ev.events = wait_cond;
-    to_wait.promise().call_res = CO_MOD_ERR_GENERIC;
-    ev.data.ptr = to_wait.address();
-    ASSERT_FN(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev));
-    ret_evs.push_back(epoll_event{});
+inline int fd_sched_t::insert_wait(handle_t to_wait, int fd, uint32_t wait_cond) {
+    if (!wait_cond) {
+        DBG("Wait cond can't be zero");
+        return -1;
+    }
+    if (HAS(waiting_tasks, fd)) {
+        auto &fd_data = waiting_tasks[fd];
+        if (fd_data.mask & wait_cond) {
+            DBG("Can't have two coroutines waiting on the same fd and same events %x vs %x",
+                    fd_data.mask, wait_cond);
+            return -1;
+        }
+        struct epoll_event ev = {};
+        ev.events = wait_cond | fd_data.mask;
+        ev.data.fd = fd;
+        ASSERT_FN(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev));
+        fd_data.mask = ev.events;
+        fd_data.waiters.push_back(fd_data_t::waiter_t{ .mask = wait_cond, .ptr = to_wait.address() });
+        to_wait.promise().call_res = CO_MOD_ERR_GENERIC;
+        return 0;
+    }
+    else {
+        auto &fd_data = waiting_tasks[fd];
+        struct epoll_event ev = {};
+        ev.events = wait_cond;
+        ev.data.fd = fd;
+        ASSERT_FN(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev));
+        fd_data.mask = ev.events;
+        fd_data.waiters.push_back(fd_data_t::waiter_t{ .mask = wait_cond, .ptr = to_wait.address() });
+        to_wait.promise().call_res = CO_MOD_ERR_GENERIC;
+        ret_evs.push_back(epoll_event{});
+        return 0;
+    }
     return 0;
 }
 
-inline int fd_sched_t::remove_wait(int fd) {
-    ASSERT_FN(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, NULL));
-    ret_evs.pop_back();
+inline int fd_sched_t::remove_wait(int fd, uint32_t wait_cond) {
+    if (!HAS(waiting_tasks, fd)) {
+        DBG("Couldn't remove fd: %d", fd);
+        return -1;
+    }
+    auto &fd_data = waiting_tasks[fd];
+    if ((fd_data.mask & ~wait_cond) != 0) {
+        struct epoll_event ev = {};
+        ev.events = fd_data.mask & ~wait_cond;
+        ev.data.fd = fd;
+        ASSERT_FN(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev));
+        fd_data.mask = ev.events;
+       
+        fd_data.waiters.erase(std::remove_if(
+            fd_data.waiters.begin(),
+            fd_data.waiters.end(),
+            [wait_cond](const fd_data_t::waiter_t& m) { 
+                return (wait_cond & m.mask) == m.mask;
+            }),
+            fd_data.waiters.end()
+        );
+    }
+    else {
+        waiting_tasks.erase(fd);
+        ASSERT_FN(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, NULL));
+        ret_evs.pop_back();
+    }
+
+    return 0;
+}
+
+inline int fd_sched_t::wakeup_wait(int fd, uint32_t mask) {
+    if (!HAS(waiting_tasks, fd)) {
+        return 0;
+    }
+    auto &fd_data = waiting_tasks[fd];
+    uint32_t final_mask = 0;
+    for (auto &w : fd_data.waiters) {
+        if ((w.mask & mask) == w.mask) {
+            final_mask |= w.mask;
+            auto handle = handle_t::from_address(w.ptr);
+            if (handle) {
+                handle.promise().call_res = CO_WAKEUP_ERR;
+                ready_tasks.push(handle);
+            }   
+        }
+    }
+    if (final_mask) {
+        ASSERT_FN(remove_wait(fd, final_mask));
+    }
     return 0;
 }
 
 inline int fd_sched_t::handle_events(int num_evs) {
     for (int i = 0; i < num_evs; i++) {
-        auto handle = handle_t::from_address(ret_evs[i].data.ptr);
-        if (handle) {
-            handle.promise().call_res = 0;
-            ready_tasks.push(handle);
+        if (!HAS(waiting_tasks, ret_evs[i].data.fd)) {
+            DBG("Something is vey rowng!");
+            return -1;
+        }
+        auto &fd_data = waiting_tasks[ret_evs[i].data.fd];
+        for (auto &w : fd_data.waiters) {
+            if (w.mask & ret_evs[i].events) {
+                auto handle = handle_t::from_address(w.ptr);
+                if (handle) {
+                    handle.promise().call_res = 0;
+                    ready_tasks.push(handle);
+                }
+            }
         }
     }
     return 0;
@@ -947,8 +1043,9 @@ inline int fd_awaiter_t::await_resume() {
 }
 
 inline fd_awaiter_t::~fd_awaiter_t() {
-    if (caller_handle.promise().call_res != CO_MOD_ERR_TIMEO)
-        pool->fd_sched.remove_wait(fd);
+    int res = caller_handle.promise().call_res;
+    if (res != CO_MOD_ERR_TIMEO && res != CO_WAKEUP_ERR)
+        pool->fd_sched.remove_wait(fd, wait_cond);
 }
 
 /* sched_awaiter_t ------------------------------------------------------------------------------ */
@@ -1019,7 +1116,7 @@ inline int sleep_awaiter_t::await_resume() {
     take controll of this coroutine and we know that 'sched' and 'handle' are set, as such
     we can request the return value for the fd we just queried */
 
-    pool->fd_sched.remove_wait(timer_fd);
+    pool->fd_sched.remove_wait(timer_fd, EPOLLIN);
     if (pool->timer_fd_pool.size() >= CO_MAX_TIMER_POOL_SIZE) {
         close(timer_fd);
     }
@@ -1251,12 +1348,22 @@ inline task_t force_stop(int ret) {
     co_return 0;
 }
 
+#define CO_INTERNAL_AWAIT(awaiter) \
+{ \
+    int ret = co_await awaiter; \
+    if (ret == CO_WAKEUP_ERR) { \
+        co_return CO_WAKEUP_ERR; \
+    }\
+    if (ret < 0) \
+        co_return ret; \
+}
+
 inline task_t accept(int fd, sockaddr *sa, socklen_t *len) {
     fd_awaiter_t awaiter {
         .wait_cond = EPOLLIN,
         .fd = fd,
     };
-    ASSERT_COFN(co_await awaiter);
+    CO_INTERNAL_AWAIT(awaiter);
     co_return ::accept(fd, sa, len);
 }
 
@@ -1265,7 +1372,7 @@ inline task_t read(int fd, void *buff, size_t len) {
         .wait_cond = EPOLLIN,
         .fd = fd,
     };
-    ASSERT_COFN(co_await awaiter);
+    CO_INTERNAL_AWAIT(awaiter);
     co_return ::read(fd, buff, len);
 }
 
@@ -1274,7 +1381,7 @@ inline task_t write(int fd, const void *buff, size_t len) {
         .wait_cond = EPOLLOUT,
         .fd = fd,
     };
-    ASSERT_COFN(co_await awaiter);
+    CO_INTERNAL_AWAIT(awaiter);
     co_return ::write(fd, buff, len);
 }
 
@@ -1287,7 +1394,7 @@ inline task_t read_sz(int fd, void *buff, size_t len) {
     while (true) {
         if (!len)
             break ;
-        ASSERT_COFN(co_await awaiter);
+        CO_INTERNAL_AWAIT(awaiter);
         int ret = ::read(fd, buff, len);
         if (ret == 0) {
             DBG("Read failed, closed peer");
@@ -1314,7 +1421,7 @@ inline task_t write_sz(int fd, const void *buff, size_t len) {
     while (true) {
         if (!len)
             break ;
-        ASSERT_COFN(co_await awaiter);
+        CO_INTERNAL_AWAIT(awaiter);
         int ret = ::write(fd, buff, len);
         if (ret < 0) {
             DBGE("Failed write");
@@ -1326,6 +1433,27 @@ inline task_t write_sz(int fd, const void *buff, size_t len) {
         }
     }
     co_return original_len;
+}
+
+inline task_t stopfd(int fd) {
+    struct stopfd_awaiter_t {
+        bool await_ready() { return false; }
+        bool await_suspend(handle_t curr) {
+            res = 0;
+            if (curr.promise().pool->fd_sched.wakeup_wait(fd) < 0) {
+                DBG("Couldn't awake fd");
+                res = -1;
+            }
+            return false;
+        }
+        int await_resume() {
+            return res;
+        }
+
+        int fd;
+        int res;
+    };
+    co_return co_await stopfd_awaiter_t{.fd = fd, .res = 0};
 }
 
 inline task_t sleep_us(uint64_t timeo_us) {
