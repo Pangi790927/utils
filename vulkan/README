@@ -1,0 +1,5 @@
+depends on:
+	vulkan, glfw, glslang, glm
+
+to install glslang:
+https://github.com/KhronosGroup/glslang#1-install-depot_tools

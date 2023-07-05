@@ -1,5 +1,8 @@
-INCLCUDES := -I../ -I../ap -I../generic -I.
-LIBS      := -lpthread -ldl -lglfw -lcurl
+INCLCUDES := -I../ -I../ap -I../generic -I../vulkan -I.
+LIBS      := -lpthread -ldl -lglfw -lcurl -lvulkan
+LIBS      += -lSPIRV -lSPIRV-Tools -lSPIRV-Tools-opt -lglslang -lOGLCompiler -lOSDependent 
+LIBS      += -lSPVRemapper -lpthread -lHLSL
+LIBS      += -lpthread
 
 CXX       := g++-11
 

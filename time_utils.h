@@ -184,10 +184,10 @@ auto operator <=> (const tval_t<T>& a, const tval_t<U>& b) {
 }
 
 
-tval_t<TVAL_NS> operator "" _ns (unsigned long long int a) { return tval_t<TVAL_NS>(a); }
-tval_t<TVAL_US> operator "" _us (unsigned long long int a) { return a * 1000_ns; }
-tval_t<TVAL_MS> operator "" _ms (unsigned long long int a) { return a * 1000_us; }
-tval_t<TVAL_S > operator "" _s  (unsigned long long int a) { return a * 1000_ms; }
+inline tval_t<TVAL_NS> operator "" _ns (unsigned long long int a) { return tval_t<TVAL_NS>(a); }
+inline tval_t<TVAL_US> operator "" _us (unsigned long long int a) { return a * 1000_ns; }
+inline tval_t<TVAL_MS> operator "" _ms (unsigned long long int a) { return a * 1000_us; }
+inline tval_t<TVAL_S > operator "" _s  (unsigned long long int a) { return a * 1000_ms; }
 
 using sec_t = tval_t<TVAL_S>;
 using ms_t = tval_t<TVAL_MS>;
