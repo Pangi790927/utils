@@ -7,29 +7,27 @@ int main(int argc, char const *argv[])
 {
     DBG_SCOPE();
 
+    const std::vector<vku_vertex2d_t> vertices = {
+        {{0.0f, -0.5f}, {1.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
+        {{0.5f,  0.5f}, {0.0f, 1.0f, 1.0f}, {0.0f, 0.0f}},
+        {{-0.5f, 0.5f}, {1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}}
+    };
+
     vku_opts_t opts;
     auto inst = new vku_instance_t(opts);
 
     auto vert = vku_spirv_compile(inst, VKU_SPIRV_VERTEX, R"___(
         #version 450
 
-        layout(location = 0) out vec3 fragColor;
+        layout(location = 0) in vec2 in_pos;
+        layout(location = 1) in vec3 in_color;
+        layout(location = 2) in vec3 in_tex;
 
-        vec2 positions[3] = vec2[](
-            vec2(0.0, -0.5),
-            vec2(0.5, 0.5),
-            vec2(-0.5, 0.5)
-        );
-
-        vec3 colors[3] = vec3[](
-            vec3(1.0, 0.0, 0.0),
-            vec3(0.0, 1.0, 0.0),
-            vec3(0.0, 0.0, 1.0)
-        );
+        layout(location = 0) out vec3 out_color;
 
         void main() {
-            gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
-            fragColor = colors[gl_VertexIndex];
+            gl_Position = vec4(in_pos, 0.0, 1.0);
+            out_color = in_color;
         }
 
     )___");
@@ -37,19 +35,19 @@ int main(int argc, char const *argv[])
     auto frag = vku_spirv_compile(inst, VKU_SPIRV_FRAGMENT, R"___(
         #version 450
 
-        layout(location = 0) in vec3 fragColor;
-        layout(location = 0) out vec4 outColor;
+        layout(location = 0) in vec3 in_color;
+        layout(location = 0) out vec4 out_color;
 
         void main() {
-            outColor = vec4(fragColor, 1.0);
+            out_color = vec4(in_color, 1.0);
         }
     )___");
 
     auto surf =     new vku_surface_t(inst);
     auto dev =      new vku_device_t(surf);
-    auto swc =      new vku_swapchain_t(dev);
     auto sh_vert =  new vku_shader_t(dev, vert);
     auto sh_frag =  new vku_shader_t(dev, frag);
+    auto swc =      new vku_swapchain_t(dev);
     auto rp =       new vku_renderpass_t(swc);
     auto pl =       new vku_pipeline_t(
         opts,
@@ -64,7 +62,28 @@ int main(int argc, char const *argv[])
     auto draw_sem = new vku_sem_t(dev);
     auto fence =    new vku_fence_t(dev);
 
-    std::map<uint32_t, vku_cmdbuff_t *> cbuffs;
+    auto cbuff =    new vku_cmdbuff_t(cp);
+
+    size_t verts_sz = vertices.size() * sizeof(vertices[0]);
+    auto staging_vbuff = new vku_buffer_t(
+        dev,
+        verts_sz,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+    memcpy(staging_vbuff->map_data(0, verts_sz), vertices.data(), verts_sz);
+
+    auto vbuff = new vku_buffer_t(
+        dev,
+        verts_sz,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    );
+    vku_copy_buff(cp, staging_vbuff, vbuff, verts_sz);
+
+    /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
     /* TODO: the program ever only draws on one image and waits on the fence, we need to use
     at least two images to speed up the draw process */
@@ -80,21 +99,38 @@ int main(int argc, char const *argv[])
         uint32_t img_idx;
         vku_aquire_next_img(swc, img_sem, &img_idx);
 
-        if (!HAS(cbuffs, img_idx))
-            cbuffs.insert({img_idx, new vku_cmdbuff_t(cp)});
-
-        cbuffs[img_idx]->begin();
-        cbuffs[img_idx]->begin_rpass(fbs, img_idx);
-        cbuffs[img_idx]->draw(pl);
-        cbuffs[img_idx]->end_rpass();
-        cbuffs[img_idx]->end();
+        cbuff->begin(0);
+        cbuff->begin_rpass(fbs, img_idx);
+        cbuff->bind_vert_buffs(0, {{vbuff, 0}});
+        cbuff->draw(pl);
+        cbuff->end_rpass();
+        cbuff->end();
 
         vku_submit_cmdbuff({{img_sem, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
-                cbuffs[img_idx], fence, {draw_sem});
+                cbuff, fence, {draw_sem});
         vku_present(swc, {draw_sem}, img_idx);
 
         vku_wait_fences({fence});
         vku_reset_fences({fence});
+        
+        // catch (vku_err_t &e) {
+        //     if (e.vk_err == VK_ERROR_OUT_OF_DATE_KHR) {
+        //         vk_device_wait_idle(dev->vk_dev);
+
+        //         delete swc;
+        //         swc = new vku_swapchain_t(dev);
+        //         rp = new vku_renderpass_t(swc);
+        //         pl = new vku_pipeline_t(
+        //             opts,
+        //             rp,
+        //             {sh_vert, sh_frag},
+        //             vku_vertex2d_t::get_input_desc()
+        //         );
+        //         fbs = new vku_framebuffs_t(rp);
+        //     }
+        //     else
+        //         throw e;
+        // }
     }
 
     delete inst;

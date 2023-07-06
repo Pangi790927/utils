@@ -21,7 +21,7 @@ do {                                                                            
     vk_result_t vk_err;                                                                            \
     if ((vk_err = (fn_call)) != VK_SUCCESS) {                                                      \
         DBG("Failed vk assert: [%s: %d]", vk_err_str(vk_err), vk_err);                             \
-        throw vku_err_t();                                                                          \
+        throw vku_err_t(vk_err);                                                                   \
     }                                                                                              \
 } while (false);
 
@@ -34,7 +34,15 @@ enum vku_shader_stage_t {
     VKU_SPIRV_TESS_EVAL,
 };
 
-struct vku_err_t : public std::exception { const char *what() const noexcept override; };
+struct vku_buffer_t;
+
+struct vku_err_t : public std::exception {
+    vk_result_t vk_err;
+    std::string err_str;
+
+    vku_err_t(vk_result_t vk_err);
+    const char *what() const noexcept override;
+};
 
 struct vku_opts_t {
     std::vector<std::string> exts = { "VK_EXT_debug_utils" };
@@ -182,8 +190,10 @@ struct vku_cmdbuff_t : public vku_object_t {
     vku_cmdbuff_t(vku_cmdpool_t *cp);
     ~vku_cmdbuff_t();
 
-    void begin();
+    void begin(vk_command_buffer_usage_flags_t flags);
     void begin_rpass(vku_framebuffs_t *fbs, uint32_t img_idx);
+    void bind_vert_buffs(uint32_t first_bind,
+            std::vector<std::pair<vku_buffer_t *, vk_device_size_t>> buffs);
     void draw(vku_pipeline_t *pl);
     void end_rpass();
     void end();
@@ -206,14 +216,22 @@ struct vku_fence_t : public vku_object_t {
     ~vku_fence_t();
 };
 
-struct vku_mem_t : public vku_object_t {
-    // vku_device_t *dev;
-    // vk_memory_t vk_mem;
-};
-
 struct vku_buffer_t : public vku_object_t {
-    // vku_device_t *dev;
-    // vk_buffer_t vk_buff;
+    vku_device_t *dev;
+    vk_buffer_t vk_buff;
+    vk_device_memory_t vk_mem;
+    void *map_ptr = nullptr;
+
+    vku_buffer_t(vku_device_t *dev,
+            size_t size,
+            vk_buffer_usage_flags_t usage,
+            vk_sharing_mode_t sh_mode,
+            vk_memory_property_flags_t mem_flags);
+
+    ~vku_buffer_t();
+
+    void *map_data(vk_device_size_t offset, vk_device_size_t size);
+    void unmap_data();
 };
 
 struct vku_image_t : public vku_object_t {
@@ -242,6 +260,9 @@ inline void vku_present(
         vku_swapchain_t *swc,
         std::vector<vku_sem_t *> wait_sems,
         uint32_t img_idx);
+
+inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *src, vku_buffer_t *dst,
+        vk_device_size_t sz);
 
 /* Internal : 
 ================================================================================================= */
@@ -290,12 +311,18 @@ inline void vku_spirv_init();
 inline vku_spirv_t vku_spirv_compile(vku_instance_t *inst, vku_shader_stage_t vk_stage,
         const char *code);
 
+inline uint32_t vku_find_memory_type(vku_device_t *dev,
+        uint32_t type_filter, vk_memory_property_flags_t properties);
 
 /* IMPLEMENTATION:
 ================================================================================================= */
 
+inline vku_err_t::vku_err_t(vk_result_t vk_err) : vk_err(vk_err) {
+    err_str = sformat("VULKAN_UTILS_ERR: %s[%d]", vk_err_str(vk_err), vk_err);
+}
+
 inline const char *vku_err_t::what() const noexcept {
-    return "VK_ERROR";
+    return err_str.c_str();
 }
 
 inline vku_vertex_input_desc_t vku_vertex_p2c3t2_t::get_input_desc() {
@@ -334,7 +361,7 @@ inline vku_object_t::vku_object_t() {
         window = _window;
     }
     else
-        throw vku_err_t(); 
+        throw vku_err_t(VK_ERROR_UNKNOWN); 
 }
 
 inline vku_object_t::vku_object_t(const vku_opts_t &opts) {
@@ -346,7 +373,7 @@ inline vku_object_t::vku_object_t(const vku_opts_t &opts) {
     vku_spirv_init();
     if (glfw_init() != GLFW_TRUE) {
         DBG("Failed to init glfw: %s", vku_glfw_err().c_str());
-        throw vku_err_t();
+        throw vku_err_t(VK_ERROR_UNKNOWN);
     }
     glfw_window_hint(GLFW_CLIENT_API, GLFW_NO_API);
     err_scope(glfw_terminate);
@@ -356,7 +383,7 @@ inline vku_object_t::vku_object_t(const vku_opts_t &opts) {
             NULL, NULL);
     if (!_window) {
         DBG("Failed to create a glfw window: %s", vku_glfw_err().c_str());
-        throw vku_err_t();
+        throw vku_err_t(VK_ERROR_UNKNOWN);
     }
     g_ref++;
     window = _window;
@@ -365,10 +392,11 @@ inline vku_object_t::vku_object_t(const vku_opts_t &opts) {
 
 inline vku_object_t::~vku_object_t() {
     g_ref--;
-    if (!g_ref && window)
+    if (!g_ref && window) {
         glfw_destroy_window(window);
-    glfw_terminate(); /* what this? */
-    vku_spirv_uninit();
+        glfw_terminate(); /* what this? */
+        vku_spirv_uninit();
+    }
 }
 
 inline void vku_object_t::add_child(vku_object_t *child) {
@@ -405,7 +433,7 @@ inline vku_instance_t::vku_instance_t(const vku_opts_t &opts) : vku_object_t(opt
 
     if (!glfw_exts) {
         DBG("Failed to get required extensions for glfw: %s", vku_glfw_err().c_str());
-        throw vku_err_t();
+        throw vku_err_t(VK_ERROR_UNKNOWN);
     }
     std::vector<const char*> exts(glfw_exts, glfw_exts + glfw_ext_count);
     for (auto &e : opts.exts)
@@ -427,7 +455,7 @@ inline vku_instance_t::vku_instance_t(const vku_opts_t &opts) : vku_object_t(opt
                 found = true;
         if (!found) {
             DBG("Required extension %s is not supported", req_e);
-            throw vku_err_t();
+            throw vku_err_t(VK_ERROR_UNKNOWN);
         }
     }
 
@@ -452,7 +480,7 @@ inline vku_instance_t::vku_instance_t(const vku_opts_t &opts) : vku_object_t(opt
                 found = true;
         if (!found) {
             DBG("Required extension %s is not supported", req_l);
-            throw vku_err_t();
+            throw vku_err_t(VK_ERROR_UNKNOWN);
         }
     }
 
@@ -510,7 +538,7 @@ inline vku_instance_t::~vku_instance_t() {
 inline vku_surface_t::vku_surface_t(vku_instance_t *inst) : inst(inst) {
     if (glfwCreateWindowSurface(inst->vk_instance, window, NULL, &vk_surface) != VK_SUCCESS) {
         DBG("Failed to get vk_surface: %s", vku_glfw_err().c_str());
-        throw vku_err_t();
+        throw vku_err_t(VK_ERROR_UNKNOWN);
     }
     inst->add_child(this);
 }
@@ -526,7 +554,7 @@ inline vku_device_t::vku_device_t(vku_surface_t *surf) : surf(surf) {
 
     if (dev_cnt == 0) {
         DBG("Failed to find a GPU with Vulkan support!")
-        throw vku_err_t();
+        throw vku_err_t(VK_ERROR_UNKNOWN);
     }
 
     std::vector<vk_physical_device_t> devices(dev_cnt);
@@ -546,7 +574,7 @@ inline vku_device_t::vku_device_t(vku_surface_t *surf) : surf(surf) {
     }
     if (max_score < 0) {
         DBG("Failed to get a suitable physical device");
-        throw vku_err_t();
+        throw vku_err_t(VK_ERROR_UNKNOWN);
     }
 
     que_fams = vku_find_queue_families(vk_phy_dev, surf->vk_surface);
@@ -702,7 +730,7 @@ inline vku_shader_t::vku_shader_t(vku_device_t *dev, const char *path, vku_shade
     std::vector<char> buffer(size);
     if (!file.read(buffer.data(), size)) {
         DBG("Failed to read shader data");
-        throw vku_err_t();
+        throw vku_err_t(VK_ERROR_UNKNOWN);
     }
     vk_shader_module_create_info_t shader_info {
         .code_size = buffer.size(),
@@ -994,9 +1022,9 @@ inline vku_cmdbuff_t::~vku_cmdbuff_t() {
     cp->rm_child(this);
 }
 
-inline void vku_cmdbuff_t::begin() {
+inline void vku_cmdbuff_t::begin(vk_command_buffer_usage_flags_t flags) {
     vk_command_buffer_begin_info_t begin_info {
-        .flags = 0,
+        .flags = flags,
         .p_inheritance_info = NULL,
     };
     VK_ASSERT(vk_begin_command_buffer(vk_buff, &begin_info));
@@ -1017,6 +1045,20 @@ inline void vku_cmdbuff_t::begin_rpass(vku_framebuffs_t *fbs, uint32_t img_idx) 
     };
 
     vk_cmd_begin_render_pass(vk_buff, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
+}
+
+inline void vku_cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
+        std::vector<std::pair<vku_buffer_t *, vk_device_size_t>> buffs)
+{
+    std::vector<vk_buffer_t> vk_buffs;
+    std::vector<vk_device_size_t> vk_offsets;
+    for (auto [b, off] : buffs) {
+        vk_buffs.push_back(b->vk_buff);
+        vk_offsets.push_back(off);
+    }
+
+    vk_cmd_bind_vertex_buffers(vk_buff, first_bind, vk_buffs.size(), vk_buffs.data(),
+            vk_offsets.data());
 }
 
 inline void vku_cmdbuff_t::draw(vku_pipeline_t *pl) {
@@ -1078,12 +1120,66 @@ inline vku_fence_t::~vku_fence_t() {
     vk_destroy_fence(dev->vk_dev, vk_fence, NULL);
 }
 
+inline vku_buffer_t::vku_buffer_t(vku_device_t *dev,
+        size_t size, vk_buffer_usage_flags_t usage, vk_sharing_mode_t sh_mode,
+        vk_memory_property_flags_t mem_flags)
+ : dev(dev)
+ {
+    vk_buffer_create_info_t buff_info{
+        .size = size,
+        .usage = usage,
+        .sharing_mode = sh_mode
+    };
+
+    VK_ASSERT(vk_create_buffer(dev->vk_dev, &buff_info, nullptr, &vk_buff));
+
+    vk_memory_requirements_t mem_req;
+    vk_get_buffer_memory_requirements(dev->vk_dev, vk_buff, &mem_req);
+
+    vk_memory_allocate_info_t alloc_info{
+        .allocation_size = mem_req.size,
+        .memory_type_index = vku_find_memory_type(dev, mem_req.memory_type_bits, mem_flags)
+    };
+
+    VK_ASSERT(vk_allocate_memory(dev->vk_dev, &alloc_info, nullptr, &vk_mem));
+    VK_ASSERT(vk_bind_buffer_memory(dev->vk_dev, vk_buff, vk_mem, 0));
+
+    dev->add_child(this);
+}
+
+inline void *vku_buffer_t::map_data(vk_device_size_t offset, vk_device_size_t size) {
+    if (map_ptr) {
+        DBG("Memory is already mapped!");
+        throw vku_err_t(VK_ERROR_UNKNOWN);
+    }
+    VK_ASSERT(vkMapMemory(dev->vk_dev, vk_mem, offset, size, 0, &map_ptr));
+    return map_ptr;
+}
+
+inline void vku_buffer_t::unmap_data() {
+    if (!map_ptr) {
+        DBG("Memory is not mapped, can't unmap");
+        throw vku_err_t(VK_ERROR_UNKNOWN);
+    }
+    vkUnmapMemory(dev->vk_dev, vk_mem);
+    map_ptr = nullptr;
+}
+
+inline vku_buffer_t::~vku_buffer_t() {
+    cleanup();
+    dev->rm_child(this);
+    if (map_ptr)
+        unmap_data();
+    vk_destroy_buffer(dev->vk_dev, vk_buff, nullptr);
+    vk_free_memory(dev->vk_dev, vk_mem, nullptr);
+}
+
 inline void vku_wait_fences(std::vector<vku_fence_t *> fences) {
     std::vector<vk_fence_t> vk_fences;
 
     if (!fences.size()) {
         DBG("No fences to wait for");
-        throw vku_err_t();
+        throw vku_err_t(VK_ERROR_UNKNOWN);
     }
     vk_fences.reserve(fences.size());
     for (auto f : fences)
@@ -1098,7 +1194,7 @@ inline void vku_reset_fences(std::vector<vku_fence_t *> fences) {
 
     if (!fences.size()) {
         DBG("No fences to wait for");
-        throw vku_err_t();
+        throw vku_err_t(VK_ERROR_UNKNOWN);
     }
     vk_fences.reserve(fences.size());
     for (auto f : fences)
@@ -1130,15 +1226,16 @@ inline void vku_submit_cmdbuff(
     }
     vk_submit_info_t submit_info {
         .wait_semaphore_count = (uint32_t)vk_wait_sems.size(),
-        .p_wait_semaphores = vk_wait_sems.data(),
-        .p_wait_dst_stage_mask = vk_wait_stages.data(),
+        .p_wait_semaphores = vk_wait_sems.size() == 0 ? nullptr : vk_wait_sems.data(),
+        .p_wait_dst_stage_mask = vk_wait_sems.size() == 0 ? nullptr : vk_wait_stages.data(),
         .command_buffer_count = 1,
         .p_command_buffers = &cbuff->vk_buff,
         .signal_semaphore_count = (uint32_t)vk_sig_sems.size(),
-        .p_signal_semaphores = vk_sig_sems.data(),
+        .p_signal_semaphores = vk_sig_sems.size() == 0 ? nullptr : vk_sig_sems.data(),
     };
 
-    VK_ASSERT(vk_queue_submit(cbuff->cp->dev->vk_graphics_que, 1, &submit_info, fence->vk_fence));
+    VK_ASSERT(vk_queue_submit(cbuff->cp->dev->vk_graphics_que, 1, &submit_info,
+            fence == nullptr ? nullptr : fence->vk_fence));
 }
 
 inline void vku_present(
@@ -1162,6 +1259,26 @@ inline void vku_present(
     };
 
     VK_ASSERT(vk_queue_present_khr(swc->dev->vk_present_que, &pres_info));
+}
+
+inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *src, vku_buffer_t *dst,
+        vk_device_size_t sz)
+{
+    auto cbuff = std::make_unique<vku_cmdbuff_t>(cp);
+    auto fence = std::make_unique<vku_fence_t>(cp->dev);
+
+    cbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    vk_buffer_copy_t copy_region{
+        .src_offset = 0,
+        .dst_offset = 0,
+        .size = sz
+    };
+    vk_cmd_copy_buffer(cbuff->vk_buff, src->vk_buff, dst->vk_buff, 1, &copy_region);
+    cbuff->end();
+
+
+    vku_submit_cmdbuff({}, cbuff.get(), fence.get(), {});
+    vku_wait_fences({fence.get()});
 }
 
 inline std::string vku_glfw_err() {
@@ -1216,23 +1333,24 @@ static VKAPI_ATTR vk_bool32_t VKAPI_CALL vku_dbg_cbk(
 inline vku_swapchain_details_t vku_get_swapchain_details(vk_physical_device_t dev,
         vk_surface_khr_t surf)
 {
-    vku_swapchain_details_t ret;
+    vku_swapchain_details_t ret = {};
     uint32_t format_cnt = 0;
     uint32_t present_modes_cnt = 0;
 
-    vk_get_physical_device_surface_capabilities_khr(dev, surf, &ret.capab);
-    vk_get_physical_device_surface_formats_khr(dev, surf, &format_cnt, NULL);
+    VK_ASSERT(vk_get_physical_device_surface_capabilities_khr(dev, surf, &ret.capab));
+    VK_ASSERT(vk_get_physical_device_surface_formats_khr(dev, surf, &format_cnt, NULL));
 
     if (format_cnt) {
         ret.formats.resize(format_cnt);
-        vk_get_physical_device_surface_formats_khr(dev, surf, &format_cnt, ret.formats.data());
+        VK_ASSERT(vk_get_physical_device_surface_formats_khr(
+                dev, surf, &format_cnt, ret.formats.data()));
     }
 
-    vk_get_physical_device_surface_present_modes_khr(dev, surf, &present_modes_cnt, NULL);
+    VK_ASSERT(vk_get_physical_device_surface_present_modes_khr(dev, surf, &present_modes_cnt, NULL));
     if (present_modes_cnt) {
         ret.present_modes.resize(present_modes_cnt);
-        vk_get_physical_device_surface_present_modes_khr(dev, surf, &present_modes_cnt,
-                ret.present_modes.data());
+        VK_ASSERT(vk_get_physical_device_surface_present_modes_khr(dev, surf, &present_modes_cnt,
+                ret.present_modes.data()));
     }
 
     return ret;
@@ -1466,7 +1584,7 @@ inline vku_spirv_t vku_spirv_compile(vku_instance_t *inst, vku_shader_stage_t vk
         case VKU_SPIRV_COMPUTE:   stage = EShLangCompute;        break;
         default:
             DBG("Unknown shader stage type: %d", (uint32_t)vku_stage);
-            throw vku_err_t{};
+            throw vku_err_t(VK_ERROR_UNKNOWN);
     }
     glslang::TShader shader(stage);
     glslang::TProgram program;
@@ -1479,20 +1597,38 @@ inline vku_spirv_t vku_spirv_compile(vku_instance_t *inst, vku_shader_stage_t vk
     if (!shader.parse(&vku_spirv_resources, 100, false, messages)) {
         DBG("Parse Failed(Log): [%s]", shader.getInfoLog());
         DBG("Parse Failed(Dbg): [%s]", shader.getInfoDebugLog());
-        throw vku_err_t{};
+        throw vku_err_t(VK_ERROR_UNKNOWN);
     }
 
     program.addShader(&shader);
     if (!program.link(messages)) {
         DBG("Link Failed(Log): [%s]", shader.getInfoLog());
         DBG("Link Failed(Dbg): [%s]", shader.getInfoDebugLog());
-        throw vku_err_t{};
+        throw vku_err_t(VK_ERROR_UNKNOWN);
     }
 
     vku_spirv_t ret;
     glslang::GlslangToSpv(*program.getIntermediate(stage), ret.content);
     ret.type = vku_stage;
     return ret;
+}
+
+inline uint32_t vku_find_memory_type(vku_device_t *dev,
+        uint32_t type_filter, vk_memory_property_flags_t properties)
+{
+    vk_physical_device_memory_properties_t mem_props;
+    vk_get_physical_device_memory_properties(dev->vk_phy_dev, &mem_props);
+
+    for (uint32_t i = 0; i < mem_props.memory_type_count; i++) {
+        if (type_filter & (1 << i) && 
+                (mem_props.memory_types[i].property_flags & properties) == properties)
+        {
+            return i;
+        }
+    }
+
+    DBG("Couldn't find suitable memory type");
+    throw vku_err_t(VK_ERROR_UNKNOWN);
 }
 
 inline const char *vk_err_str(vk_result_t res) {
