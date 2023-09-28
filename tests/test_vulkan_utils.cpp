@@ -96,41 +96,43 @@ int main(int argc, char const *argv[])
             break;
         glfwPollEvents();
 
-        uint32_t img_idx;
-        vku_aquire_next_img(swc, img_sem, &img_idx);
+        try {
+            uint32_t img_idx;
+            vku_aquire_next_img(swc, img_sem, &img_idx);
 
-        cbuff->begin(0);
-        cbuff->begin_rpass(fbs, img_idx);
-        cbuff->bind_vert_buffs(0, {{vbuff, 0}});
-        cbuff->draw(pl);
-        cbuff->end_rpass();
-        cbuff->end();
+            cbuff->begin(0);
+            cbuff->begin_rpass(fbs, img_idx);
+            cbuff->bind_vert_buffs(0, {{vbuff, 0}});
+            cbuff->draw(pl);
+            cbuff->end_rpass();
+            cbuff->end();
 
-        vku_submit_cmdbuff({{img_sem, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
-                cbuff, fence, {draw_sem});
-        vku_present(swc, {draw_sem}, img_idx);
+            vku_submit_cmdbuff({{img_sem, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
+                    cbuff, fence, {draw_sem});
+            vku_present(swc, {draw_sem}, img_idx);
 
-        vku_wait_fences({fence});
-        vku_reset_fences({fence});
-        
-        // catch (vku_err_t &e) {
-        //     if (e.vk_err == VK_ERROR_OUT_OF_DATE_KHR) {
-        //         vk_device_wait_idle(dev->vk_dev);
+            vku_wait_fences({fence});
+            vku_reset_fences({fence});
+        }
+        catch (vku_err_t &e) {
+            /* TODO: fix this */
+            if (e.vk_err == VK_SUBOPTIMAL_KHR) {
+                vk_device_wait_idle(dev->vk_dev);
 
-        //         delete swc;
-        //         swc = new vku_swapchain_t(dev);
-        //         rp = new vku_renderpass_t(swc);
-        //         pl = new vku_pipeline_t(
-        //             opts,
-        //             rp,
-        //             {sh_vert, sh_frag},
-        //             vku_vertex2d_t::get_input_desc()
-        //         );
-        //         fbs = new vku_framebuffs_t(rp);
-        //     }
-        //     else
-        //         throw e;
-        // }
+                delete swc;
+                swc = new vku_swapchain_t(dev);
+                rp = new vku_renderpass_t(swc);
+                pl = new vku_pipeline_t(
+                    opts,
+                    rp,
+                    {sh_vert, sh_frag},
+                    vku_vertex2d_t::get_input_desc()
+                );
+                fbs = new vku_framebuffs_t(rp);
+            }
+            else
+                throw e;
+        }
     }
 
     delete inst;

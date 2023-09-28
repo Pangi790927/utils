@@ -2,6 +2,7 @@
 #define SYS_UTILS_H
 
 #include <vector>
+#include <fstream>
 #include <fcntl.h>
 #include <fstream>
 #include <sys/select.h>
@@ -9,6 +10,7 @@
 #ifndef NO_SD_BUS
 # include <systemd/sd-bus.h>
 #endif
+#include <arpa/inet.h>
 
 #include "debug.h"
 #include "misc_utils.h"
@@ -272,15 +274,24 @@ inline int systemctl_create_service(const char *service_name, const char *target
 #endif
 
 inline sockaddr_in create_sa_ipv4(uint32_t addr, uint16_t port) {
-    sockaddr_in sa_addr = {};
+    struct sockaddr_in sa_addr = {};
     sa_addr.sin_family = AF_INET;
-    sa_addr.sin_addr.s_addr = INADDR_ANY;
+    sa_addr.sin_addr.s_addr = addr;
     sa_addr.sin_port = htons(port);
     return sa_addr;
 }
 
 inline sockaddr_in create_sa_ipv4(std::string addr, uint16_t port) {
     return create_sa_ipv4(inet_addr(addr.c_str()), port);
+}
+
+// uggly hack, pls fix
+inline std::string ip2str(uint32_t ip) {
+    return sformat("%u.%u.%u.%u", ip & 0xff, (ip >> 8) & 0xff, (ip >> 16) & 0xff, (ip >> 24) & 0xff);
+}
+
+inline std::string sa2str(sockaddr_in &sa) {
+    return sformat("%s:%d", ip2str(sa.sin_addr.s_addr).c_str(), ntohs(sa.sin_port));
 }
 
 inline bool check_file_exists(const std::string& name) {
