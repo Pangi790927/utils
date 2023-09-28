@@ -18,6 +18,16 @@
 
 inline GLFWwindow *imgui_window;
 
+inline void imgui_render(ImVec4 clear_color);
+inline bool imgui_prepare_render();
+inline void imgui_uninit();
+inline int imgui_init();
+inline void imgui_set_style();
+inline void glfw_error_callback(int error, const char* description);
+
+/* IMPLEMENTATION:
+================================================================================================= */
+
 inline void glfw_error_callback(int error, const char* description) {
     DBG("Glfw Error %d: %s", error, description);
 }

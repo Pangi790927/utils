@@ -3,8 +3,12 @@
 
 #include <vector>
 #include <fcntl.h>
+#include <fstream>
 #include <sys/select.h>
-#include <systemd/sd-bus.h>
+
+#ifndef NO_SD_BUS
+# include <systemd/sd-bus.h>
+#endif
 
 #include "debug.h"
 #include "misc_utils.h"
@@ -161,6 +165,7 @@ inline int write_sz(int fd, const void *src, size_t len) {
     }
 }
 
+#ifndef NO_SD_BUS
 template <typename ...Args>
 inline int systemctl_call(const char *method_name, const char *method_layout,
         bool en_output, Args ...args)
@@ -263,6 +268,8 @@ inline int systemctl_create_service(const char *service_name, const char *target
     ASSERT_FN(write(fd, service_desc.c_str(), service_desc.size()));
     return 0;
 }
+
+#endif
 
 inline sockaddr_in create_sa_ipv4(uint32_t addr, uint16_t port) {
     sockaddr_in sa_addr = {};

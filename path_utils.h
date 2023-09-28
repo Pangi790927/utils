@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <dlfcn.h>
 #include <string>
+#include <vector>
+#include <dirent.h>
 
 inline std::string path_get_module_path() {
     Dl_info info;
@@ -40,6 +42,26 @@ inline std::string path_get_relative(std::string filename) {
     if (toupper(filename[0]) == 'C' && filename.size() > 1 && filename[1] == ':')
         return filename;
     return path_get_module_dir() + filename;
+}
+
+inline std::vector<std::string> list_dir(std::string dirname) {
+    DIR* dir;
+    struct dirent* ent;
+    char* endptr;
+    char buf[512];
+
+    if (!(dir = opendir(dirname.c_str()))) {
+        DBGE("can't open %s", dirname.c_str());
+        return {};
+    }
+
+    std::vector<std::string> ret;
+    while((ent = readdir(dir)) != NULL) {
+        ret.push_back(ent->d_name);
+    }
+
+    closedir(dir);
+    return ret;
 }
 
 #endif
