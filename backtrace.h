@@ -32,7 +32,7 @@
 #include <sstream>
 
 // This function produces a stack backtrace with demangled function & method names.
-std::string cpp_backtrace(int skip = 1)
+inline std::string cpp_backtrace(int skip = 1)
 {
     void *callstack[128];
     const int nMaxFrames = sizeof(callstack) / sizeof(callstack[0]);

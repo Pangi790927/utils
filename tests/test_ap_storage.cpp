@@ -1,38 +1,26 @@
-#define AP_EXCEPT_STATIC_CBK
 #include "ap_storage.h"
 #include "ap_vector.h"
+#include "ap_string.h"
 #include "debug.h"
 #include "misc_utils.h"
+#include "sys_utils.h"
 
 #include <sys/wait.h>
 #include <unistd.h>
 #include <map>
 #include <sys/socket.h>
+#include <sys/un.h>
 
 #define SOCK_PATH "./ap_storage_test_comm"
 
-void ap_except_cbk(const char *errmsg, ap_except_info_t *ei) {
+struct test_struct_t {
+    ap_vector_t<int> vec;
+    ap_string_t str;
+};
+
+void ap_storage_except_cbk(void *ctx, const char *errmsg, ap_except_info_t *ei) {
     DBG("[CRITICAL] %s\n%s", errmsg, ei->bt.c_str());
     exit(1);
-}
-
-static std::map<void *, ap_off_t> ptr_off;
-static void *ap_alloc(ap_sz_t sz) {
-    ap_ctx_t *ctx = ap_storage_get_mctx();
-    auto off = ap_malloc_alloc(ctx, sz);
-    if (!off) {
-        DBG("alloc failed");
-        exit(-1);
-    }
-    void *p = ap_malloc_ptr(ctx, off);
-    ptr_off[p] = off;
-    return p;
-}
-
-static void ap_free(void *p) {
-    auto off = ptr_off[p];
-    ap_ctx_t *ctx = ap_storage_get_mctx();
-    ap_malloc_free(ctx, off);
 }
 
 static int run_program(const char *prog_name, const char *param) {
@@ -54,90 +42,7 @@ static int run_program(const char *prog_name, const char *param) {
     return 0;
 }
 
-static int bind_host() {
-    int fd;
-    struct sockaddr_un un_addr = {};
-
-    ASSERT_FN(fd = socket(AF_UNIX, SOCK_STREAM, 0));
-
-    addr.sun_family = AF_UNIX;
-    strncpy(un_addr.sun_path, MY_SOCK_PATH, sizeof(un_addr.sun_path) - 1);
-
-    ASSERT_FN(bind(fd, (struct sockaddr *)&un_addr), sizeof(struct sockaddr_un));
-    ASSERT_FN(listen(fd, 5));
-
-    return fd;
-}
-
-static int host_accept(int host_fd) {
-    int fd;
-    socklen_t sz;
-    struct sockaddr_un un_addr = {};
-
-    sz = sizeof(struct sockaddr_un);
-    ASSERT_FN(fd = accept(host_fd, (struct sockaddr *)&un_addr, &sz));
-    return 0;
-}
-
-static int connect_guest() {
-    int fd;
-    ASSERT_FN(fd = socket(AF_UNIX, SOCK_STREAM, 0));
-    ASSERT_FN(connect(fd, (struct sockaddr *)&un_addr, sizeof(struct sockaddr_un)));
-    return fd;
-}
-
-enum {
-    MSG_TYPE_STOP,
-};
-
-struct msg_hdr_t {
-    int type;
-    int sz;
-};
-
-static Semaphore comm_sem(0);
-
-static int host_comm_worker(bool *alive, int *host_fd, int *guest_fd) {
-    /* This thread will stay here only to act as a storage device for the running tests */
-    /* bind in host, connect in guest - this will be our channel of communication for sudden */
-    char buff[1024*1024];
-
-    unlink(SOCK_PATH);
-    ASSERT_FN(*host_fd = bind_host());
-
-    comm_sem.sig();
-    while (*alive) {
-        ASSERT_FN(*guest_fd = host_accept(*host_fd));
-
-        while (*alive) {
-            bool stopped = false;
-            msg_hdr_t *hdr = (msg_hdr_t *)buff;
-            ASSERT_FN(read_sz(*guest_fd, buff, sizeof(msg_hdr_t)));
-
-            switch(hdr->type) {
-                case MSG_TYPE_STOP:
-                    stopped = true;
-                    break;
-                default:
-                    DBG("Unknown message type");
-                    return -1;
-            }
-            if (stopped) {
-                close(*guest_fd);
-                break;
-            }
-        }
-    }
-    return 0;
-}
-
 static int do_host_stuff(const char *prog_name) {
-    bool alive = true;
-    int host_fd = -1, int guest_fd = -1;
-
-    std::thread comm_th(host_comm_worker, &alive, &host_fd, &guest_fd);
-    comm_sem.wait();
-
     unlink("data/storage");
     unlink("data/storage_0.data");
     unlink("data/storage_1.data");
@@ -151,17 +56,12 @@ static int do_host_stuff(const char *prog_name) {
 
     DBG("######################### base_test:");
     ASSERT_FN(run_program(prog_name, "base_test"));
-    ASSERT_FN(run_program(prog_name, "init_exit"));
+    ASSERT_FN(run_program(prog_name, "read_test"));
     ASSERT_FN(unlink("data/storage"));
     ASSERT_FN(unlink("data/storage_0.data"));
     ASSERT_FN(unlink("data/storage_1.data"));
 
-    /* I know there is a small chance of UB with those closes usually, but tests and don't care */
-    close(host_fd);
-    close(guest_fd);
-    alive = false;
-    if (comm_th.joinable())
-        comm_th.join();
+    DBG("UNINIT");
 
     return 0;
 }
@@ -169,22 +69,76 @@ static int do_host_stuff(const char *prog_name) {
 static int do_guest_stuff(const char *_param) {
     std::string param = _param;
     if (param == "init_exit") {
-        ASSERT_FN(ap_storage_init("data/storage"));
-        ASSERT_FN(ap_storage_submit_changes());
+        DBG("Start INIT_EXIT");
+        ASSERT_FN(ap_storage_init("data/storage", ap_storage_except_cbk, NULL));
+        ASSERT_FN(ap_storage_do_changes(AP_STORAGE_COMMIT_CHANGES));
         ap_storage_uninit();
+        DBG("Done INIT_EXIT");
     }
     else if (param == "base_test") {
-        ASSERT_FN(ap_storage_init("data/storage"));
+        DBG("Start BASE_TEST");
+        ASSERT_FN(ap_storage_init("data/storage", ap_storage_except_cbk, NULL));
+        DBG("Will allocate vector on storage");
 
-        using vec_t = ap_vector_t<int>;
-        vec_t &vec = *(vec_t *)ap_alloc(sizeof(vec_t));
-        vec.init(ap_storage_get_mctx());
+        {
+            /* OBS: Don't use ap_vector_t before/after initing/uniniting the ap_storage, because you
+            will get a strange segfault */
+            ap_vector_t<int> vec;
 
-        for (int i = 0; i < 4096; i++)
-            ASSERT_FN(vec.push_back(0xf1f1f1f1));
+            for (int i = 0; i < 4096; i++) {
+                ASSERT_FN(vec.push_back(0xf1f1f1f1));
+            }
+        }
 
-        ASSERT_FN(ap_storage_submit_changes());
+        ap_off_t off;
+        ASSERT_FN(CHK_BOOL(off = ap_malloc_alloc(ap_static_ctx, sizeof(test_struct_t))));
+        test_struct_t *test_struct = (test_struct_t *)ap_malloc_ptr(ap_static_ctx, off);
+        new (test_struct) test_struct_t;
+        ap_malloc_set_usr(ap_static_ctx, off);
+
+        test_struct->vec.push_back(1);
+        test_struct->vec.push_back(2);
+        test_struct->vec.push_back(4);
+        test_struct->vec.push_back(8);
+        test_struct->vec.push_back(16);
+        test_struct->vec.push_back(32);
+        test_struct->vec.push_back(64);
+        test_struct->vec.push_back(128);
+        test_struct->str = "Ana are mere";
+
+        ASSERT_FN(ap_storage_do_changes(AP_STORAGE_COMMIT_CHANGES));
+        test_struct->vec.push_back(256);
+        test_struct->vec.push_back(512);
+        ASSERT_FN(ap_storage_do_changes(AP_STORAGE_COMMIT_CHANGES)); /* TODO: fix, second commit does nothing */
+        // test_struct->vec.push_back(1023);
+        // test_struct->vec.push_back(2047);
+        // ASSERT_FN(ap_storage_do_changes(AP_STORAGE_REVERT_CHANGES));
+        // test_struct->vec.push_back(1024);
+        // test_struct->vec.push_back(2048);
+        // ASSERT_FN(ap_storage_do_changes(AP_STORAGE_COMMIT_CHANGES));
+        // test_struct->vec.push_back(777);
+        // test_struct->vec.push_back(888);
+
         ap_storage_uninit();
+        DBG("Done BASE_TEST");
+    }
+    else if (param == "read_test") {
+        DBG("Start READ_TEST");
+        ASSERT_FN(ap_storage_init("data/storage", ap_storage_except_cbk, NULL));
+        DBG("Will read storage");
+
+        {
+            ap_off_t off = ap_malloc_get_usr(ap_static_ctx);
+            test_struct_t *test_struct = (test_struct_t *)ap_malloc_ptr(ap_static_ctx, off);
+
+            DBG("str: %s", test_struct->str.c_str());
+            for (auto i : test_struct->vec)
+                DBG("%d", i);
+        }
+
+        ASSERT_FN(ap_storage_do_changes(AP_STORAGE_COMMIT_CHANGES));
+        ap_storage_uninit();
+        DBG("Done READ_TEST");
     }
     return 0;
 }
@@ -207,7 +161,6 @@ int main(int argc, char const *argv[]) {
         3. having more than one page allocated
         4. having sparse pages modified
         5. data integrity should be checked
-        6.* for all cases sudden sigkills should be tried and data integrity checked
 
         Those tests should be also done with the two init modes of vec, map, hmap, string
         a. manual init
@@ -232,7 +185,6 @@ int main(int argc, char const *argv[]) {
     */
 
     /* TODO: add all the needed tests */
-    /* TODO: implement communication channel with guest */
 
     if (argc != 1 && argc != 2) {
         DBG("This program must be manually executed without parameters, "

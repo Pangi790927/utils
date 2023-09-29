@@ -7,13 +7,13 @@
 extern ap_ctx_t *ap_static_ctx;
 #endif
 
-
 struct ap_string_t {
     /* Short string optimizations are a bit of a pain because I would need to implement both the
     sso and the lso or to hack the vector class and put the sso inside it, avoiding it's id_ctx and
     I don't feel like doing any of that */
     ap_vector_t<char> vec;
 
+    friend ap_vector_t<char>;
     using iterator_t = ap_vector_t<char>::iterator_t;
 
 #ifdef AP_ENABLE_AUTOINIT
@@ -44,7 +44,6 @@ private:
 #ifdef AP_ENABLE_AUTOINIT
 public:
 #endif
-
 
     ap_string_t &append(const std::string& s) {
         vec.insert(end(), s.begin(), s.end());

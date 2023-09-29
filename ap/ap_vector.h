@@ -33,6 +33,7 @@ struct ap_vector_cpp_fns_t {
     }
 };
 
+struct ap_string_t;
 /* This vector should be able to stay inside shared memory space */
 template <typename T, typename FNS_T = ap_vector_cpp_fns_t<T>>
 struct ap_vector_t {
@@ -42,6 +43,7 @@ struct ap_vector_t {
     ap_ctx_id_t ctx_id;
 
     using iterator_t = T*;
+    friend ap_string_t;
 
 #ifdef AP_ENABLE_AUTOINIT
     ap_vector_t() {

@@ -1,4 +1,5 @@
 #define AP_EXCEPT_STATIC_CBK
+
 #include "ap_string.h"
 #include "debug.h"
 

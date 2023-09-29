@@ -26,6 +26,8 @@ struct storage_ctrl_t {
     uint32_t data_used;             /* 1 or 0 */
 };
 
+ap_ctx_t *ap_static_ctx = NULL;
+
 static_assert(sizeof(storage_ctrl_t) < CTRL_SZ);
 
 /* TODO: check all the cases, really not sure if everything is ok(in this entire implementation) */
@@ -67,6 +69,9 @@ static std::vector<uint64_t> mod_bmap_data;
 static uint64_t bmap_get_word(uint64_t i)               { return mod_bmap_data[i]; }
 static void     bmap_set_word(uint64_t i, uint64_t w)   { mod_bmap_data[i] = w; }
 static uint64_t bmap_get_size()                         { return mod_bmap_data.size(); }
+
+static ap_storage_cbk_t user_cbk;
+static void             *user_ctx;
 
 static std::string base_name(std::string path) {
     return path.substr(path.find_last_of("/") + 1);
@@ -121,13 +126,24 @@ static void mprot_handl(int sig, siginfo_t *si, void *uc) {
         void *addr0 = (void *)((uint8_t *)storage_ctx.region + page * PAGE_SZ);
         mod_bmap.set(page, true);
         if (mprotect(addr0, PAGE_SZ, PROT_READ | PROT_WRITE) < 0) {
-            DBGE("Failed mprotect, wierd, but will kill the program");
+            DBGE("Failed mprotect(addr: %p)(page: %ld), wierd, but will kill the program",
+                    addr0, page);
             exit(-1);
         }
     }
 }
 
-int ap_storage_submit_changes(bool reverse_changes) {
+void ap_except_cbk(const char *str, ap_except_info_t *exc_inf) {
+    if (user_cbk) {
+        user_cbk(user_ctx, str, exc_inf);
+    }
+    else {
+        throw std::runtime_error("ap_except_cbk: unhandled error in ap_region");
+    }
+}
+
+int ap_storage_do_changes(int action) {
+    bool reverse_changes = (action & AP_STORAGE_REVERT_CHANGES) != 0;
     ASSERT_FN(commit_mem_changes());
     /* now all the data is stored in our current file, so we know the current file is valid and
     we are going to change the backup file */
@@ -185,7 +201,9 @@ int ap_storage_submit_changes(bool reverse_changes) {
     return 0;
 }
 
-int ap_storage_init(const char *ctrl_file) {
+int ap_storage_init(const char *ctrl_file, ap_storage_cbk_t cbk, void *ctx) {
+    user_cbk = cbk;
+    user_ctx = ctx;
     if (PAGE_SZ != sysconf(_SC_PAGESIZE)) {
         DBG("Incorect page size: %ld", sysconf(_SC_PAGESIZE));
         return -1;
@@ -310,12 +328,13 @@ int ap_storage_init(const char *ctrl_file) {
 
     ASSERT_FN(ap_malloc_init(&storage_ctx, storage_sz));
 
+    ap_static_ctx = &storage_ctx;
     err_scope.disable();
     return 0;
 }
 
 void ap_storage_uninit() {
-    ap_storage_submit_changes(true);
+    ap_storage_do_changes(AP_STORAGE_REVERT_CHANGES);
     munmap(storage_ctx.region, MAX_STORAGE_SPACE);
 
     int ignres;
@@ -332,6 +351,8 @@ void ap_storage_uninit() {
     msync(ctrl, CTRL_SZ, MS_SYNC);
     munmap(ctrl, CTRL_SZ);
     close(ctrl_fd);
+
+    ap_static_ctx = NULL;
 }
 
 ap_ctx_t *ap_storage_get_mctx() {
