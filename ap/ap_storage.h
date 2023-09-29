@@ -7,10 +7,10 @@
 #include "ap_except.h"
 
 /* Defines a persistent data storage that is backed up by one or more files.
-	- retains persistance
-	- can save or discard current changes (it commits them to the file only if explicitly told so)
-	- it avoids data corruption by asking the user to commit changes, as such the data is in a known state
-	- it is globaly available for a pogram
+    - retains persistance
+    - can save or discard current changes (it commits them to the file only if explicitly told so)
+    - it avoids data corruption by asking the user to commit changes, as such the data is in a known state
+    - it is globaly available for a pogram
 */
 
 /* If you use this storage, then ap_string, ap_hashmap, ap_map, ap_vector will all use this storage
@@ -23,8 +23,8 @@ extern ap_ctx_t *ap_static_ctx;
 using ap_storage_cbk_t = void (*)(void *usr_ctx, const char *str, ap_except_info_t *exc_inf);
 
 enum {
-	AP_STORAGE_REVERT_CHANGES = 1,
-	AP_STORAGE_COMMIT_CHANGES = 2,
+    AP_STORAGE_REVERT_CHANGES = 1,
+    AP_STORAGE_COMMIT_CHANGES = 2,
 };
 
 /* this commits or discards the data modified since the last commit */
@@ -34,5 +34,15 @@ int ap_storage_init(const char *ctrl_file, ap_storage_cbk_t cbk, void *ctx);
 void ap_storage_uninit();
 
 ap_ctx_t *ap_storage_get_mctx();
+
+template <typename T, typename ...Args>
+std::pair<ap_off_t, T*> ap_storage_construct(Args&& ...args) {
+    ap_off_t off = ap_malloc_alloc(ap_static_ctx, sizeof(T));
+    T *ptr = (T *)ap_malloc_ptr(ap_static_ctx, off);
+    new (ptr) T(std::forward<Args>(args)...);
+    return {off, ptr};
+}
+// example:
+// auto [off, test_struct] = ap_storage_construct<test_struct_t>();
 
 #endif

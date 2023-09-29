@@ -167,7 +167,7 @@ int ap_storage_do_changes(int action) {
     }
 
     void *oth_region = mmap(NULL, backup_sz, PROT_READ | PROT_WRITE, MAP_SHARED, backup_fd, 0);
-    ASSERT_FN(intptr_t(oth_region));
+    ASSERT_FN(CHK_MMAP(oth_region));
     FnScope scope([&oth_region, &backup_sz]{ munmap(oth_region, backup_sz); });
 
     uint64_t page = mod_bmap.next_one(0);
@@ -186,6 +186,7 @@ int ap_storage_do_changes(int action) {
             memcpy(page_addr, oth_paddr, PAGE_SZ);
             ASSERT_FN(msync(page_addr, PAGE_SZ, MS_SYNC));
         }
+        ASSERT_FN(mprotect(page_addr, PAGE_SZ, PROT_READ));
         page = mod_bmap.next_one(page + 1);
     }
 
@@ -201,6 +202,16 @@ int ap_storage_do_changes(int action) {
     return 0;
 }
 
+/* How this works:
+    - a sigaction is set for SIGSEGV, such that on invalid access this handler will be called. Next
+    we use mprotect for the entire storage region such that any write will raise a SIGSEGV. In the
+    mprot_handl we catch this write and we mark that page as dirty, fallowing that we remove the
+    protection because we don't want other writes to the same dirty page to go through the handler.
+    - when function ap_storage_do_changes is called all the pages that are dirty can be written to
+    file or the dirty pages can be taken from backup. In this way only the pages that where changed
+    are modified or reverted and in case a fail occours we allways have the backup. In case the
+    commit operation is succesfull we can use the current file as the backup and mirror the changes
+    in the old backup. */
 int ap_storage_init(const char *ctrl_file, ap_storage_cbk_t cbk, void *ctx) {
     user_cbk = cbk;
     user_ctx = ctx;

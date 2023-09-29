@@ -90,10 +90,7 @@ static int do_guest_stuff(const char *_param) {
             }
         }
 
-        ap_off_t off;
-        ASSERT_FN(CHK_BOOL(off = ap_malloc_alloc(ap_static_ctx, sizeof(test_struct_t))));
-        test_struct_t *test_struct = (test_struct_t *)ap_malloc_ptr(ap_static_ctx, off);
-        new (test_struct) test_struct_t;
+        auto [off, test_struct] = ap_storage_construct<test_struct_t>();
         ap_malloc_set_usr(ap_static_ctx, off);
 
         test_struct->vec.push_back(1);
@@ -110,14 +107,14 @@ static int do_guest_stuff(const char *_param) {
         test_struct->vec.push_back(256);
         test_struct->vec.push_back(512);
         ASSERT_FN(ap_storage_do_changes(AP_STORAGE_COMMIT_CHANGES)); /* TODO: fix, second commit does nothing */
-        // test_struct->vec.push_back(1023);
-        // test_struct->vec.push_back(2047);
-        // ASSERT_FN(ap_storage_do_changes(AP_STORAGE_REVERT_CHANGES));
-        // test_struct->vec.push_back(1024);
-        // test_struct->vec.push_back(2048);
-        // ASSERT_FN(ap_storage_do_changes(AP_STORAGE_COMMIT_CHANGES));
-        // test_struct->vec.push_back(777);
-        // test_struct->vec.push_back(888);
+        test_struct->vec.push_back(1023);
+        test_struct->vec.push_back(2047);
+        ASSERT_FN(ap_storage_do_changes(AP_STORAGE_REVERT_CHANGES));
+        test_struct->vec.push_back(1024);
+        test_struct->vec.push_back(2048);
+        ASSERT_FN(ap_storage_do_changes(AP_STORAGE_COMMIT_CHANGES));
+        test_struct->vec.push_back(777);
+        test_struct->vec.push_back(888);
 
         ap_storage_uninit();
         DBG("Done BASE_TEST");
