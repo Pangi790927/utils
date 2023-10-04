@@ -34,6 +34,13 @@ inline uint64_t get_time_us() {
 			system_clock::now().time_since_epoch()).count();
 }
 
+inline std::string ts2str(uint64_t ts) {
+    time_t t = ts;
+    std::string ret = std::ctime(&t);
+    ret.erase(std::remove(ret.begin(), ret.end(), '\n'), ret.end());
+    return ret;
+}
+
 struct tval_base_t {
     tval_base_t() { time_ns = 0; }
     tval_base_t(const tval_base_t& tv) : time_ns(tv.time_ns) {}
