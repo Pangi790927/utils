@@ -412,6 +412,9 @@ inline task_t read(int fd, void *buff, size_t len);
 inline task_t write(int fd, const void *buff, size_t len);
 inline task_t read_sz(int fd, void *buff, size_t len);
 inline task_t write_sz(int fd, const void *buff, size_t len);
+
+/* event can be EPOLLIN or EPOLLOUT (maybe some other ?) */
+inline task_t wait_event(int fd, int event);
 inline task_t stopfd(int fd);
 
 /* Normal sleeps */
@@ -1433,6 +1436,15 @@ inline task_t write_sz(int fd, const void *buff, size_t len) {
         }
     }
     co_return original_len;
+}
+
+inline task_t wait_event(int fd, int event) {
+    fd_awaiter_t awaiter {
+        .wait_cond = event,
+        .fd = fd,
+    };
+    CO_INTERNAL_AWAIT(awaiter);
+    co_return 0;
 }
 
 inline task_t stopfd(int fd) {
