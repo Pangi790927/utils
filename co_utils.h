@@ -241,7 +241,7 @@ struct fd_sched_t {
     int  handle_events(int num_evs);
 
     std::map<int, fd_data_t> waiting_tasks;
-    std::queue<handle_t> ready_tasks;
+    iter_queue<handle_t> ready_tasks;
     std::vector<struct epoll_event> ret_evs;
     int epoll_fd;
 
@@ -260,10 +260,10 @@ struct pool_t {
 
     ~pool_t();
 
-    std::queue<handle_t> waiting_tasks;
+    iter_queue<handle_t> waiting_tasks;
     std::stack<int> timer_fd_pool;
     fd_sched_t fd_sched;
-    int ret_val;
+    int ret_val = 0;
 };
 
 struct fd_awaiter_t {
@@ -384,6 +384,8 @@ inline TASK_T dbg_register(TASK_T &&task, std::string task_name);
 template <typename CORO_T>
 CORO_T dbg_coro_str_forward(CORO_T &&coro);
 
+inline task_t dbg_print_internal_info();
+
 inline sched_awaiter_t sched(task_t to_sched, co_mod_ptr_t pmods = nullptr);
 inline yield_awaiter_t yield();
 
@@ -428,8 +430,7 @@ inline task_t var_sleep_ms(uint64_t timeo_ms, sleep_handle_t *sleep_handle);
 inline task_t var_sleep_s(uint64_t timeo_s, sleep_handle_t *sleep_handle);
 inline int stop_sleep(sleep_handle_t *sleep_handle);
 
-template <typename ...Args>
-inline task_t when_all(Args&&...arg);
+inline task_t when_all(std::vector<task_t> tasks);
 
 /* IMPLEMENTATION:
 ================================================================================================= */
@@ -475,7 +476,8 @@ inline int co_mod_t::handle_pmods_call(handle_t handle) {
         switch (curr->type) {
             case CO_MOD_TIMEOUT: {
                 if (!curr->m.timeo.timer_started) {
-                    auto timeo_task = [](co_mod_ptr_t pmod) -> task_t {
+                    auto timeo_task = [](co_mod_ptr_t pmod) -> task_t
+                    {
                         ASSERT_COFN(co_await CO_REG_INTERN(var_sleep_us(pmod->m.timeo.timeo_us,
                                 pmod->m.timeo.sleep_handle)));
                         if (pmod->m.timeo.state == CO_MOD_TIMEO_STATE_STOPPED) {
@@ -1102,8 +1104,9 @@ inline handle_vt sleep_awaiter_t::await_suspend(handle_t caller_handle) {
     itimerspec its = {};
     its.it_value.tv_nsec = (sleep_us % 1000'000) * 1000ULL;
     its.it_value.tv_sec = sleep_us / 1000'000ULL;
-    if (fd_ref)
+    if (fd_ref) {
         *fd_ref = &timer_fd;
+    }
     if (timerfd_settime(timer_fd, 0, &its, NULL) < 0) {
         DBGE("Failed to set expiration date");
         return CO_NEXT(std::noop_coroutine());
@@ -1111,6 +1114,7 @@ inline handle_vt sleep_awaiter_t::await_suspend(handle_t caller_handle) {
 
     err_scope.disable();
     this->caller_handle = caller_handle;
+    co_mod_t::handle_pmods_fd_wait(caller_handle, timer_fd);
     return CO_NEXT(pool->resched_wait_fd(caller_handle, timer_fd, EPOLLIN));
 }
 
@@ -1127,6 +1131,7 @@ inline int sleep_awaiter_t::await_resume() {
         pool->timer_fd_pool.push(timer_fd);
     }
 
+    co_mod_t::handle_pmods_fd_unwait(caller_handle);
     return caller_handle.promise().call_res;
 }
 
@@ -1285,6 +1290,40 @@ inline std::string epoll_ev2str(uint32_t code) {
     }
     ret += "]";
     return ret;
+}
+
+inline task_t dbg_print_internal_info() {
+    /* TODO: print everything from poll */
+    struct dbg_awaiter_t {
+        bool await_ready() { return false; }
+        bool await_suspend(handle_t curr) {
+            auto pool = curr.promise().pool;
+            auto sch = &(pool->fd_sched);
+
+            DBG("====== CO::POOL/INTERNALS ======")
+            for (auto &handle : pool->waiting_tasks) {
+                DBG("pool:waiting: %s", co_str(handle))
+            }
+            DBG("Timers in pool: %ld", pool->timer_fd_pool.size());
+            DBG("Return value: %d", pool->ret_val);
+
+            for (auto &[fd, fdw] : sch->waiting_tasks) {
+                DBG("fd: %d mask: %x", fd, fdw.mask);
+                for (auto &w : fdw.waiters) {
+                    DBG("->\twaiter: %x coro: %s", w.mask, co_str(w.ptr));
+                }
+            }
+            for (auto &handle : sch->ready_tasks) {
+                DBG("sch:ready: %s", co_str(handle));
+            }
+            DBG("------ CO::POOL/INTERNALS ------")
+
+            return false;
+        }
+        void await_resume() {}
+    };
+    co_await dbg_awaiter_t{};
+    co_return 0;
 }
 
 inline sched_awaiter_t sched(task_t to_sched, co_mod_ptr_t pmods) {
@@ -1528,10 +1567,8 @@ inline int stop_sleep(sleep_handle_t *sleep_handle) {
     return 0;
 }
 
-template <typename ...Args>
-inline task_t when_all(Args&&...arg) {
+inline task_t when_all(std::vector<task_t> tasks) {
     sem_t sem(0);
-    std::vector<task_t> tasks{ arg... };
     int ret = 0;
     for (auto &t : tasks) {
         sem._dec();
