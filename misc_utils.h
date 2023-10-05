@@ -8,6 +8,8 @@
 #include <functional>
 #include <memory>
 #include <condition_variable>
+#include <deque>
+#include <queue>
 
 #define PACKED_STRUCT           __attribute__((packed))
 #define HAS(data_struct, key)   (data_struct.find(key) != data_struct.end())
@@ -99,7 +101,7 @@ struct FnScope {
 };
 
 // https://stackoverflow.com/questions/1259099/stdqueue-iteration
-template<typename T, typename Container=std::deque<T>>
+template<typename T, typename Container=std::deque<T> >
 class iter_queue : public std::queue<T,Container> {
 public:
     typedef typename Container::iterator iterator;
