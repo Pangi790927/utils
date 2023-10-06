@@ -22,7 +22,6 @@
 
 #define CO_MAX_TIMER_POOL_SIZE  64
 
-
 /*  - provide CO_NEXT to have all coro traced
     - provide co_REG_INTERN to have internal coroutines named as well
     - add CO_REG when calling a coro to actually register it's name */
@@ -321,7 +320,8 @@ exclusion:
     rescheduling the internal counter will be decremented.
 
     You must manually use (co_await co::yield()) to suspend the current coroutine if you want the
-    notified coroutine to have a chance to be rescheduled or to call a suspending coro.
+    notified coroutine to have a chance to be rescheduled. You can also call a suspending coro to
+    reschedule.
 */
 
 struct sem_t {
@@ -375,18 +375,18 @@ inline const char *co_str_intern(void *addr, std::string name = "");            
 inline const char *co_str_intern(handle_vt handle, std::string co_name = "");   // just don't touch
 inline const char *enum_str(int e);
 inline std::string epoll_ev2str(uint32_t code);
-
 inline void dbg_trace_fn(int moment, void *addr, void *);
-
 template <typename TASK_T>
 inline TASK_T dbg_register(TASK_T &&task, std::string task_name);
-
 template <typename CORO_T>
-CORO_T dbg_coro_str_forward(CORO_T &&coro);
-
+inline CORO_T dbg_coro_str_forward(CORO_T &&coro);
 inline task_t dbg_print_internal_info();
 
+/* This function schedules a coroutine on the current pool, a pointer to a modifier list can be
+supplied to attach it to the newly scheduled coroutine.  */
 inline sched_awaiter_t sched(task_t to_sched, co_mod_ptr_t pmods = nullptr);
+
+/* This stops the current coroutine from running and places it in the ready queue. */
 inline yield_awaiter_t yield();
 
 /* tasks call other tasks, creating call-chains. A modifier can be attached to a task to be
@@ -415,8 +415,17 @@ inline task_t write(int fd, const void *buff, size_t len);
 inline task_t read_sz(int fd, void *buff, size_t len);
 inline task_t write_sz(int fd, const void *buff, size_t len);
 
-/* event can be EPOLLIN or EPOLLOUT (maybe some other ?) */
+/* event can be EPOLLIN or EPOLLOUT (maybe some others work too?) This can be used to be notified
+when those are ready without doing a read or a write. */
 inline task_t wait_event(int fd, int event);
+
+/* closing a file descriptor while it is managed by the coroutine pool will break the entire system
+so you must use stopfd on the file descriptor before you close it. This makes sure the fd is
+awakened and ejected from the system before closing it. For example:
+
+    co_await co::stopfd(fd);
+    close(fd);
+*/
 inline task_t stopfd(int fd);
 
 /* Normal sleeps */
@@ -430,10 +439,13 @@ inline task_t var_sleep_ms(uint64_t timeo_ms, sleep_handle_t *sleep_handle);
 inline task_t var_sleep_s(uint64_t timeo_s, sleep_handle_t *sleep_handle);
 inline int stop_sleep(sleep_handle_t *sleep_handle);
 
+/* OBS: Broken, breaks gcc if I call it */
 inline task_t when_all(std::vector<task_t> tasks);
 
 /* IMPLEMENTATION:
 ================================================================================================= */
+/* ============================================================================================== */
+/* ============================================================================================== */
 
 inline int sleep_handle_t::stop() {
     ASSERT_FN(stop_sleep(this));
