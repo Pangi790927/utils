@@ -4,6 +4,7 @@
 #include "debug.h"
 #include "misc_utils.h"
 #include "sys_utils.h"
+#include "ap_ptr.h"
 
 #include <sys/wait.h>
 #include <unistd.h>
@@ -16,6 +17,12 @@
 struct test_struct_t {
     ap_vector_t<int> vec;
     ap_string_t str;
+};
+
+struct test_ap_ptr_t {
+    ap_ptr_t<test_struct_t> a1;
+    ap_ptr_t<test_struct_t> a2;
+    ap_ptr_t<test_struct_t> a3;
 };
 
 void ap_storage_except_cbk(void *ctx, const char *errmsg, ap_except_info_t *ei) {
@@ -61,6 +68,13 @@ static int do_host_stuff(const char *prog_name) {
     ASSERT_FN(unlink("data/storage_0.data"));
     ASSERT_FN(unlink("data/storage_1.data"));
 
+    DBG("######################### ap_ptr_test:");
+    ASSERT_FN(run_program(prog_name, "ap_ptr_base_test"));
+    ASSERT_FN(run_program(prog_name, "ap_ptr_read_test"));
+    ASSERT_FN(unlink("data/storage"));
+    ASSERT_FN(unlink("data/storage_0.data"));
+    ASSERT_FN(unlink("data/storage_1.data"));
+
     DBG("UNINIT");
 
     return 0;
@@ -74,6 +88,47 @@ static int do_guest_stuff(const char *_param) {
         ASSERT_FN(ap_storage_do_changes(AP_STORAGE_COMMIT_CHANGES));
         ap_storage_uninit();
         DBG("Done INIT_EXIT");
+    }
+    else if (param == "ap_ptr_base_test") {
+        DBG("Start ap_ptr_base_test");
+        ASSERT_FN(ap_storage_init("data/storage", ap_storage_except_cbk, NULL));
+        auto [off, ptr] = ap_storage_construct<test_ap_ptr_t>();
+        ap_malloc_set_usr(ap_static_ctx, off);
+
+        ptr->a1 = ap_ptr_t<test_struct_t>::mkptr();
+        ptr->a2 = ap_ptr_t<test_struct_t>::mkptr();
+        ptr->a3 = ap_ptr_t<test_struct_t>::mkptr();
+
+        ptr->a1->vec.push_back(1);
+        ptr->a1->vec.push_back(2);
+        ptr->a1->vec.push_back(3);
+        ptr->a2->vec.push_back(11);
+        ptr->a2->vec.push_back(12);
+        ptr->a3->vec.push_back(0);
+
+        ptr->a1.reset();
+
+        ASSERT_FN(ap_storage_do_changes(AP_STORAGE_COMMIT_CHANGES));
+        ap_storage_uninit();
+    }
+    else if (param == "ap_ptr_read_test") {
+        DBG("Start ap_ptr_read_test");
+        ASSERT_FN(ap_storage_init("data/storage", ap_storage_except_cbk, NULL));
+
+        ap_off_t off = ap_malloc_get_usr(ap_static_ctx);
+        test_ap_ptr_t *ptr = (test_ap_ptr_t *)ap_malloc_ptr(ap_static_ctx, off);
+
+        if (ptr->a1)
+            for (auto i : ptr->a1->vec)
+                DBG("a1: %d", i);
+        if (ptr->a2)
+            for (auto i : ptr->a2->vec)
+                DBG("a2: %d", i);
+        if (ptr->a3)
+            for (auto i : ptr->a3->vec)
+                DBG("a3: %d", i);
+
+        ap_storage_uninit();
     }
     else if (param == "base_test") {
         DBG("Start BASE_TEST");

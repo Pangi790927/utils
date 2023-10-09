@@ -21,6 +21,11 @@ struct ap_string_t {
         if (init(ap_static_ctx) < 0)
             AP_EXCEPT("Failed constructor");
     }
+    ap_string_t(const std::string& str) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        append(str);
+    }
 
     ~ap_string_t() {
         uninit();
