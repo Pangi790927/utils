@@ -8,6 +8,7 @@
 #include "bit_utils.h"
 #include "debug.h"
 #include "ap_except.h"
+#include "demangle.h"
 
 #ifdef AP_ENABLE_AUTOINIT
 extern ap_ctx_t *ap_static_ctx;
@@ -54,6 +55,65 @@ struct ap_vector_t {
     ~ap_vector_t() {
         uninit();
     }
+
+    ap_vector_t(const ap_vector_t& oth) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        insert(begin(), oth.cbegin(), oth.cend());
+    }
+
+    template <typename U>
+    ap_vector_t(std::initializer_list<U> il) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        insert(begin(), il.begin(), il.end());
+    }
+
+    template <typename U>
+    ap_vector_t(const std::vector<U>& oth) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        insert(begin(), oth.cbegin(), oth.cend());
+    }
+
+    template <typename IT>
+    ap_vector_t(IT first, IT last) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        insert(begin(), first, last);
+    }
+
+    ap_vector_t(ap_vector_t&& oth) {
+        datap = oth.datap;
+        cap = oth.cap;
+        cnt = oth.cnt;
+        ctx_id = oth.ctx_id;
+        oth.datap = 0;
+        oth.cap = 0;
+        oth.cnt = 0;
+    }
+
+    ap_vector_t &operator = (const ap_vector_t& oth) {
+        clear();
+        insert(begin(), oth.cbegin(), oth.cend());
+        return *this;
+    }
+
+    ap_vector_t &operator = (ap_vector_t&& oth) {
+        datap = oth.datap;
+        cap = oth.cap;
+        cnt = oth.cnt;
+        ctx_id = oth.ctx_id;
+        oth.datap = 0;
+        oth.cap = 0;
+        oth.cnt = 0;
+        return *this;
+    }
+#else
+    ap_vector_t(const ap_vector_t&) = delete;
+    ap_vector_t(ap_vector_t&&) = delete;
+    ap_vector_t &operator = (const ap_vector_t&) = delete;
+    ap_vector_t &operator = (ap_vector_t&&)  = delete;
 #endif
 
     /* this init function should only be called when this structure is placed inside the shared
@@ -99,6 +159,7 @@ public:
 
         ap_malloc_free(ctx, datap);
         datap = ap_off_t{};
+
         cnt = 0;
         cap = 0;
     }
@@ -136,6 +197,7 @@ public:
 
         if (datap)
             ap_malloc_free(ctx, datap);
+
         datap = new_data;
         cap = new_cap;
         return 0;

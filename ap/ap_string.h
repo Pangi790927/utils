@@ -26,10 +26,6 @@ struct ap_string_t {
             AP_EXCEPT("Failed constructor");
         append(str);
     }
-
-    ~ap_string_t() {
-        uninit();
-    }
 #endif
 
 #ifdef AP_ENABLE_AUTOINIT
@@ -51,7 +47,7 @@ public:
 #endif
 
     ap_string_t &append(const std::string& s) {
-        vec.insert(end(), s.begin(), s.end());
+        vec.insert(end(), s.cbegin(), s.cend());
         return *this;
     }
 
@@ -78,7 +74,7 @@ public:
     }
 
     uint64_t size() {
-        return vec.size();
+        return vec.size() - 1;
     }
 
     iterator_t begin() {
@@ -107,6 +103,14 @@ public:
     ap_string_t &operator+= (const T& str) {
         return append(str);
     }
+
+    template <typename T>
+    ap_string_t operator + (const T& str) {
+        ap_string_t ret = *this;
+        ret.append(str);
+        return ret;
+    }
+
 };
 
 #endif

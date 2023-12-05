@@ -142,8 +142,14 @@ struct ap_map_t {
 
     ~ap_map_t() {
         uninit();
-    }
+    }    
 #endif
+
+    /* till I will need it I will delete them to be safe */
+    ap_map_t(const ap_map_t&) = delete;
+    ap_map_t(ap_map_t&&) = delete;
+    ap_map_t &operator = (const ap_map_t&) = delete;
+    ap_map_t &operator = (ap_map_t&&)  = delete;
 
 #ifdef AP_ENABLE_AUTOINIT
 private:
