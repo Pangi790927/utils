@@ -239,7 +239,7 @@ public:
         return 0;
     }
 
-    iterator_t begin() {
+    iterator_t begin() const {
         ap_ctx_t *ctx = ap_malloc_get_ctx(ctx_id);
         if (!ctx) {
             AP_EXCEPT("invalid ctx ptr");
@@ -248,7 +248,7 @@ public:
         return (T *)ap_malloc_ptr(ctx, datap);
     }
 
-    iterator_t end() {
+    iterator_t end() const {
         auto b = begin();
         if (!b)
             return b;
@@ -332,19 +332,19 @@ public:
         return 0;
     }
 
-    T &back() {
+    T &back() const {
         return *(end() - 1);
     }
 
-    T &front() {
+    T &front() const {
         return *(begin());
     }
 
-    T *data() {
+    T *data() const {
         return begin();
     }
 
-    uint64_t size() {
+    uint64_t size() const {
         return cnt;
     }
 
@@ -360,8 +360,8 @@ public:
 
     const T &operator[] (int64_t n) const {
         if (n < 0)
-            return *(end() + n);
-        return *(begin() + n);
+            return *(cend() + n);
+        return *(cbegin() + n);
     }
 
     /* TODO: implement others */

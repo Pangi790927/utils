@@ -1,6 +1,8 @@
 #include "ap_storage.h"
 #include "ap_vector.h"
 #include "ap_string.h"
+#include "ap_map.h"
+#include "ap_hashmap.h"
 #include "debug.h"
 #include "misc_utils.h"
 #include "sys_utils.h"
@@ -309,6 +311,25 @@ static int do_guest_stuff(const char *_param) {
             str1.clear();
             str1 = (str1 + str2) + "~~~" + (str2 + str2) + "~~~" + std::string("Bob");
             DBG("str1 +: [%s]", str1.c_str());
+
+            /* test operator < */
+            ap_string_t str3 = "Ana are";
+            ap_string_t str4 = "Bob are";
+            ap_string_t str5 = "Ana are mere";
+
+            DBG("str3 < str3: %d or [\"%s\" < \"%s\"]", str3 < str3, str3.c_str(), str3.c_str());
+            DBG("str3 < str4: %d or [\"%s\" < \"%s\"]", str3 < str4, str3.c_str(), str4.c_str());
+            DBG("str3 < str5: %d or [\"%s\" < \"%s\"]", str3 < str5, str3.c_str(), str5.c_str());
+            DBG("str4 < str3: %d or [\"%s\" < \"%s\"]", str4 < str3, str4.c_str(), str3.c_str());
+            DBG("str4 < str4: %d or [\"%s\" < \"%s\"]", str4 < str4, str4.c_str(), str4.c_str());
+            DBG("str4 < str5: %d or [\"%s\" < \"%s\"]", str4 < str5, str4.c_str(), str5.c_str());
+            DBG("str5 < str3: %d or [\"%s\" < \"%s\"]", str5 < str3, str5.c_str(), str3.c_str());
+            DBG("str5 < str4: %d or [\"%s\" < \"%s\"]", str5 < str4, str5.c_str(), str4.c_str());
+            DBG("str5 < str5: %d or [\"%s\" < \"%s\"]", str5 < str5, str5.c_str(), str5.c_str());
+
+            /* test operator [] */
+            DBG("str1[0]: %c str1[1]: %c str1[2]: %c", str1[0], str1[1], str1[2]);
+
             ptr->strings.push_back(str1);
         }
 
@@ -570,7 +591,91 @@ static int do_guest_stuff(const char *_param) {
         ap_malloc_set_usr(ap_static_ctx, off);
 
         {
-            /* TODO: tests */
+            auto printm = [](auto &m){
+                std::string ret = "{";
+                int sz = m.size();
+                for (auto &[k, v] : m) {
+                    ret += sformat("{%s, %d}", k.c_str(), v);
+                    sz--;
+                    if (sz)
+                        ret += ", ";
+                }
+                ret += "}";
+                return ret;
+            };
+
+            /* simple constructor */
+            ap_map_t<ap_string_t, int> map1;
+            DBG("empty: %s", printm(map1).c_str());
+
+            ap_map_t<ap_string_t, int> map2({
+                {"pere", 5},
+                {"mere", 10},
+                {"struguri", 142},
+                {"capsiuni", 3},
+                {"caise", -3},
+            });
+            DBG("initializer_list: %s", printm(map2).c_str());
+
+            ap_map_t<ap_string_t, int> map3(map2);
+            DBG("copy-constructor: %s", printm(map3).c_str());
+
+            ap_map_t<ap_string_t, int> map4(std::move(
+                    ap_map_t<ap_string_t, int>{{"a", 1}, {"b", 2}}));
+            DBG("copy-move-constr: %s", printm(map4).c_str());
+
+            std::vector<std::pair<std::string, int>> vec{{"aa", 1}, {"bb", 2}, {"cc", 1}};
+            ap_map_t<ap_string_t, int> map5(vec.begin(), vec.end());
+            DBG("range-constructor: %s", printm(map5).c_str());
+
+            ap_map_t<ap_string_t, int> map6;
+            map6 = map2;
+            DBG("Equal operator: %s", printm(map6).c_str());
+
+            ap_map_t<ap_string_t, int> map7;
+            map7 = std::move(ap_map_t<ap_string_t, int>{{"a", 1}, {"b", 2}});
+            DBG("Move-Equal operator: %s", printm(map7).c_str());
+
+            map7.clear();
+            DBG("Clear: %s", printm(map7).c_str());
+
+            map7.insert(map6.begin(), map6.end());
+            DBG("Insert begin/end: %s", printm(map7).c_str());
+
+            map7.insert({{"aa", 1}, {"bb", 2}, {"cc", 1}});
+            DBG("Insert initializer list: %s", printm(map7).c_str());
+
+            map7.erase("aa");
+            map7.erase("caise");
+            map7.erase("cc");
+            DBG("Erase key: %s", printm(map7).c_str());
+
+            auto it = map7.find("cc");
+            if (it == map7.end()) {
+                DBG("didn't find cc in map7 (OK)");
+            }
+            it = map7.find("mere");
+            DBG("find(mere): %s, %d", it->first.c_str(), it->second);
+
+            it = map7.pred("mere");
+            DBG("pred(mere): %s, %d", it->first.c_str(), it->second);
+
+            it = map7.succ("mere");
+            DBG("succ(mere): %s, %d", it->first.c_str(), it->second);
+
+            DBG("map7.sizE(): %ld", map7.size());
+
+            /* TODO: reverse operator is strange, not working as expected(++ should go in reverse) */
+            for (auto it = map7.rbegin(); it != map7.rend(); it--)
+                DBG("elem: %s", it->first.c_str());
+
+            DBG("map7[bb]: %d", map7["bb"]);
+            DBG("map7[pere]: %d", map7["pere"]);
+            DBG("map7[capsiuni]: %d", map7["capsiuni"]);
+            DBG("map7[mere]: %d", map7["mere"]);
+            DBG("map7[struguri]: %d", map7["struguri"]);
+            DBG("map7[fier]: %d", map7["fier"]);
+            DBG("map7: %s", printm(map7).c_str());
         }
 
         ASSERT_FN(ap_storage_do_changes(AP_STORAGE_COMMIT_CHANGES));
@@ -594,7 +699,16 @@ static int do_guest_stuff(const char *_param) {
         ap_malloc_set_usr(ap_static_ctx, off);
 
         {
-            /* TODO: tests */
+            /* TODO: implement hmap constructors */
+            /* TODO: make the rest private if not usefull outside */
+            /* TODO: tests
+                ap_hashmap_t(...)
+                void clear() {
+                void insert(ap_off_t hn) {
+                ap_off_t find(Key key) {
+                ap_off_t erase(Key key) {
+                void iter(void *uctx, iter_fn_t iter_fn) {
+            */
         }
 
         ASSERT_FN(ap_storage_do_changes(AP_STORAGE_COMMIT_CHANGES));

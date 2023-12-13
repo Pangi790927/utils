@@ -33,7 +33,7 @@ namespace ap
 
     inline void FIX_THE_SYNTAX_IN_ST4__AVL (){ /* TODO: remove when fixed */ }
 
-    struct list_ctx_example_t {
+    struct avl_ctx_example_t {
         struct node_t {
             node_t *left;
             node_t *right;
@@ -43,16 +43,16 @@ namespace ap
 
         using ptr_t = node_t *;
 
-        node_t *    get_root_fn   ()                                { return root; }
+        node_t *    get_root_fn   () const                          { return root; }
         void        set_root_fn   (node_t *r)                       { root = r; }
 
         /* cmp is as strcmp */
         int         cmp_fn        (node_t *a, node_t *b)            { return a->val - b->val; }
-        node_t *    get_left_fn   (node_t *node)                    { return node->left; }
+        node_t *    get_left_fn   (node_t *node) const              { return node->left; }
         void        set_left_fn   (node_t *node, node_t *newn)      { node->left = newn; }
-        node_t *    get_right_fn  (node_t *node)                    { return node->right; }
+        node_t *    get_right_fn  (node_t *node) const              { return node->right; }
         void        set_right_fn  (node_t *node, node_t *newn)      { node->right = newn; }
-        int         get_height_fn (node_t *node)                    { return node->height; }
+        int         get_height_fn (node_t *node) const              { return node->height; }
         void        set_height_fn (node_t *node, int height)        { node->height = height; }
         void        same_key_cbk  (node_t *node, node_t *new_node)  { node->val = new_node->val; }
 
@@ -104,16 +104,16 @@ struct generic_avl_t : public ap::generic_avl_ctx_wrap_t<avl_ctx_t>{
         return rec_find(get_root(), key_cmp, key_ctx);
     }
 
-    avl_ptr_t get_min() {
+    avl_ptr_t get_min() const {
         return _get_min(get_root());
     }
 
-    avl_ptr_t get_max() {
+    avl_ptr_t get_max() const {
         return _get_max(get_root());
     }
 
     template <typename KeyCmp, typename KeyCtx>
-    avl_ptr_t get_succ(KeyCmp key_cmp, const KeyCtx &key_ctx) {
+    avl_ptr_t get_succ(KeyCmp key_cmp, const KeyCtx &key_ctx) const {
         auto succ = avl_ptr_t{};
         auto curr = get_root();
         while (curr) {
@@ -136,7 +136,7 @@ struct generic_avl_t : public ap::generic_avl_ctx_wrap_t<avl_ctx_t>{
     }
 
     template <typename KeyCmp, typename KeyCtx>
-    avl_ptr_t get_pred(KeyCmp key_cmp, const KeyCtx &key_ctx) {
+    avl_ptr_t get_pred(KeyCmp key_cmp, const KeyCtx &key_ctx) const {
         auto pred = avl_ptr_t{};
         auto curr = get_root();
         while (curr) {
@@ -167,14 +167,14 @@ struct generic_avl_t : public ap::generic_avl_ctx_wrap_t<avl_ctx_t>{
     }
 
 private:
-    avl_ptr_t _get_min(avl_ptr_t node) {
+    avl_ptr_t _get_min(avl_ptr_t node) const {
         avl_ptr_t curr = node;
         while (curr && get_left(curr))
             curr = get_left(curr);
         return curr;
     }
 
-    avl_ptr_t _get_max(avl_ptr_t node) {
+    avl_ptr_t _get_max(avl_ptr_t node) const {
         avl_ptr_t curr = node;
         while (curr && get_right(curr))
             curr = get_right(curr);
@@ -385,14 +385,14 @@ private:
         }
     }
 
-    avl_ptr_t   get_root()                          { return ctx_t::o.get_root_fn(); }
+    avl_ptr_t   get_root() const                    { return ctx_t::o.get_root_fn(); }
     void        set_root(avl_ptr_t root)            { return ctx_t::o.set_root_fn(root); }
     int         cmp(avl_ptr_t a, avl_ptr_t b)       { return ctx_t::o.cmp_fn(a, b); }
-    avl_ptr_t   get_left(avl_ptr_t n)               { return ctx_t::o.get_left_fn(n); }
+    avl_ptr_t   get_left(avl_ptr_t n) const         { return ctx_t::o.get_left_fn(n); }
     void        set_left(avl_ptr_t n, avl_ptr_t l)  { ctx_t::o.set_left_fn(n, l); }
-    avl_ptr_t   get_right(avl_ptr_t n)              { return ctx_t::o.get_right_fn(n); }
+    avl_ptr_t   get_right(avl_ptr_t n) const        { return ctx_t::o.get_right_fn(n); }
     void        set_right(avl_ptr_t n, avl_ptr_t r) { ctx_t::o.set_right_fn(n, r); }
-    int         get_heigth(avl_ptr_t n)             { return ctx_t::o.get_height_fn(n); }
+    int         get_heigth(avl_ptr_t n) const       { return ctx_t::o.get_height_fn(n); }
     void        set_heigth(avl_ptr_t n, int h)      { ctx_t::o.set_height_fn(n, h); }
     void        same_key(avl_ptr_t a, avl_ptr_t b)  { ctx_t::o.same_key_cbk(a, b); }
 };

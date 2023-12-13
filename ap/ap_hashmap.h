@@ -71,11 +71,12 @@ namespace ap
         }
 
         void  set_prev_fn(ptr_t n, ptr_t l) {
-            if (auto node = hmap_get_node(ctx_id, n); node)
+            if (auto node = hmap_get_node(ctx_id, n); node) {
                 if constexpr (IS_GLIST)
                     node->gprev = l;
                 else
                     node->prev = l;
+            }
         }
 
         ptr_t get_first()                   { return first; }
