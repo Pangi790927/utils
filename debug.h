@@ -2,6 +2,7 @@
 #define DEBUG_H
 
 #include "errnoname.h"
+#include "logger.h"
 
 #include <errno.h>
 #include <string.h>
@@ -13,8 +14,7 @@
 #define LOGGER_BUFF_SIZE 1024
 
 inline void logger_log_message(const char *msg) {
-    printf("%s", msg);
-    /* TODO: add a file to back the logs */
+    logger_log_autoinit(msg);
 }
 
 inline uint64_t logger_get_time() {

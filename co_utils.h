@@ -130,7 +130,7 @@ struct co_mod_t {
     union {
         struct { /* used by CO_MOD_TIMEOUT */
             char sem_it_data[sizeof(sem_it_t)];
-            char sleep_handle_data[sizeof(sem_it_t)];
+            char sleep_handle_data[sizeof(sleep_handle_t)];
 
             uint64_t timeo_us;
             bool timer_started;
@@ -138,7 +138,7 @@ struct co_mod_t {
             sem_it_t *sem_it;
             sleep_handle_t *sleep_handle;
             int wait_fd;
-            sem_t *sem;         /* if the blocking is by an semaphore */
+            sem_t *sem;         /* if the blocking is by a semaphore */
             void *leaf_coro;    /* the lowest coro that is currently waiting */
             void *root_coro;    /* the coro that initiated the sleep, on timeo it will be
                                         rescheduled */

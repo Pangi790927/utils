@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sstream>
 #include <iomanip>
+#include <mutex>
 
 #define LOGGER_DEFAULT_MAXSZ	(16*1024*1024)
 #define LOGGER_DEFAULT_NAME		"./logfile"
@@ -148,6 +149,12 @@ inline int logger_log(const char *msg) {
 		return -1;
 	}
 	return 0;
+}
+
+inline void logger_log_autoinit(const char *msg) {
+	if (!logger_is_init())
+		logger_init();
+	logger_log(msg);
 }
 
 #endif
