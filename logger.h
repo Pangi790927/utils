@@ -6,6 +6,8 @@
 #include <sstream>
 #include <iomanip>
 #include <mutex>
+#include <errno.h>
+#include <string.h>
 
 #define LOGGER_DEFAULT_MAXSZ	(16*1024*1024)
 #define LOGGER_DEFAULT_NAME		"./logfile"
