@@ -183,16 +183,17 @@ co::task_t sleep_multiple() {
         DBG(" <:> %s ", to_print.c_str());
         co_return 0;
     };
-    co_return co_await when_all(
-        task(8, "works"),
-        task(7, "sleep"),
-        task(6, "if"),
-        task(5, "order"),
-        task(4, "reverse"),
-        task(3, "in"),
-        task(2, "print"),
-        task(1, "will")
-    );
+    // co_return co_await co::when_all({
+    //     task(8, "works"),
+    //     task(7, "sleep"),
+    //     task(6, "if"),
+    //     task(5, "order"),
+    //     task(4, "reverse"),
+    //     task(3, "in"),
+    //     task(2, "print"),
+    //     task(1, "will")
+    // });
+    co_return 0;
 }
 
 co::task_t force_order_multiple() {
@@ -204,12 +205,25 @@ co::task_t force_order_multiple() {
         after.rel();
         co_return 0;
     };
-    co_return co_await when_all(
-        task("0 -> 1", sems[0], sems[1]),
-        task("1 -> 2", sems[1], sems[2]),
-        task("initial -> 0", initial_sem, sems[0]),
-        task("2 -> 3", sems[2], sems[3])
-    );
+    /* Love to see it */
+    // test_co.cpp: In function ‘co::task_t force_order_multiple()’:
+    // test_co.cpp:214:1: internal compiler error: in build_special_member_call, at cp/call.c:10157
+    //   214 | }
+    //       | ^
+    // 0x7fed8741a082 __libc_start_main
+    //     ../csu/libc-start.c:308
+    // Please submit a full bug report,
+    // with preprocessed source if appropriate.
+    // Please include the complete backtrace with any bug report.
+    // See <file:///usr/share/doc/gcc-11/README.Bugs> for instructions.
+
+    // co_return co_await co::when_all({
+    //     task("0 -> 1", sems[0], sems[1]),
+    //     task("1 -> 2", sems[1], sems[2]),
+    //     task("initial -> 0", initial_sem, sems[0]),
+    //     task("2 -> 3", sems[2], sems[3])
+    // });
+    co_return 0;
 }
 
 co::task_t test_comods_timeo_trace(uint64_t var_sleep1_us, uint64_t var_sleep2_us) {
@@ -228,7 +242,7 @@ co::task_t test_comods_timeo_trace(uint64_t var_sleep1_us, uint64_t var_sleep2_u
                 }(),
                 var_sleep1_us
             ),
-            co::default_trace_fn
+            co::dbg_trace_fn
         );
         sleep_handle.stop();
         DBG("timeo: %ld sig_time: %ld After semaphore wait, return val: %d",

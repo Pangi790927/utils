@@ -46,6 +46,9 @@ uint32_t high_pow2(uint32_t n)
     return res;
 }
 
+/* TODO: reimplement */
+/* TODO: check x, y seem to be the re and im parts and the fft is in place, 'm' is the power of two
+and dir must be 1 for forward transform ant 0 for inverse transform  */
 template <typename FType>
 inline void fft(short int dir, long m, FType *x, FType *y) {
     long n,i,i1,j,k,i2,l,l1,l2;

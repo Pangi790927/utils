@@ -42,6 +42,13 @@ std::pair<ap_off_t, T*> ap_storage_construct(Args&& ...args) {
     new (ptr) T(std::forward<Args>(args)...);
     return {off, ptr};
 }
+
+template <typename T>
+void ap_storage_destruct(ap_off_t off) {
+    T *obj = (T *)ap_malloc_ptr(ap_static_ctx, off);
+    obj->~T();
+    ap_malloc_free(ap_static_ctx, off);
+}
 // example:
 // auto [off, test_struct] = ap_storage_construct<test_struct_t>();
 

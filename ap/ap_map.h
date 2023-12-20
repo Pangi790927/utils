@@ -1,3 +1,6 @@
+#ifndef AP_MAP_H
+#define AP_MAP_H
+
 /* TODO */
 #include "ap_malloc.h"
 #include "gavl.h"
@@ -40,13 +43,13 @@ namespace ap
             return 0;
         }
 
-        ptr_t       get_root_fn   ()                            { return root; }
+        ptr_t       get_root_fn   () const                      { return root; }
         void        set_root_fn   (ptr_t r)                     { root = r; }
-        ptr_t       get_left_fn   (ptr_t node)                  { return get_node(node)->left; }
+        ptr_t       get_left_fn   (ptr_t node) const            { return get_node(node)->left; }
         void        set_left_fn   (ptr_t node, ptr_t newn)      { get_node(node)->left = newn; }
-        ptr_t       get_right_fn  (ptr_t node)                  { return get_node(node)->right; }
+        ptr_t       get_right_fn  (ptr_t node) const            { return get_node(node)->right; }
         void        set_right_fn  (ptr_t node, ptr_t newn)      { get_node(node)->right = newn; }
-        int         get_height_fn (ptr_t node)                  { return get_node(node)->height; }
+        int         get_height_fn (ptr_t node) const            { return get_node(node)->height; }
         void        set_height_fn (ptr_t node, int height)      { get_node(node)->height = height; }
 
         /* cmp is as strcmp */
@@ -61,7 +64,7 @@ namespace ap
             get_node(node)->val() = get_node(new_node)->val();
         }
 
-        node_t *get_node(ptr_t n) {
+        node_t *get_node(ptr_t n) const {
             ap_ctx_t *ctx = ap_malloc_get_ctx(ctx_id);
             if (!ctx) {
                 AP_EXCEPT("Failed to get ctx");
@@ -82,17 +85,17 @@ struct ap_map_t {
     using pair_t = decltype(node_t::elem);
 
     struct search_ctx_t {
-        ap_map_t *parr;
+        const ap_map_t *parr;
         const Key *key;
 
-        search_ctx_t(ap_map_t *parr, const Key *key) : parr(parr), key(key) {}
+        search_ctx_t(const ap_map_t *parr, const Key *key) : parr(parr), key(key) {}
     };
 
     struct iter_t {
-        ap_map_t *parr;
+        const ap_map_t *parr;
         ap_off_t n;
 
-        iter_t(ap_map_t *parr, ap_off_t n) : parr(parr), n(n) {}
+        iter_t(const ap_map_t *parr, ap_off_t n) : parr(parr), n(n) {}
 
         iter_t &operator ++() {
             if (n) {
@@ -129,6 +132,10 @@ struct ap_map_t {
             return parr->get_node(n)->elem;
         }
 
+        const pair_t &operator *() const {
+            return parr->get_node(n)->elem;
+        }
+
         pair_t *operator ->() {
             return &(parr->get_node(n)->elem);
         }
@@ -143,6 +150,61 @@ struct ap_map_t {
     ~ap_map_t() {
         uninit();
     }
+
+    ap_map_t(const ap_map_t& oth) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        for (const auto &e : oth) {
+            insert(e.first, e.second);
+        }
+    }
+
+    ap_map_t(ap_map_t&& oth) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        avl = oth.avl;
+        oth.avl = generic_avl_t<ap::map_avl_ctx_t<Key, Val>>{};
+        cnt = oth.cnt;
+        oth.cnt = 0;
+    }
+
+    ap_map_t(std::initializer_list<std::pair<Key, Val>> il) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        insert(il);
+    }
+
+    template <typename IT>
+    ap_map_t(IT b, IT e) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        insert(b, e);
+    }
+
+    ap_map_t &operator = (const ap_map_t& oth) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        for (const auto &e : oth) {
+            insert(e.first, e.second);
+        }
+        return *this;
+    }
+
+    ap_map_t &operator = (ap_map_t&& oth) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        avl = oth.avl;
+        oth.avl = generic_avl_t<ap::map_avl_ctx_t<Key, Val>>{};
+        cnt = oth.cnt;
+        oth.cnt = 0;
+        return *this;
+    }
+
+#else
+    ap_map_t(const ap_map_t&) = delete;
+    ap_map_t(ap_map_t&&) = delete;
+    ap_map_t &operator = (const ap_map_t&) = delete;
+    ap_map_t &operator = (ap_map_t&&)  = delete;
 #endif
 
 #ifdef AP_ENABLE_AUTOINIT
@@ -169,6 +231,12 @@ public:
         cnt = 0;
     }
 
+    void insert(std::initializer_list<std::pair<Key, Val>> il) {
+        for (const auto &e : il) {
+            insert(e.first, e.second);
+        }
+    }
+
     iter_t insert(const Key& key, const Val& val) {
         auto n = alloc_node();
         construct(n);
@@ -177,6 +245,12 @@ public:
         avl.insert(n);
         cnt++;
         return iter_t(this, n);
+    }
+
+    template <typename IT>
+    void insert(IT b, IT e) {
+        for (auto it = b; it != e; it++)
+            insert(it->first, it->second);
     }
 
     void erase(const Key& key) {
@@ -205,13 +279,13 @@ public:
         return cnt;
     }
 
-    iter_t begin() {
+    iter_t begin() const {
         if (!cnt)
             return iter_t(this, 0);
         return iter_t(this, avl.get_min());
     }
 
-    iter_t end() {
+    iter_t end() const {
         return iter_t(this, 0);
     }
 
@@ -234,6 +308,7 @@ public:
 
     const Val &operator [] (const Key& key) const {
         auto it = find(key);
+        /* TODO: throw */
         return *it;
     }
 
@@ -271,7 +346,9 @@ private:
         ap_malloc_free(ctx, node);
     }
 
-    node_t *get_node(ap_off_t n) {
+    node_t *get_node(ap_off_t n) const {
         return avl.o.get_node(n);
     }
 };
+
+#endif

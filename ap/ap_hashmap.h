@@ -71,11 +71,12 @@ namespace ap
         }
 
         void  set_prev_fn(ptr_t n, ptr_t l) {
-            if (auto node = hmap_get_node(ctx_id, n); node)
+            if (auto node = hmap_get_node(ctx_id, n); node) {
                 if constexpr (IS_GLIST)
                     node->gprev = l;
                 else
                     node->prev = l;
+            }
         }
 
         ptr_t get_first()                   { return first; }
@@ -122,7 +123,17 @@ struct ap_hashmap_t {
         if (init(ap_static_ctx) < 0)
             AP_EXCEPT("Failed constructor");
     }
+
+    ~ap_hashmap_t() {
+        uninit();
+    }
 #endif
+
+    /* till I will need it I will delete them to be safe */
+    ap_hashmap_t(const ap_hashmap_t&) = delete;
+    ap_hashmap_t(ap_hashmap_t&&) = delete;
+    ap_hashmap_t &operator = (const ap_hashmap_t&) = delete;
+    ap_hashmap_t &operator = (ap_hashmap_t&&)  = delete;
 
 #ifdef AP_ENABLE_AUTOINIT
 private:

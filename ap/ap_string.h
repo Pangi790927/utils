@@ -21,9 +21,15 @@ struct ap_string_t {
         if (init(ap_static_ctx) < 0)
             AP_EXCEPT("Failed constructor");
     }
-
-    ~ap_string_t() {
-        uninit();
+    ap_string_t(const std::string& str) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        append(str);
+    }
+    ap_string_t(const char *str) {
+        if (init(ap_static_ctx) < 0)
+            AP_EXCEPT("Failed constructor");
+        append(str);
     }
 #endif
 
@@ -46,7 +52,7 @@ public:
 #endif
 
     ap_string_t &append(const std::string& s) {
-        vec.insert(end(), s.begin(), s.end());
+        vec.insert(end(), s.cbegin(), s.cend());
         return *this;
     }
 
@@ -63,7 +69,7 @@ public:
         return *this;
     }
 
-    char *c_str() {
+    char *c_str() const {
         return vec.data();
     }
 
@@ -72,8 +78,8 @@ public:
         vec.push_back('\0');
     }
 
-    uint64_t size() {
-        return vec.size();
+    uint64_t size() const {
+        return vec.size() - 1;
     }
 
     iterator_t begin() {
@@ -102,6 +108,37 @@ public:
     ap_string_t &operator+= (const T& str) {
         return append(str);
     }
+
+    template <typename T>
+    ap_string_t operator + (const T& str) {
+        ap_string_t ret = *this;
+        ret.append(str);
+        return ret;
+    }
+
+    char &operator [] (int64_t i) {
+        return vec[i];
+    }
+
+    const char &operator[] (int64_t i) const {
+        return vec[i];
+    }
+
+    bool operator < (const ap_string_t& str) const {
+        int i = 0, j = 0;
+        while (i < size() && j < str.size()) {
+            if (vec[i] < str[i])
+                return true;
+            if (vec[i] > str[i])
+                return false;
+            i++;
+            j++;
+        }
+        if (i == size() && j != str.size())
+            return true;
+        return false;
+    }
+
 };
 
 #endif

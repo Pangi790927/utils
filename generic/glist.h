@@ -1,5 +1,5 @@
-#ifndef LIST_H
-#define LIST_H
+#ifndef GLIST_H
+#define GLIST_H
 
 #include <type_traits>
 #include "debug.h"

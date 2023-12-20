@@ -395,9 +395,10 @@ void ap_malloc_dbg_print(ap_ctx_t *ctx) {
     auto cb = get_first_border(ctx);
     auto last_border = get_last_border(ctx);
     while (cb != last_border) {
-        DBG("[CB] off: %16lx sz: %8ld prev_sz: %8ld is_free: %1d prev_free: %16lx next_free: %16lx",
-                get_offset(ctx, cb), cb->sz.sz, cb->prev_sz, cb->sz.is_free, cb->prev_free,
-                cb->next_free);
+        std::string offsets = sformat("%lx/%lx", get_offset(ctx, cb), get_offset(ctx, cb2usr(cb)));
+        DBG("[CB] off/usr: %16s sz: %8ld prev_sz: %8ld is_free: %1d prev_free: %16lx next_free: %16lx",
+                offsets.c_str(), cb->sz.sz, cb->prev_sz, cb->sz.is_free, cb->prev_free, cb->next_free);
         cb = next_border(cb);
     }
+    DBG("\\AP_MALLOC");
 }
