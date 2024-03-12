@@ -115,7 +115,7 @@ int main(int argc, char const *argv[])
             vku_reset_fences({fence});
         }
         catch (vku_err_t &e) {
-            /* TODO: fix this */
+            /* TODO: fix this (next time write what's wrong with it) */
             if (e.vk_err == VK_SUBOPTIMAL_KHR) {
                 vk_device_wait_idle(dev->vk_dev);
 
