@@ -25,6 +25,14 @@ do {                                                                            
     }                                                                                              \
 } while (false);
 
+/* TODO:
+    - Add the "#include ..." macro for shaders and test if the rest work as expected
+    - Add the option to use multiple include dirs for shader compilation
+    - Add compute shaders and compute things
+    - Create an ImGui backend using this helper
+    - Continue the tutorial: https://vulkan-tutorial.com/Vertex_buffers/Vertex_input_description
+ */
+
 enum vku_shader_stage_t {
     VKU_SPIRV_VERTEX,
     VKU_SPIRV_FRAGMENT,
@@ -53,7 +61,10 @@ struct vku_opts_t {
 };
 
 struct vku_gpu_family_ids_t {
-    int graphics_id = -1;
+    union {
+        int graphics_id = -1;   /* same as compute id */
+        int compute_id;
+    };
     int present_id = -1;
 };
 
@@ -261,7 +272,7 @@ inline void vku_present(
         std::vector<vku_sem_t *> wait_sems,
         uint32_t img_idx);
 
-inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *src, vku_buffer_t *dst,
+inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *dst, vku_buffer_t *src,
         vk_device_size_t sz);
 
 /* Internal : 
@@ -1261,7 +1272,7 @@ inline void vku_present(
     VK_ASSERT(vk_queue_present_khr(swc->dev->vk_present_que, &pres_info));
 }
 
-inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *src, vku_buffer_t *dst,
+inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *dst, vku_buffer_t *src,
         vk_device_size_t sz)
 {
     auto cbuff = std::make_unique<vku_cmdbuff_t>(cp);
@@ -1367,7 +1378,7 @@ inline vku_gpu_family_ids_t vku_find_queue_families(vk_physical_device_t dev,
     vk_get_physical_device_queue_family_properties(dev, &cnt, queue_families.data());
 
     for (int i = 0; auto qf : queue_families) {
-        if (qf.queue_flags & VK_QUEUE_GRAPHICS_BIT)
+        if ((qf.queue_flags & VK_QUEUE_GRAPHICS_BIT) && (qf.queue_flags & VK_QUEUE_COMPUTE_BIT))
             ret.graphics_id = i;
         vk_bool32_t res = 0;
         vk_get_physical_device_surface_support_khr(dev, i, surface, &res);

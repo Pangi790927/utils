@@ -19,8 +19,8 @@ int main(int argc, char const *argv[])
     auto vert = vku_spirv_compile(inst, VKU_SPIRV_VERTEX, R"___(
         #version 450
 
-        layout(location = 0) in vec2 in_pos;
-        layout(location = 1) in vec3 in_color;
+        layout(location = 0) in vec2 in_pos;    // those are referenced by
+        layout(location = 1) in vec3 in_color;  // vku_vertex2d_t::get_input_desc()
         layout(location = 2) in vec3 in_tex;
 
         layout(location = 0) out vec3 out_color;
@@ -35,7 +35,7 @@ int main(int argc, char const *argv[])
     auto frag = vku_spirv_compile(inst, VKU_SPIRV_FRAGMENT, R"___(
         #version 450
 
-        layout(location = 0) in vec3 in_color;
+        layout(location = 0) in vec3 in_color;  // this is referenced by the vert shader
         layout(location = 0) out vec4 out_color;
 
         void main() {
@@ -73,6 +73,7 @@ int main(int argc, char const *argv[])
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
     memcpy(staging_vbuff->map_data(0, verts_sz), vertices.data(), verts_sz);
+    staging_vbuff->unmap_data();
 
     auto vbuff = new vku_buffer_t(
         dev,
@@ -81,7 +82,7 @@ int main(int argc, char const *argv[])
         VK_SHARING_MODE_EXCLUSIVE,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     );
-    vku_copy_buff(cp, staging_vbuff, vbuff, verts_sz);
+    vku_copy_buff(cp, vbuff, staging_vbuff, verts_sz);
 
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
