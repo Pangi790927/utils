@@ -26,11 +26,11 @@ do {                                                                            
 } while (false);
 
 /* TODO:
-    - Add the "#include ..." macro for shaders and test if the rest work as expected
-    - Add the option to use multiple include dirs for shader compilation
+    - Continue the tutorial: https://vulkan-tutorial.com/Vertex_buffers/Vertex_input_description
     - Add compute shaders and compute things
     - Create an ImGui backend using this helper
-    - Continue the tutorial: https://vulkan-tutorial.com/Vertex_buffers/Vertex_input_description
+    - Add the "#include ..." macro for shaders and test if the rest work as expected
+    - Add the option to use multiple include dirs for shader compilation
  */
 
 enum vku_shader_stage_t {
@@ -205,7 +205,9 @@ struct vku_cmdbuff_t : public vku_object_t {
     void begin_rpass(vku_framebuffs_t *fbs, uint32_t img_idx);
     void bind_vert_buffs(uint32_t first_bind,
             std::vector<std::pair<vku_buffer_t *, vk_device_size_t>> buffs);
-    void draw(vku_pipeline_t *pl);
+    void bind_idx_buff(vku_buffer_t *ibuff, uint64_t off, vk_index_type_t idx_type);
+    void draw(vku_pipeline_t *pl, uint64_t vert_cnt);
+    void draw_idx(vku_pipeline_t *pl, uint64_t vert_cnt);
     void end_rpass();
     void end();
     void reset();
@@ -1072,7 +1074,12 @@ inline void vku_cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
             vk_offsets.data());
 }
 
-inline void vku_cmdbuff_t::draw(vku_pipeline_t *pl) {
+inline void vku_cmdbuff_t::bind_idx_buff(vku_buffer_t *ibuff, uint64_t off, vk_index_type_t idx_type)
+{
+    vk_cmd_bind_index_buffer(vk_buff, ibuff->vk_buff, off, idx_type);
+}
+
+inline void vku_cmdbuff_draw_helper(auto vk_buff, auto pl) {
     vk_cmd_bind_pipeline(vk_buff, VK_PIPELINE_BIND_POINT_GRAPHICS, pl->vk_pipeline);
 
     vk_viewport_t viewport {
@@ -1091,7 +1098,17 @@ inline void vku_cmdbuff_t::draw(vku_pipeline_t *pl) {
         .extent = pl->rp->swc->vk_extent
     };
     vk_cmd_set_scissor(vk_buff, 0, 1, &scissor);
-    vk_cmd_draw(vk_buff, 3, 1, 0, 0);
+}
+
+inline void vku_cmdbuff_t::draw(vku_pipeline_t *pl, uint64_t vert_cnt) {
+    vku_cmdbuff_draw_helper(vk_buff, pl);
+    /* TODO: more than 3 vertexes... */
+    vk_cmd_draw(vk_buff, vert_cnt, 1, 0, 0);
+}
+
+inline void vku_cmdbuff_t::draw_idx(vku_pipeline_t *pl, uint64_t vert_cnt) {
+    vku_cmdbuff_draw_helper(vk_buff, pl);
+    vk_cmd_draw_indexed(vk_buff, vert_cnt, 1, 0, 0, 0);
 }
 
 inline void vku_cmdbuff_t::end_rpass() {
