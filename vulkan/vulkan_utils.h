@@ -26,7 +26,7 @@ do {                                                                            
 } while (false);
 
 /* TODO:
-    - Continue the tutorial: https://vulkan-tutorial.com/Vertex_buffers/Vertex_input_description
+    - Continue the tutorial: https://vulkan-tutorial.com/Uniform_buffers/Descriptor_layout_and_buffer
     - Add compute shaders and compute things
     - Create an ImGui backend using this helper
     - Add the "#include ..." macro for shaders and test if the rest work as expected
@@ -78,7 +78,7 @@ struct vku_vertex_input_desc_t {
     std::vector<vk_vertex_input_attribute_description_t> attr_desc;
 };
 
-struct vku_vertex_p2c3t2_t {
+struct vku_vertex_p2n0c3t2_t {
     glm::vec2 pos;
     glm::vec3 color;
     glm::vec2 tex;
@@ -86,7 +86,7 @@ struct vku_vertex_p2c3t2_t {
     static vku_vertex_input_desc_t get_input_desc();
 };
 
-using vku_vertex2d_t = vku_vertex_p2c3t2_t;
+using vku_vertex2d_t = vku_vertex_p2n0c3t2_t;
 
 struct vku_object_t {
     static GLFWwindow *_window;
@@ -338,11 +338,11 @@ inline const char *vku_err_t::what() const noexcept {
     return err_str.c_str();
 }
 
-inline vku_vertex_input_desc_t vku_vertex_p2c3t2_t::get_input_desc() {
+inline vku_vertex_input_desc_t vku_vertex_p2n0c3t2_t::get_input_desc() {
     return {
         .bind_desc = {
             .binding = 0,
-            .stride = sizeof(vku_vertex_p2c3t2_t),
+            .stride = sizeof(vku_vertex_p2n0c3t2_t),
             .input_rate = VK_VERTEX_INPUT_RATE_VERTEX
         },
         .attr_desc = {
@@ -350,19 +350,19 @@ inline vku_vertex_input_desc_t vku_vertex_p2c3t2_t::get_input_desc() {
                 .location = 0,
                 .binding = 0,
                 .format = VK_FORMAT_R32G32_SFLOAT,
-                .offset = offsetof(vku_vertex_p2c3t2_t, pos)
+                .offset = offsetof(vku_vertex_p2n0c3t2_t, pos)
             },
             {
                 .location = 1,
                 .binding = 0,
                 .format = VK_FORMAT_R32G32B32_SFLOAT,
-                .offset = offsetof(vku_vertex_p2c3t2_t, color)
+                .offset = offsetof(vku_vertex_p2n0c3t2_t, color)
             },
             {
                 .location = 2,
                 .binding = 0,
                 .format = VK_FORMAT_R32G32_SFLOAT,
-                .offset = offsetof(vku_vertex_p2c3t2_t, tex)
+                .offset = offsetof(vku_vertex_p2n0c3t2_t, tex)
             }
         }
     };
