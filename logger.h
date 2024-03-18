@@ -8,6 +8,7 @@
 #include <mutex>
 #include <errno.h>
 #include <string.h>
+#include <atomic>
 
 #define LOGGER_DEFAULT_MAXSZ	(16*1024*1024)
 #define LOGGER_DEFAULT_NAME		"./logfile"

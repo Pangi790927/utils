@@ -1452,7 +1452,7 @@ inline task_t read_sz(int fd, void *buff, size_t len) {
         int ret = ::read(fd, buff, len);
         if (ret == 0) {
             DBG("Read failed, closed peer");
-            co_return 0;
+            co_return -1;
         }
         else if (ret < 0) {
             DBGE("Failed read");
