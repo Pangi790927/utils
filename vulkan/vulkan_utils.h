@@ -25,6 +25,14 @@ do {                                                                            
     }                                                                                              \
 } while (false);
 
+/* TODO:
+    - Continue the tutorial: https://vulkan-tutorial.com/Uniform_buffers/Descriptor_layout_and_buffer
+    - Add compute shaders and compute things
+    - Create an ImGui backend using this helper
+    - Add the "#include ..." macro for shaders and test if the rest work as expected
+    - Add the option to use multiple include dirs for shader compilation
+ */
+
 enum vku_shader_stage_t {
     VKU_SPIRV_VERTEX,
     VKU_SPIRV_FRAGMENT,
@@ -53,7 +61,10 @@ struct vku_opts_t {
 };
 
 struct vku_gpu_family_ids_t {
-    int graphics_id = -1;
+    union {
+        int graphics_id = -1;   /* same as compute id */
+        int compute_id;
+    };
     int present_id = -1;
 };
 
@@ -67,7 +78,7 @@ struct vku_vertex_input_desc_t {
     std::vector<vk_vertex_input_attribute_description_t> attr_desc;
 };
 
-struct vku_vertex_p2c3t2_t {
+struct vku_vertex_p2n0c3t2_t {
     glm::vec2 pos;
     glm::vec3 color;
     glm::vec2 tex;
@@ -75,7 +86,7 @@ struct vku_vertex_p2c3t2_t {
     static vku_vertex_input_desc_t get_input_desc();
 };
 
-using vku_vertex2d_t = vku_vertex_p2c3t2_t;
+using vku_vertex2d_t = vku_vertex_p2n0c3t2_t;
 
 struct vku_object_t {
     static GLFWwindow *_window;
@@ -194,7 +205,9 @@ struct vku_cmdbuff_t : public vku_object_t {
     void begin_rpass(vku_framebuffs_t *fbs, uint32_t img_idx);
     void bind_vert_buffs(uint32_t first_bind,
             std::vector<std::pair<vku_buffer_t *, vk_device_size_t>> buffs);
-    void draw(vku_pipeline_t *pl);
+    void bind_idx_buff(vku_buffer_t *ibuff, uint64_t off, vk_index_type_t idx_type);
+    void draw(vku_pipeline_t *pl, uint64_t vert_cnt);
+    void draw_idx(vku_pipeline_t *pl, uint64_t vert_cnt);
     void end_rpass();
     void end();
     void reset();
@@ -261,7 +274,7 @@ inline void vku_present(
         std::vector<vku_sem_t *> wait_sems,
         uint32_t img_idx);
 
-inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *src, vku_buffer_t *dst,
+inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *dst, vku_buffer_t *src,
         vk_device_size_t sz);
 
 /* Internal : 
@@ -325,11 +338,11 @@ inline const char *vku_err_t::what() const noexcept {
     return err_str.c_str();
 }
 
-inline vku_vertex_input_desc_t vku_vertex_p2c3t2_t::get_input_desc() {
+inline vku_vertex_input_desc_t vku_vertex_p2n0c3t2_t::get_input_desc() {
     return {
         .bind_desc = {
             .binding = 0,
-            .stride = sizeof(vku_vertex_p2c3t2_t),
+            .stride = sizeof(vku_vertex_p2n0c3t2_t),
             .input_rate = VK_VERTEX_INPUT_RATE_VERTEX
         },
         .attr_desc = {
@@ -337,19 +350,19 @@ inline vku_vertex_input_desc_t vku_vertex_p2c3t2_t::get_input_desc() {
                 .location = 0,
                 .binding = 0,
                 .format = VK_FORMAT_R32G32_SFLOAT,
-                .offset = offsetof(vku_vertex_p2c3t2_t, pos)
+                .offset = offsetof(vku_vertex_p2n0c3t2_t, pos)
             },
             {
                 .location = 1,
                 .binding = 0,
                 .format = VK_FORMAT_R32G32B32_SFLOAT,
-                .offset = offsetof(vku_vertex_p2c3t2_t, color)
+                .offset = offsetof(vku_vertex_p2n0c3t2_t, color)
             },
             {
                 .location = 2,
                 .binding = 0,
                 .format = VK_FORMAT_R32G32_SFLOAT,
-                .offset = offsetof(vku_vertex_p2c3t2_t, tex)
+                .offset = offsetof(vku_vertex_p2n0c3t2_t, tex)
             }
         }
     };
@@ -1061,7 +1074,12 @@ inline void vku_cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
             vk_offsets.data());
 }
 
-inline void vku_cmdbuff_t::draw(vku_pipeline_t *pl) {
+inline void vku_cmdbuff_t::bind_idx_buff(vku_buffer_t *ibuff, uint64_t off, vk_index_type_t idx_type)
+{
+    vk_cmd_bind_index_buffer(vk_buff, ibuff->vk_buff, off, idx_type);
+}
+
+inline void vku_cmdbuff_draw_helper(auto vk_buff, auto pl) {
     vk_cmd_bind_pipeline(vk_buff, VK_PIPELINE_BIND_POINT_GRAPHICS, pl->vk_pipeline);
 
     vk_viewport_t viewport {
@@ -1080,7 +1098,17 @@ inline void vku_cmdbuff_t::draw(vku_pipeline_t *pl) {
         .extent = pl->rp->swc->vk_extent
     };
     vk_cmd_set_scissor(vk_buff, 0, 1, &scissor);
-    vk_cmd_draw(vk_buff, 3, 1, 0, 0);
+}
+
+inline void vku_cmdbuff_t::draw(vku_pipeline_t *pl, uint64_t vert_cnt) {
+    vku_cmdbuff_draw_helper(vk_buff, pl);
+    /* TODO: more than 3 vertexes... */
+    vk_cmd_draw(vk_buff, vert_cnt, 1, 0, 0);
+}
+
+inline void vku_cmdbuff_t::draw_idx(vku_pipeline_t *pl, uint64_t vert_cnt) {
+    vku_cmdbuff_draw_helper(vk_buff, pl);
+    vk_cmd_draw_indexed(vk_buff, vert_cnt, 1, 0, 0, 0);
 }
 
 inline void vku_cmdbuff_t::end_rpass() {
@@ -1261,7 +1289,7 @@ inline void vku_present(
     VK_ASSERT(vk_queue_present_khr(swc->dev->vk_present_que, &pres_info));
 }
 
-inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *src, vku_buffer_t *dst,
+inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *dst, vku_buffer_t *src,
         vk_device_size_t sz)
 {
     auto cbuff = std::make_unique<vku_cmdbuff_t>(cp);
@@ -1367,7 +1395,7 @@ inline vku_gpu_family_ids_t vku_find_queue_families(vk_physical_device_t dev,
     vk_get_physical_device_queue_family_properties(dev, &cnt, queue_families.data());
 
     for (int i = 0; auto qf : queue_families) {
-        if (qf.queue_flags & VK_QUEUE_GRAPHICS_BIT)
+        if ((qf.queue_flags & VK_QUEUE_GRAPHICS_BIT) && (qf.queue_flags & VK_QUEUE_COMPUTE_BIT))
             ret.graphics_id = i;
         vk_bool32_t res = 0;
         vk_get_physical_device_surface_support_khr(dev, i, surface, &res);

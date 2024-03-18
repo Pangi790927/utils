@@ -3,14 +3,73 @@
 #include "misc_utils.h"
 #include "time_utils.h"
 
+static auto create_vbuff(auto dev, auto cp, const std::vector<vku_vertex2d_t>& vertices) {
+    size_t verts_sz = vertices.size() * sizeof(vertices[0]);
+    auto staging_vbuff = new vku_buffer_t(
+        dev,
+        verts_sz,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+    memcpy(staging_vbuff->map_data(0, verts_sz), vertices.data(), verts_sz);
+    staging_vbuff->unmap_data();
+
+    auto vbuff = new vku_buffer_t(
+        dev,
+        verts_sz,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    );
+    vku_copy_buff(cp, vbuff, staging_vbuff, verts_sz);
+    delete staging_vbuff;
+    return vbuff;
+}
+
+static auto create_ibuff(auto dev, auto cp, const std::vector<uint16_t>& indices) {
+    size_t idxs_sz = indices.size() * sizeof(indices[0]);
+    auto staging_ibuff = new vku_buffer_t(
+        dev,
+        idxs_sz,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+    memcpy(staging_ibuff->map_data(0, idxs_sz), indices.data(), idxs_sz);
+    staging_ibuff->unmap_data();
+
+    auto ibuff = new vku_buffer_t(
+        dev,
+        idxs_sz,
+        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    );
+    vku_copy_buff(cp, ibuff, staging_ibuff, idxs_sz);
+    delete staging_ibuff;
+    return ibuff;
+}
+
 int main(int argc, char const *argv[])
 {
     DBG_SCOPE();
 
+    // const std::vector<vku_vertex2d_t> vertices = {
+    //     {{0.0f, -0.5f}, {1.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
+    //     {{0.5f,  0.5f}, {0.0f, 1.0f, 1.0f}, {0.0f, 0.0f}},
+    //     {{-0.5f, 0.5f}, {1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}}
+    // };
+
     const std::vector<vku_vertex2d_t> vertices = {
-        {{0.0f, -0.5f}, {1.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
-        {{0.5f,  0.5f}, {0.0f, 1.0f, 1.0f}, {0.0f, 0.0f}},
-        {{-0.5f, 0.5f}, {1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}}
+        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+        {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+        {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+        {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+    };
+
+    const std::vector<uint16_t> indices = {
+        0, 1, 2, 2, 3, 0
     };
 
     vku_opts_t opts;
@@ -19,8 +78,8 @@ int main(int argc, char const *argv[])
     auto vert = vku_spirv_compile(inst, VKU_SPIRV_VERTEX, R"___(
         #version 450
 
-        layout(location = 0) in vec2 in_pos;
-        layout(location = 1) in vec3 in_color;
+        layout(location = 0) in vec2 in_pos;    // those are referenced by
+        layout(location = 1) in vec3 in_color;  // vku_vertex2d_t::get_input_desc()
         layout(location = 2) in vec3 in_tex;
 
         layout(location = 0) out vec3 out_color;
@@ -35,7 +94,7 @@ int main(int argc, char const *argv[])
     auto frag = vku_spirv_compile(inst, VKU_SPIRV_FRAGMENT, R"___(
         #version 450
 
-        layout(location = 0) in vec3 in_color;
+        layout(location = 0) in vec3 in_color;  // this is referenced by the vert shader
         layout(location = 0) out vec4 out_color;
 
         void main() {
@@ -64,24 +123,8 @@ int main(int argc, char const *argv[])
 
     auto cbuff =    new vku_cmdbuff_t(cp);
 
-    size_t verts_sz = vertices.size() * sizeof(vertices[0]);
-    auto staging_vbuff = new vku_buffer_t(
-        dev,
-        verts_sz,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_SHARING_MODE_EXCLUSIVE,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-    );
-    memcpy(staging_vbuff->map_data(0, verts_sz), vertices.data(), verts_sz);
-
-    auto vbuff = new vku_buffer_t(
-        dev,
-        verts_sz,
-        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_SHARING_MODE_EXCLUSIVE,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-    );
-    vku_copy_buff(cp, staging_vbuff, vbuff, verts_sz);
+    auto vbuff = create_vbuff(dev, cp, vertices);
+    auto ibuff = create_ibuff(dev, cp, indices);
 
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
@@ -103,7 +146,9 @@ int main(int argc, char const *argv[])
             cbuff->begin(0);
             cbuff->begin_rpass(fbs, img_idx);
             cbuff->bind_vert_buffs(0, {{vbuff, 0}});
-            cbuff->draw(pl);
+            cbuff->bind_idx_buff(ibuff, 0, VK_INDEX_TYPE_UINT16);
+            // cbuff->draw(pl, vertices.size());
+            cbuff->draw_idx(pl, indices.size());
             cbuff->end_rpass();
             cbuff->end();
 
@@ -115,7 +160,7 @@ int main(int argc, char const *argv[])
             vku_reset_fences({fence});
         }
         catch (vku_err_t &e) {
-            /* TODO: fix this */
+            /* TODO: fix this (next time write what's wrong with it) */
             if (e.vk_err == VK_SUBOPTIMAL_KHR) {
                 vk_device_wait_idle(dev->vk_dev);
 
