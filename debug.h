@@ -16,6 +16,7 @@
 inline void logger_log_message(const char *msg) {
     printf("%s", msg);
     logger_log_autoinit(msg);
+    printf("%s", msg);
 }
 
 inline uint64_t logger_get_time() {
