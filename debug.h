@@ -14,6 +14,7 @@
 #define LOGGER_BUFF_SIZE 1024
 
 inline void logger_log_message(const char *msg) {
+    printf("%s", msg);
     logger_log_autoinit(msg);
 }
 

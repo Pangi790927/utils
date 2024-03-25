@@ -8,7 +8,12 @@
 #include <glslang/SPIRV/GlslangToSpv.h>
 #include <vulkan/vulkan.h>
 #include <exception>
+
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
+
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <string>
 #include <vector>
@@ -42,7 +47,61 @@ enum vku_shader_stage_t {
     VKU_SPIRV_TESS_EVAL,
 };
 
-struct vku_buffer_t;
+struct vku_opts_t {
+    std::vector<std::string> exts = { "VK_EXT_debug_utils" };
+    std::vector<std::string> layers = { "VK_LAYER_KHRONOS_validation" };
+    std::string window_name = "vk_window_name_placeholder";
+    int window_width = 800;
+    int window_heigth = 600;
+};
+
+struct vku_err_t;
+struct vku_gpu_family_ids_t;
+struct vku_spirv_t;
+
+struct vku_vertex_input_desc_t;
+struct vku_vertex_p2n0c3t2_t;
+
+struct vku_binding_desc_t;
+struct vku_mvp_t;
+
+struct vku_object_t;
+struct vku_instance_t;      /* uses (opts) */
+struct vku_surface_t;       /* uses (instance) */
+struct vku_device_t;        /* uses (surface) */
+struct vku_swapchain_t;     /* uses (device) */
+struct vku_shader_t;        /* uses (device, shader_data) */
+struct vku_renderpass_t;    /* uses (swapchain) */
+struct vku_pipeline_t;      /* uses (opts, renderpass, shaders, vertex_input_desc)*/
+struct vku_framebuffs_t;    /* uses (renderpass) */
+struct vku_cmdpool_t;       /* uses (device) */
+struct vku_cmdbuff_t;       /* uses (cmdpool) */
+struct vku_sem_t;           /* uses (device) */
+struct vku_fence_t;         /* uses (device) */
+struct vku_buffer_t;        /* uses (device) */
+struct vku_desc_pool_t;     /* uses (device, ?buff?, ?pipeline?) */
+struct vku_desc_set_t;      /* uses (desc_pool) */
+
+inline void vku_wait_fences(std::vector<vku_fence_t *> fences);
+inline void vku_reset_fences(std::vector<vku_fence_t *> fences);
+inline void vku_aquire_next_img(vku_swapchain_t *swc, vku_sem_t *sem, uint32_t *img_idx);
+
+inline void vku_submit_cmdbuff(
+        std::vector<std::pair<vku_sem_t *, VkPipelineStageFlags>> wait_sems,
+        vku_cmdbuff_t *cbuff,
+        vku_fence_t *fence,
+        std::vector<vku_sem_t *> sig_sems);
+
+inline void vku_present(
+        vku_swapchain_t *swc,
+        std::vector<vku_sem_t *> wait_sems,
+        uint32_t img_idx);
+
+inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *dst, vku_buffer_t *src,
+        vk_device_size_t sz);
+
+/* VKU Objects: 
+================================================================================================= */
 
 struct vku_err_t : public std::exception {
     vk_result_t vk_err;
@@ -50,14 +109,6 @@ struct vku_err_t : public std::exception {
 
     vku_err_t(vk_result_t vk_err);
     const char *what() const noexcept override;
-};
-
-struct vku_opts_t {
-    std::vector<std::string> exts = { "VK_EXT_debug_utils" };
-    std::vector<std::string> layers = { "VK_LAYER_KHRONOS_validation" };
-    std::string window_name = "vk_window_name_placeholder";
-    int window_width = 800;
-    int window_heigth = 600;
 };
 
 struct vku_gpu_family_ids_t {
@@ -78,12 +129,24 @@ struct vku_vertex_input_desc_t {
     std::vector<vk_vertex_input_attribute_description_t> attr_desc;
 };
 
+struct vku_binding_desc_t {
+    std::vector<vk_descriptor_set_layout_binding_t> layout_bindings; 
+};
+
 struct vku_vertex_p2n0c3t2_t {
     glm::vec2 pos;
     glm::vec3 color;
     glm::vec2 tex;
 
     static vku_vertex_input_desc_t get_input_desc();
+};
+
+struct vku_mvp_t {
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 proj;
+
+    static vku_binding_desc_t get_desc_set();
 };
 
 using vku_vertex2d_t = vku_vertex_p2n0c3t2_t;
@@ -167,12 +230,14 @@ struct vku_renderpass_t : public vku_object_t {
 };
 
 struct vku_pipeline_t : public vku_object_t {
-    vku_renderpass_t        *rp;
-    vk_pipeline_t           vk_pipeline;
-    vk_pipeline_layout_t    vk_layout;
+    vku_renderpass_t            *rp;
+    vk_pipeline_t               vk_pipeline;
+    vk_pipeline_layout_t        vk_layout;
+    vk_descriptor_set_layout_t  vk_desc_set_layout;
 
     vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *rp,
-            const std::vector<vku_shader_t *> &shaders, vku_vertex_input_desc_t vid);
+            const std::vector<vku_shader_t *> &shaders,
+            vku_vertex_input_desc_t vid, vku_binding_desc_t bd);
     ~vku_pipeline_t();
 };
 
@@ -205,6 +270,8 @@ struct vku_cmdbuff_t : public vku_object_t {
     void begin_rpass(vku_framebuffs_t *fbs, uint32_t img_idx);
     void bind_vert_buffs(uint32_t first_bind,
             std::vector<std::pair<vku_buffer_t *, vk_device_size_t>> buffs);
+    void bind_desc_set(vk_pipeline_bind_point_t bind_point, vk_pipeline_layout_t pipeline_alyout,
+            vku_desc_set_t *desc_set);
     void bind_idx_buff(vku_buffer_t *ibuff, uint64_t off, vk_index_type_t idx_type);
     void draw(vku_pipeline_t *pl, uint64_t vert_cnt);
     void draw_idx(vku_pipeline_t *pl, uint64_t vert_cnt);
@@ -234,6 +301,7 @@ struct vku_buffer_t : public vku_object_t {
     vk_buffer_t vk_buff;
     vk_device_memory_t vk_mem;
     void *map_ptr = nullptr;
+    size_t size;
 
     vku_buffer_t(vku_device_t *dev,
             size_t size,
@@ -259,23 +327,24 @@ struct vku_img_sampl_t : public vku_object_t {
 
 };
 
-inline void vku_wait_fences(std::vector<vku_fence_t *> fences);
-inline void vku_reset_fences(std::vector<vku_fence_t *> fences);
-inline void vku_aquire_next_img(vku_swapchain_t *swc, vku_sem_t *sem, uint32_t *img_idx);
+struct vku_desc_pool_t : public vku_object_t {
+    vku_device_t            *dev;
+    vk_descriptor_pool_t    vk_descpool;
 
-inline void vku_submit_cmdbuff(
-        std::vector<std::pair<vku_sem_t *, VkPipelineStageFlags>> wait_sems,
-        vku_cmdbuff_t *cbuff,
-        vku_fence_t *fence,
-        std::vector<vku_sem_t *> sig_sems);
+    vku_desc_pool_t(vku_device_t *dev, vk_descriptor_type_t type, uint32_t cnt);
+    ~vku_desc_pool_t();
+};
 
-inline void vku_present(
-        vku_swapchain_t *swc,
-        std::vector<vku_sem_t *> wait_sems,
-        uint32_t img_idx);
+struct vku_desc_set_t : public vku_object_t {
+    vku_desc_pool_t *dp;
+    vk_descriptor_set_t vk_desc_set;
 
-inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *dst, vku_buffer_t *src,
-        vk_device_size_t sz);
+    /* TODO: should the desc_pool be based on pipeline and recreated with the pipeline? And
+    on the buffer that uses it? */
+    vku_desc_set_t(vku_desc_pool_t *dp, vk_descriptor_set_layout_t layout,
+            vku_buffer_t *buff, uint32_t binding, vk_descriptor_type_t type);
+    ~vku_desc_set_t();
+};
 
 /* Internal : 
 ================================================================================================= */
@@ -363,6 +432,20 @@ inline vku_vertex_input_desc_t vku_vertex_p2n0c3t2_t::get_input_desc() {
                 .binding = 0,
                 .format = VK_FORMAT_R32G32_SFLOAT,
                 .offset = offsetof(vku_vertex_p2n0c3t2_t, tex)
+            }
+        }
+    };
+}
+
+inline vku_binding_desc_t vku_mvp_t::get_desc_set() {
+    return {
+        .layout_bindings = {
+            {
+                .binding = 0,
+                .descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptor_count = 1,
+                .stage_flags = VK_SHADER_STAGE_VERTEX_BIT,
+                .p_immutable_samplers = nullptr,
             }
         }
     };
@@ -827,7 +910,8 @@ inline vku_renderpass_t::~vku_renderpass_t() {
 }
 
 inline vku_pipeline_t::vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *rp,
-        const std::vector<vku_shader_t *> &shaders, vku_vertex_input_desc_t vid) : rp(rp)
+        const std::vector<vku_shader_t *> &shaders,
+        vku_vertex_input_desc_t vid, vku_binding_desc_t bd) : rp(rp)
 {
     FnScope err_scope;
 
@@ -889,7 +973,7 @@ inline vku_pipeline_t::vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *
         .rasterizer_discard_enable  = VK_FALSE,
         .polygon_mode               = VK_POLYGON_MODE_FILL,
         .cull_mode                  = VK_CULL_MODE_BACK_BIT,
-        .front_face                 = VK_FRONT_FACE_CLOCKWISE,
+        .front_face                 = VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depth_bias_enable          = VK_FALSE,
         .depth_bias_constant_factor = 0.0f,
         .depth_bias_clamp           = 0.0f,
@@ -929,9 +1013,19 @@ inline vku_pipeline_t::vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *
         .blend_constants    = { 0.0f, 0.0f, 0.0f, 0.0f },
     };
 
+    vk_descriptor_set_layout_create_info_t desc_set_layout_info {
+        .binding_count = (uint32_t)bd.layout_bindings.size(),
+        .p_bindings = bd.layout_bindings.data(),
+    };
+
+    VK_ASSERT(vk_create_descriptor_set_layout(rp->swc->dev->vk_dev, &desc_set_layout_info, nullptr,
+            &vk_desc_set_layout));
+    err_scope([&]{ vk_destroy_descriptor_set_layout(
+            rp->swc->dev->vk_dev, vk_desc_set_layout, nullptr); });
+
     vk_pipeline_layout_create_info_t pipeline_layout_info {
-        .set_layout_count           = 0,
-        .p_set_layouts              = NULL,
+        .set_layout_count           = 1,
+        .p_set_layouts              = &vk_desc_set_layout,
         .push_constant_range_count  = 0,
         .p_push_constant_ranges     = NULL,
     };
@@ -970,6 +1064,7 @@ inline vku_pipeline_t::~vku_pipeline_t() {
     rp->rm_child(this);
     vk_destroy_pipeline(rp->swc->dev->vk_dev, vk_pipeline, NULL);
     vk_destroy_pipeline_layout(rp->swc->dev->vk_dev, vk_layout, NULL);
+    vk_destroy_descriptor_set_layout(rp->swc->dev->vk_dev, vk_desc_set_layout, nullptr);
 }
 
 inline vku_framebuffs_t::vku_framebuffs_t(vku_renderpass_t *rp) : rp(rp) {
@@ -1074,6 +1169,13 @@ inline void vku_cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
             vk_offsets.data());
 }
 
+inline void vku_cmdbuff_t::bind_desc_set(vk_pipeline_bind_point_t bind_point,
+        vk_pipeline_layout_t pipeline_layout, vku_desc_set_t *desc_set)
+{
+    vk_cmd_bind_descriptor_sets(vk_buff, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1,
+            &desc_set->vk_desc_set, 0, nullptr);
+}
+
 inline void vku_cmdbuff_t::bind_idx_buff(vku_buffer_t *ibuff, uint64_t off, vk_index_type_t idx_type)
 {
     vk_cmd_bind_index_buffer(vk_buff, ibuff->vk_buff, off, idx_type);
@@ -1151,7 +1253,7 @@ inline vku_fence_t::~vku_fence_t() {
 inline vku_buffer_t::vku_buffer_t(vku_device_t *dev,
         size_t size, vk_buffer_usage_flags_t usage, vk_sharing_mode_t sh_mode,
         vk_memory_property_flags_t mem_flags)
- : dev(dev)
+ : dev(dev), size(size)
  {
     vk_buffer_create_info_t buff_info{
         .size = size,
@@ -1201,6 +1303,73 @@ inline vku_buffer_t::~vku_buffer_t() {
     vk_destroy_buffer(dev->vk_dev, vk_buff, nullptr);
     vk_free_memory(dev->vk_dev, vk_mem, nullptr);
 }
+
+inline vku_desc_pool_t::vku_desc_pool_t(vku_device_t *dev, vk_descriptor_type_t type, uint32_t cnt)
+: dev(dev)
+{
+    vk_descriptor_pool_size_t pool_size{
+        .type = type,
+        .descriptor_count = cnt,
+    };
+
+    vk_descriptor_pool_create_info_t pool_info{
+        .max_sets = cnt,
+        .pool_size_count = 1,
+        .p_pool_sizes = &pool_size,
+    };
+
+    VK_ASSERT(vk_create_descriptor_pool(dev->vk_dev, &pool_info, nullptr, &vk_descpool));
+    dev->add_child(this);
+}
+
+inline vku_desc_pool_t::~vku_desc_pool_t() {
+    cleanup();
+    dev->rm_child(this);
+    vk_destroy_descriptor_pool(dev->vk_dev, vk_descpool, nullptr);
+}
+
+inline vku_desc_set_t::vku_desc_set_t(vku_desc_pool_t *dp, vk_descriptor_set_layout_t layout,
+            vku_buffer_t *buff, uint32_t binding, vk_descriptor_type_t type)
+: dp(dp)
+{
+    vk_descriptor_set_allocate_info_t alloc_info {
+        .descriptor_pool = dp->vk_descpool,
+        .descriptor_set_count = 1,
+        .p_set_layouts = &layout,
+    };
+
+    VK_ASSERT(vk_allocate_descriptor_sets(dp->dev->vk_dev, &alloc_info, &vk_desc_set));
+
+    /* TODO: this sucks, it references the buffer, but doesn't have a mechanism to do something
+    if the buffer is freed without it's knowledge. So the buffer and descriptor set must
+    match in size, but the buffer doesn't know that, that's not ok. */
+    vk_descriptor_buffer_info_t desc_buff_info {
+        .buffer = buff->vk_buff,
+        .offset = 0,
+        .range = buff->size
+    };
+
+    vk_write_descriptor_set_t desc_write{
+        .dst_set = vk_desc_set,
+        .dst_binding = binding,
+        .dst_array_element = 0,
+        .descriptor_count = 1,
+        .descriptor_type = type,
+        .p_image_info = nullptr,
+        .p_buffer_info = &desc_buff_info,
+        .p_texel_buffer_view = nullptr,
+    };
+
+    vk_update_descriptor_sets(dp->dev->vk_dev, 1, &desc_write, 0, nullptr);
+
+    dp->add_child(this);
+}
+
+inline vku_desc_set_t::~vku_desc_set_t() {
+    cleanup();
+    dp->rm_child(this);
+}
+
 
 inline void vku_wait_fences(std::vector<vku_fence_t *> fences) {
     std::vector<vk_fence_t> vk_fences;

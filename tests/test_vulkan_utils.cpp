@@ -72,11 +72,19 @@ int main(int argc, char const *argv[])
         0, 1, 2, 2, 3, 0
     };
 
+    vku_mvp_t mvp;
+
     vku_opts_t opts;
     auto inst = new vku_instance_t(opts);
 
     auto vert = vku_spirv_compile(inst, VKU_SPIRV_VERTEX, R"___(
         #version 450
+
+        layout(binding = 0) uniform ubo_t {
+            mat4 model;
+            mat4 view;
+            mat4 proj;
+        } ubo;
 
         layout(location = 0) in vec2 in_pos;    // those are referenced by
         layout(location = 1) in vec3 in_color;  // vku_vertex2d_t::get_input_desc()
@@ -85,7 +93,7 @@ int main(int argc, char const *argv[])
         layout(location = 0) out vec3 out_color;
 
         void main() {
-            gl_Position = vec4(in_pos, 0.0, 1.0);
+            gl_Position = ubo.proj * ubo.view * ubo.model * vec4(in_pos, 0.0, 1.0);
             out_color = in_color;
         }
 
@@ -112,7 +120,8 @@ int main(int argc, char const *argv[])
         opts,
         rp,
         {sh_vert, sh_frag},
-        vku_vertex2d_t::get_input_desc()
+        vku_vertex2d_t::get_input_desc(),
+        vku_mvp_t::get_desc_set()
     );
     auto fbs =      new vku_framebuffs_t(rp);
     auto cp =       new vku_cmdpool_t(dev);
@@ -126,6 +135,19 @@ int main(int argc, char const *argv[])
     auto vbuff = create_vbuff(dev, cp, vertices);
     auto ibuff = create_ibuff(dev, cp, indices);
 
+    auto mvp_buff = new vku_buffer_t(
+        dev,
+        sizeof(mvp),
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+    auto mvp_pbuff = mvp_buff->map_data(0, sizeof(vku_mvp_t));
+
+    auto desc_pool = new vku_desc_pool_t(dev, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1);
+    auto desc_set = new vku_desc_set_t(desc_pool, pl->vk_desc_set_layout, mvp_buff, 0,
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
     /* TODO: the program ever only draws on one image and waits on the fence, we need to use
@@ -133,7 +155,8 @@ int main(int argc, char const *argv[])
     // std::map<uint32_t, vku_sem_t *> img_sems;
     // std::map<uint32_t, vku_sem_t *> draw_sems;
     // std::map<uint32_t, vku_fence_t *> fences;
-
+    double start_time = get_time_ms();
+    
     while (!glfwWindowShouldClose(inst->window)) {
         if (glfwGetKey(inst->window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             break;
@@ -143,10 +166,23 @@ int main(int argc, char const *argv[])
             uint32_t img_idx;
             vku_aquire_next_img(swc, img_sem, &img_idx);
 
+            float curr_time = ((double)get_time_ms() - start_time)/100000.;
+            DBG("curr_time: %f", curr_time);
+            curr_time *= 100;
+            mvp.model = glm::rotate(glm::mat4(1.0f), curr_time * glm::radians(90.0f),
+                    glm::vec3(0.0f, 0.0f, 1.0f));
+            mvp.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
+                    glm::vec3(0.0f, 0.0f, 1.0f));
+            mvp.proj = glm::perspective(glm::radians(45.0f),
+                    swc->vk_extent.width / (float)swc->vk_extent.height, 0.1f, 10.0f);
+            mvp.proj[1][1] *= -1;
+            memcpy(mvp_pbuff, &mvp, sizeof(mvp));
+
             cbuff->begin(0);
             cbuff->begin_rpass(fbs, img_idx);
             cbuff->bind_vert_buffs(0, {{vbuff, 0}});
             cbuff->bind_idx_buff(ibuff, 0, VK_INDEX_TYPE_UINT16);
+            cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_GRAPHICS, pl->vk_layout, desc_set);
             // cbuff->draw(pl, vertices.size());
             cbuff->draw_idx(pl, indices.size());
             cbuff->end_rpass();
@@ -171,7 +207,8 @@ int main(int argc, char const *argv[])
                     opts,
                     rp,
                     {sh_vert, sh_frag},
-                    vku_vertex2d_t::get_input_desc()
+                    vku_vertex2d_t::get_input_desc(),
+                    vku_mvp_t::get_desc_set()
                 );
                 fbs = new vku_framebuffs_t(rp);
             }
