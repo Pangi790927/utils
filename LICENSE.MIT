@@ -1,5 +1,5 @@
-Observation: json.h and backtrace.h have their own license that can be seen in
-their respective files.
+Observation: json.h, stb_image.h and backtrace.h have their own license
+that can be seen in their respective files.
 
 MIT License
 
