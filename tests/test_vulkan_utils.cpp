@@ -3,6 +3,9 @@
 #include "misc_utils.h"
 #include "time_utils.h"
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 static auto create_vbuff(auto dev, auto cp, const std::vector<vku_vertex2d_t>& vertices) {
     size_t verts_sz = vertices.size() * sizeof(vertices[0]);
     auto staging_vbuff = new vku_buffer_t(
@@ -51,6 +54,19 @@ static auto create_ibuff(auto dev, auto cp, const std::vector<uint16_t>& indices
     return ibuff;
 }
 
+static auto load_image(std::string path) {
+    int w, h, chans;
+    stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &chans, STBI_rgb_alpha);
+
+    vk_device_size_t imag_sz = w*h*4;
+    if (!pixels) {
+        DBG("Failed to load image");
+        return -1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char const *argv[])
 {
     DBG_SCOPE();
@@ -60,6 +76,8 @@ int main(int argc, char const *argv[])
     //     {{0.5f,  0.5f}, {0.0f, 1.0f, 1.0f}, {0.0f, 0.0f}},
     //     {{-0.5f, 0.5f}, {1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}}
     // };
+
+    auto imag = load_image("test_image.png");
 
     const std::vector<vku_vertex2d_t> vertices = {
         {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
@@ -167,7 +185,6 @@ int main(int argc, char const *argv[])
             vku_aquire_next_img(swc, img_sem, &img_idx);
 
             float curr_time = ((double)get_time_ms() - start_time)/100000.;
-            DBG("curr_time: %f", curr_time);
             curr_time *= 100;
             mvp.model = glm::rotate(glm::mat4(1.0f), curr_time * glm::radians(90.0f),
                     glm::vec3(0.0f, 0.0f, 1.0f));
