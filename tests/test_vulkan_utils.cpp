@@ -6,7 +6,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-static auto create_vbuff(auto dev, auto cp, const std::vector<vku_vertex2d_t>& vertices) {
+static auto create_vbuff(auto dev, auto cp, const std::vector<vku_vertex3d_t>& vertices) {
     size_t verts_sz = vertices.size() * sizeof(vertices[0]);
     auto staging_vbuff = new vku_buffer_t(
         dev,
@@ -82,15 +82,21 @@ int main(int argc, char const *argv[])
     //     {{-0.5f, 0.5f}, {1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}}
     // };
 
-    const std::vector<vku_vertex2d_t> vertices = {
-        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-        {{ 0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{ 0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-        {{-0.5f,  0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
+    const std::vector<vku_vertex3d_t> vertices = {
+        {{-0.5f, -0.5f,  0.0f}, {0, 0, 0}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+        {{ 0.5f, -0.5f,  0.0f}, {0, 0, 0}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+        {{ 0.5f,  0.5f,  0.0f}, {0, 0, 0}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+        {{-0.5f,  0.5f,  0.0f}, {0, 0, 0}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+
+        {{-0.5f, -0.5f, -0.5f}, {0, 0, 0}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+        {{ 0.5f, -0.5f, -0.5f}, {0, 0, 0}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+        {{ 0.5f,  0.5f, -0.5f}, {0, 0, 0}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+        {{-0.5f,  0.5f, -0.5f}, {0, 0, 0}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
     };
 
     const std::vector<uint16_t> indices = {
-        0, 1, 2, 2, 3, 0
+        0, 1, 2, 2, 3, 0,
+        4, 5, 6, 6, 7, 4
     };
 
     vku_mvp_t mvp;
@@ -107,15 +113,16 @@ int main(int argc, char const *argv[])
             mat4 proj;
         } ubo;
 
-        layout(location = 0) in vec2 in_pos;    // those are referenced by
-        layout(location = 1) in vec3 in_color;  // vku_vertex2d_t::get_input_desc()
-        layout(location = 2) in vec2 in_tex;
+        layout(location = 0) in vec3 in_pos;    // those are referenced by
+        layout(location = 1) in vec3 in_normal; // vku_vertex3d_t::get_input_desc()
+        layout(location = 2) in vec3 in_color;
+        layout(location = 3) in vec2 in_tex;
 
         layout(location = 0) out vec3 out_color;
         layout(location = 1) out vec2 out_tex_coord;
 
         void main() {
-            gl_Position = ubo.proj * ubo.view * ubo.model * vec4(in_pos, 0.0, 1.0);
+            gl_Position = ubo.proj * ubo.view * ubo.model * vec4(in_pos, 1.0);
             out_color = in_color;
             out_tex_coord = in_tex;
         }
@@ -143,7 +150,7 @@ int main(int argc, char const *argv[])
     auto cp =       new vku_cmdpool_t(dev);
 
     auto img = load_image(cp, "test_image.png");
-    auto view = new vku_img_view_t(img);
+    auto view = new vku_img_view_t(img, VK_IMAGE_ASPECT_COLOR_BIT);
     auto sampl = new vku_img_sampl_t(dev);
 
     auto mvp_buff = new vku_buffer_t(
@@ -177,7 +184,7 @@ int main(int argc, char const *argv[])
         opts,
         rp,
         {sh_vert, sh_frag},
-        vku_vertex2d_t::get_input_desc(),
+        vku_vertex3d_t::get_input_desc(),
         bindings
     );
     auto fbs =      new vku_framebuffs_t(rp);
@@ -252,7 +259,7 @@ int main(int argc, char const *argv[])
                     opts,
                     rp,
                     {sh_vert, sh_frag},
-                    vku_vertex2d_t::get_input_desc(),
+                    vku_vertex3d_t::get_input_desc(),
                     bindings
                 );
                 fbs = new vku_framebuffs_t(rp);

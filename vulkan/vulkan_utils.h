@@ -11,6 +11,7 @@
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -61,6 +62,7 @@ struct vku_spirv_t;
 
 struct vku_vertex_input_desc_t;
 struct vku_vertex_p2n0c3t2_t;
+struct vku_vertex_p3n3c3t2_t;
 
 struct vku_binding_desc_t;
 struct vku_mvp_t;
@@ -141,6 +143,15 @@ struct vku_vertex_p2n0c3t2_t {
     static vku_vertex_input_desc_t get_input_desc();
 };
 
+struct vku_vertex_p3n3c3t2_t {
+    glm::vec3 pos;
+    glm::vec3 normal;
+    glm::vec3 color;
+    glm::vec2 tex;
+
+    static vku_vertex_input_desc_t get_input_desc();
+};
+
 struct vku_mvp_t {
     glm::mat4 model;
     glm::mat4 view;
@@ -150,6 +161,7 @@ struct vku_mvp_t {
 };
 
 using vku_vertex2d_t = vku_vertex_p2n0c3t2_t;
+using vku_vertex3d_t = vku_vertex_p3n3c3t2_t;
 
 struct vku_object_t {
     static GLFWwindow *_window;
@@ -206,6 +218,9 @@ struct vku_swapchain_t : public vku_object_t {
     vk_swapchain_khr_t              vk_swapchain;
     std::vector<vk_image_t>         vk_sc_images;
     std::vector<vk_image_view_t>    vk_sc_image_views;
+
+    vku_image_t *depth_imag;
+    vku_img_view_t *depth_view;
 
     vku_swapchain_t(vku_device_t *dev);
     ~vku_swapchain_t();
@@ -324,7 +339,8 @@ struct vku_image_t : public vku_object_t {
     uint32_t height;
     vk_format_t fmt;
 
-    vku_image_t(vku_device_t *dev, uint32_t width, uint32_t height, vk_format_t fmt);
+    vku_image_t(vku_device_t *dev, uint32_t width, uint32_t height, vk_format_t fmt,
+            vk_image_usage_flags_t usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     ~vku_image_t();
 
     void transition_layout(vku_cmdpool_t *cp,
@@ -336,7 +352,7 @@ struct vku_img_view_t : public vku_object_t {
     vk_image_view_t vk_view;
     vku_image_t *img;
 
-    vku_img_view_t(vku_image_t *img);
+    vku_img_view_t(vku_image_t *img, vk_image_aspect_flags_t aspect_mask);
     ~vku_img_view_t();
 };
 
@@ -558,6 +574,42 @@ inline vku_vertex_input_desc_t vku_vertex_p2n0c3t2_t::get_input_desc() {
                 .binding = 0,
                 .format = VK_FORMAT_R32G32_SFLOAT,
                 .offset = offsetof(vku_vertex_p2n0c3t2_t, tex)
+            }
+        }
+    };
+}
+
+inline vku_vertex_input_desc_t vku_vertex_p3n3c3t2_t::get_input_desc() {
+    return {
+        .bind_desc = {
+            .binding = 0,
+            .stride = sizeof(vku_vertex_p3n3c3t2_t),
+            .input_rate = VK_VERTEX_INPUT_RATE_VERTEX
+        },
+        .attr_desc = {
+            {
+                .location = 0,
+                .binding = 0,
+                .format = VK_FORMAT_R32G32B32_SFLOAT,
+                .offset = offsetof(vku_vertex_p3n3c3t2_t, pos)
+            },
+            {
+                .location = 1,
+                .binding = 0,
+                .format = VK_FORMAT_R32G32B32_SFLOAT,
+                .offset = offsetof(vku_vertex_p3n3c3t2_t, normal)
+            },
+            {
+                .location = 2,
+                .binding = 0,
+                .format = VK_FORMAT_R32G32B32_SFLOAT,
+                .offset = offsetof(vku_vertex_p3n3c3t2_t, color)
+            },
+            {
+                .location = 3,
+                .binding = 0,
+                .format = VK_FORMAT_R32G32_SFLOAT,
+                .offset = offsetof(vku_vertex_p3n3c3t2_t, tex)
             }
         }
     };
@@ -927,11 +979,18 @@ inline vku_swapchain_t::vku_swapchain_t(vku_device_t *dev) : dev(dev) {
             vk_destroy_image_view(dev->vk_dev, vk_sc_image_views[i], NULL); });
     }
 
+    /* TODO: this is problematic, here depth_imag is dependent on dev and not on swapchain, so
+    if we delete dev we have a double free */
+    depth_imag = new vku_image_t(dev, vk_extent.width, vk_extent.height, VK_FORMAT_D32_SFLOAT,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+    depth_view = new vku_img_view_t(depth_imag, VK_IMAGE_ASPECT_DEPTH_BIT);
+
     err_scope.disable();
     dev->add_child(this);
 }
 
 inline vku_swapchain_t::~vku_swapchain_t() {
+    delete depth_imag;
     cleanup();
     dev->rm_child(this);
     for (auto &iv : vk_sc_image_views)
@@ -988,10 +1047,26 @@ inline vku_renderpass_t::vku_renderpass_t(vku_swapchain_t *swc) : swc(swc) {
         .final_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
     };
 
+    vk_attachment_description_t depth_attach {
+        .format = swc->depth_view->img->fmt,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .load_op = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .store_op = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .stencil_load_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencil_store_op = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initial_layout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .final_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+
     /* indexes in color_attach vector, also in shader: layout(location = 0) out vec4 outColor */
     vk_attachment_reference_t color_attach_ref {
         .attachment = 0,
         .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+
+    vk_attachment_reference_t depth_attach_ref {
+        .attachment = 1,
+        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
     };
 
     /* subpasses are postprocessing stages, we only use one pass for now */
@@ -999,6 +1074,7 @@ inline vku_renderpass_t::vku_renderpass_t(vku_swapchain_t *swc) : swc(swc) {
         .pipeline_bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS,
         .color_attachment_count = 1,
         .p_color_attachments = &color_attach_ref,
+        .p_depth_stencil_attachment = &depth_attach_ref,
     };
 
     /* TODO: expose dependency to exterior because else it doesn't make sense to have sems waiting
@@ -1006,15 +1082,19 @@ inline vku_renderpass_t::vku_renderpass_t(vku_swapchain_t *swc) : swc(swc) {
     vk_subpass_dependency_t dependency {
         .src_subpass = VK_SUBPASS_EXTERNAL,
         .dst_subpass = 0,
-        .src_stage_mask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        .dst_stage_mask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .src_stage_mask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |   
+                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        .dst_stage_mask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         .src_access_mask = 0,
-        .dst_access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .dst_access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
     };
 
+    std::array<vk_attachment_description_t, 2> attachments = {color_attach, depth_attach};
     vk_render_pass_create_info_t render_pass_info {
-        .attachment_count = 1,
-        .p_attachments = &color_attach,
+        .attachment_count = (uint32_t)attachments.size(),
+        .p_attachments = attachments.data(),
         .subpass_count = 1,
         .p_subpasses = &subpass,
         .dependency_count = 1,
@@ -1136,6 +1216,18 @@ inline vku_pipeline_t::vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *
         .blend_constants    = { 0.0f, 0.0f, 0.0f, 0.0f },
     };
 
+    vk_pipeline_depth_stencil_state_create_info_t depth_stancil{
+        .depth_test_enable = VK_TRUE,
+        .depth_write_enable = VK_TRUE,
+        .depth_compare_op = VK_COMPARE_OP_LESS,
+        .depth_bounds_test_enable = VK_FALSE,
+        .stencil_test_enable = VK_FALSE,
+        .front = {},
+        .back = {},
+        .min_depth_bounds = 0.0,
+        .max_depth_bounds = 1.0,
+    };
+
     auto bind_descriptors = bd.get_descriptors();
     vk_descriptor_set_layout_create_info_t desc_set_layout_info {
         .binding_count = (uint32_t)bind_descriptors.size(),
@@ -1166,7 +1258,7 @@ inline vku_pipeline_t::vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *
         .p_viewport_state       = &vp_info,
         .p_rasterization_state  = &raster_info,
         .p_multisample_state    = &multisample_info,
-        .p_depth_stencil_state  = NULL,
+        .p_depth_stencil_state  = &depth_stancil,
         .p_color_blend_state    = &blend_info,
         .p_dynamic_state        = &dyn_info,
         .layout                 = vk_layout,
@@ -1196,11 +1288,14 @@ inline vku_framebuffs_t::vku_framebuffs_t(vku_renderpass_t *rp) : rp(rp) {
 
     FnScope err_scope;
     for (int i = 0; i < vk_fbuffs.size(); i++) {
-        vk_image_view_t attachs[] = { rp->swc->vk_sc_image_views[i] };
+        vk_image_view_t attachs[] = {
+            rp->swc->vk_sc_image_views[i],
+            rp->swc->depth_view->vk_view
+        };
         
         vk_framebuffer_create_info_t fbuff_info {
             .render_pass = rp->vk_render_pass,
-            .attachment_count = 1,
+            .attachment_count = 2,
             .p_attachments = attachs,
             .width = rp->swc->vk_extent.width,
             .height = rp->swc->vk_extent.height,
@@ -1263,7 +1358,14 @@ inline void vku_cmdbuff_t::begin(vk_command_buffer_usage_flags_t flags) {
 }
 
 inline void vku_cmdbuff_t::begin_rpass(vku_framebuffs_t *fbs, uint32_t img_idx) {
-    vk_clear_value_t clear_color = {{{ 0.0f, 0.0f, 0.0f, 1.0f}}};
+    vk_clear_value_t clear_color[] = {
+        {
+            .color = {{ 0.0f, 0.0f, 0.0f, 1.0f }},
+        },
+        {
+            .depth_stencil = { 1.0f, 0 },
+        }
+    };
 
     vk_render_pass_begin_info_t begin_info {
         .render_pass = fbs->rp->vk_render_pass,
@@ -1272,8 +1374,8 @@ inline void vku_cmdbuff_t::begin_rpass(vku_framebuffs_t *fbs, uint32_t img_idx) 
             .offset = {0, 0},
             .extent = fbs->rp->swc->vk_extent,
         },
-        .clear_value_count = 1,
-        .p_clear_values = &clear_color,
+        .clear_value_count = 2,
+        .p_clear_values = clear_color,
     };
 
     vk_cmd_begin_render_pass(vk_buff, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
@@ -1428,7 +1530,8 @@ inline vku_buffer_t::~vku_buffer_t() {
     vk_free_memory(dev->vk_dev, vk_mem, nullptr);
 }
 
-inline vku_image_t::vku_image_t(vku_device_t *dev, uint32_t width, uint32_t height, vk_format_t fmt)
+inline vku_image_t::vku_image_t(vku_device_t *dev, uint32_t width, uint32_t height, vk_format_t fmt,
+        vk_image_usage_flags_t usage)
 : dev(dev), width(width), height(height), fmt(fmt)
 {
     vk_image_create_info_t image_info{
@@ -1444,7 +1547,7 @@ inline vku_image_t::vku_image_t(vku_device_t *dev, uint32_t width, uint32_t heig
         .array_layers = 1,
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        .usage = usage,
         .sharing_mode = VK_SHARING_MODE_EXCLUSIVE,
         .initial_layout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
@@ -1494,6 +1597,13 @@ inline void vku_image_t::transition_layout(vku_cmdpool_t *cp,
     vk_pipeline_stage_flags_t src_stage;
     vk_pipeline_stage_flags_t dst_stage;
 
+    if (new_layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+        barrier.subresource_range.aspect_mask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    }
+    else {
+        barrier.subresource_range.aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
+    }
+
     if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
         new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
     {
@@ -1512,12 +1622,23 @@ inline void vku_image_t::transition_layout(vku_cmdpool_t *cp,
         src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     }
-    /* TODO: don't we need a transition from shader_read to transfer_dst? That for transfering
-    inside the image later on? */
+    else if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
+             new_layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+    {
+        barrier.src_access_mask = 0;
+        barrier.dst_access_mask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+        src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    }
     else {
         throw vku_err_t(sformat("unsupported layout transition for image! %d -> %d",
                 old_layout, new_layout));
     }
+
+    /* TODO: don't we need a transition from shader_read to transfer_dst? That for transfering
+    inside the image later on? */
 
     vk_cmd_pipeline_barrier(cbuff->vk_buff, src_stage, dst_stage,
             0, 0, nullptr, 0, nullptr, 1, &barrier);
@@ -1595,13 +1716,15 @@ inline vku_image_t::~vku_image_t() {
     vk_free_memory(dev->vk_dev, vk_img_mem, nullptr);
 }
 
-inline vku_img_view_t::vku_img_view_t(vku_image_t *img) : img(img) {
+inline vku_img_view_t::vku_img_view_t(vku_image_t *img, vk_image_aspect_flags_t aspect_mask)
+: img(img)
+{
     vk_image_view_create_info_t view_info {
         .image = img->vk_img,
         .view_type = VK_IMAGE_VIEW_TYPE_2D,
         .format = img->fmt,
         .subresource_range = {
-            .aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .aspect_mask = aspect_mask,
             .base_mip_level = 0,
             .level_count = 1,
             .base_array_layer = 0,
@@ -2000,7 +2123,6 @@ inline int vku_score_phydev(vk_physical_device_t dev, vk_surface_khr_t surf) {
     }
 
     /* TODO: add logging functions for our current support */
-
     return score;
 }
 
