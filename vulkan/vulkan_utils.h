@@ -108,6 +108,7 @@ struct vku_err_t : public std::exception {
     std::string err_str;
 
     vku_err_t(vk_result_t vk_err);
+    vku_err_t(const std::string& str);
     const char *what() const noexcept override;
 };
 
@@ -130,7 +131,7 @@ struct vku_vertex_input_desc_t {
 };
 
 struct vku_binding_desc_t {
-    std::vector<vk_descriptor_set_layout_binding_t> layout_bindings; 
+    std::vector<vk_descriptor_set_layout_binding_t> layout_bindings;
 };
 
 struct vku_vertex_p2n0c3t2_t {
@@ -316,15 +317,242 @@ struct vku_buffer_t : public vku_object_t {
 };
 
 struct vku_image_t : public vku_object_t {
+    vku_device_t        *dev;
+    vk_image_t          vk_img;
+    vk_device_memory_t  vk_img_mem;
 
+    uint32_t width;
+    uint32_t height;
+    vk_format_t fmt;
+
+    vku_image_t(vku_device_t *dev, uint32_t width, uint32_t height, vk_format_t fmt)
+    : dev(dev), width(width), height(height), fmt(fmt)
+    {
+        vk_image_create_info_t image_info{
+            .image_type = VK_IMAGE_TYPE_2D,
+            .extent = {
+                .width = width,
+                .height = height,
+                .depth = 1,
+            },
+            .mip_levels = 1,
+            .array_layers = 1,
+            .format = fmt,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .initial_layout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharing_mode = VK_SHARING_MODE_EXCLUSIVE,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .flags = 0,
+        };
+
+        VK_ASSERT(vk_create_image(dev->vk_dev, &image_info, nullptr, &vk_img));
+        FnScope err_scope([&]{ vk_destroy_image(dev->vk_dev, vk_img, nullptr); });
+
+        vk_memory_requirements_t mem_req;
+        vk_get_image_memory_requirements(dev->vk_dev, vk_img, &mem_req);
+
+        vk_memory_allocate_info_t alloc_info{
+            .allocation_size = mem_req.size,
+            .memory_type_index = vku_find_memory_type(dev->vk_dev, mem_req.memory_type_bits,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+        };
+
+        VK_ASSERT(vk_allocate_memory(vk->vk_dev, &alloc_info, nullptr, &vk_img_mem));
+        VK_ASSERT(vk_bind_image_memory(vk->vk_dev, vk_img, vk_img_mem, 0));
+
+        dev->add_child(this);
+        err_scope.disable();
+    }
+
+    void transition_layout(vku_cmdpool_t *cp,
+            vk_image_layout_t old_layout, vk_image_layout_t new_layout)
+    {
+        auto cbuff = std::make_unique<vku_cmdbuff_t>(cp);
+        auto fence = std::make_unique<vku_fence_t>(cp->dev);
+
+        cbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+        
+        vk_image_memory_barrier_t barrier {
+            .old_layout = old_layout,
+            .new_layout = new_layout,
+            .src_queue_family_index = VK_QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = VK_QUEUE_FAMILY_IGNORED,
+            .image = vk_img,
+            .subresource_range = {
+                .aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 0,
+            },
+        };
+
+        vk_pipeline_stage_flags_t src_stage;
+        vk_pipeline_stage_flags_t dst_stage;
+
+        if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
+            new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+        {
+            barrier.src_access_mask = 0;
+            barrier.dst_access_mask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+            src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        }
+        else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+                 new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        {
+            barrier.src_access_mask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dst_access_mask = VK_ACCESS_SHADER_READ_BIT;
+
+            src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        }
+        /* TODO: don't we need a transition from shader_read to transfer_dst? That for transfering
+        inside the image later on? */
+        else {
+            throw vku_err_t(sformat("unsupported layout transition for image! %d -> %d",
+                    old_layout, new_layout));
+        }
+
+        vk_cmd_pipeline_barrier(cbuff->vk_buff, src_stage, dst_stage,
+                0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        cbuff->end();
+
+        vku_submit_cmdbuff({}, cbuff.get(), fence.get(), {});
+        vku_wait_fences({fence.get()});
+    }
+
+    void set_data(vku_cmdpool_t *cp, void *data, uint32_t sz) {
+        uint32_t img_sz = width * height * 4;
+
+        if (img_sz != sz)
+            throw vku_err_t(sformat("data size(%d) does not match with image size(%d)", sz, img_sz));
+
+        auto buff = std::make_unique<vku_buffer_t>(
+            cp->dev,
+            img_sz,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_SHARING_MODE_EXCLUSIVE,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+        );
+
+        memcpy(buff->map_data(0, img_sz), data, img_sz);
+        buff->unmap_data();
+
+        transition_layout(cp, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        auto cbuff = std::make_unique<vku_cmdbuff_t>(cp);
+        auto fence = std::make_unique<vku_fence_t>(cp->dev);
+
+        cbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+        vk_buffer_image_copy region{
+            .buffer_offset = 0,
+            .buffer_row_length = 0,
+            .buffer_image_height = 0,
+            .image_subresource = {
+                .aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mip_level = 0,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+            .image_offset = { .x = 0, .y = 0, .z = 0 },
+            .image_extent = {
+                .width = width,
+                .height = height,
+                .depth = 1,
+            } 
+        };
+        vk_cmd_copy_buffer_to_image(
+            cbuff->vk_buff,
+            buff->vk_buff,
+            vk_img,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1,
+            &region
+        );
+
+        cbuff->end();
+
+        vku_submit_cmdbuff({}, cbuff.get(), fence.get(), {});
+        vku_wait_fences({fence.get()});
+
+        transition_layout(cp, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    ~vku_image_t() {
+        cleanup();
+        dev->rm_child(this);
+
+        vk_destroy_image(dev->vk_dev, vk_img, nullptr);
+        vk_free_memory(dev->vk_dev, vk_img_mem, nullptr);
+    }
 };
 
 struct vku_img_view_t : public vku_object_t {
+    vku_img_view_t() {
+        VkImageView imageView;
 
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = textureImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+
+        if (vkCreateImageView(device, &viewInfo, nullptr, &textureImageView) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create texture image view!");
+        }
+    }
+    ~vku_img_view_t() {
+        vkDestroyImageView(device, textureImageView, nullptr);
+    }
 };
 
 struct vku_img_sampl_t : public vku_object_t {
+    vku_img_sampl_t() {
+        VkSampler textureSampler;
 
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+
+        VkSamplerCreateInfo samplerInfo{};
+        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.anisotropyEnable = VK_TRUE;
+        samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+        // samplerInfo.anisotropyEnable = VK_FALSE;
+        // samplerInfo.maxAnisotropy = 1.0f;
+        samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+        samplerInfo.unnormalizedCoordinates = VK_FALSE;
+        samplerInfo.compareEnable = VK_FALSE;
+        samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        samplerInfo.mipLodBias = 0.0f;
+        samplerInfo.minLod = 0.0f;
+        samplerInfo.maxLod = 0.0f;
+
+        if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create texture sampler!");
+        }
+    }
+
+    vku_img_sampl_t() {
+        vkDestroySampler(device, textureSampler, nullptr);
+    }
 };
 
 struct vku_desc_pool_t : public vku_object_t {
@@ -402,6 +630,8 @@ inline uint32_t vku_find_memory_type(vku_device_t *dev,
 inline vku_err_t::vku_err_t(vk_result_t vk_err) : vk_err(vk_err) {
     err_str = sformat("VULKAN_UTILS_ERR: %s[%d]", vk_err_str(vk_err), vk_err);
 }
+
+inline vku_err_t::vku_err_t(const std::string &str) : err_str(str), vk_err(-1) {}
 
 inline const char *vku_err_t::what() const noexcept {
     return err_str.c_str();
@@ -686,11 +916,12 @@ inline vku_device_t::vku_device_t(vku_surface_t *surf) : surf(surf) {
             .p_queue_priorities = &queue_prio
         });
 
-    vk_physical_device_features_t dev_feat;
+    vk_physical_device_features_t dev_feat{};
     vk_get_physical_device_features(vk_phy_dev, &dev_feat);
 
     std::vector<const char*> dev_exts = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     std::vector<const char*> dev_layers = { "VK_LAYER_KHRONOS_validation" };
+    dev_feat.sampler_anisotropy = VK_TRUE;
 
     vk_device_create_info_t dev_info {
         .queue_create_info_count = (uint32_t)dev_ques.size(),
@@ -1607,6 +1838,11 @@ inline int vku_score_phydev(vk_physical_device_t dev, vk_surface_khr_t surf) {
         score += 10;
     if (dev_feat.geometry_shader)
         score += 10;
+
+    if (!def_feat.sampler_anisotropy) {
+        DBG("sampler_anisotropy must be supported, but it is not supported by this GPU");
+        return -1;
+    }
 
     std::set<std::string> required_ext = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME
