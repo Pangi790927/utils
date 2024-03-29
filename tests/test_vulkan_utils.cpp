@@ -54,17 +54,22 @@ static auto create_ibuff(auto dev, auto cp, const std::vector<uint16_t>& indices
     return ibuff;
 }
 
-static auto load_image(std::string path) {
+static auto load_image(vku_cmdpool_t *cp, std::string path) {
     int w, h, chans;
     stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &chans, STBI_rgb_alpha);
 
+    /* TODO: some more logs around here */
     vk_device_size_t imag_sz = w*h*4;
     if (!pixels) {
-        DBG("Failed to load image");
-        return -1;
+        throw vku_err_t("Failed to load image");
     }
 
-    return 0;
+    auto img = new vku_image_t(cp->dev, w, h, VK_FORMAT_R8G8B8A8_SRGB);
+    img->set_data(cp, pixels, imag_sz);
+
+    stbi_image_free(pixels);
+
+    return img;
 }
 
 int main(int argc, char const *argv[])
@@ -77,13 +82,11 @@ int main(int argc, char const *argv[])
     //     {{-0.5f, 0.5f}, {1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}}
     // };
 
-    auto imag = load_image("test_image.png");
-
     const std::vector<vku_vertex2d_t> vertices = {
-        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-        {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+        {{ 0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+        {{ 0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+        {{-0.5f,  0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
     };
 
     const std::vector<uint16_t> indices = {
@@ -106,13 +109,15 @@ int main(int argc, char const *argv[])
 
         layout(location = 0) in vec2 in_pos;    // those are referenced by
         layout(location = 1) in vec3 in_color;  // vku_vertex2d_t::get_input_desc()
-        layout(location = 2) in vec3 in_tex;
+        layout(location = 2) in vec2 in_tex;
 
         layout(location = 0) out vec3 out_color;
+        layout(location = 1) out vec2 out_tex_coord;
 
         void main() {
             gl_Position = ubo.proj * ubo.view * ubo.model * vec4(in_pos, 0.0, 1.0);
             out_color = in_color;
+            out_tex_coord = in_tex;
         }
 
     )___");
@@ -120,38 +125,26 @@ int main(int argc, char const *argv[])
     auto frag = vku_spirv_compile(inst, VKU_SPIRV_FRAGMENT, R"___(
         #version 450
 
-        layout(location = 0) in vec3 in_color;  // this is referenced by the vert shader
+        layout(location = 0) in vec3 in_color;      // this is referenced by the vert shader
+        layout(location = 1) in vec2 in_tex_coord;  // this is referenced by the vert shader
+
         layout(location = 0) out vec4 out_color;
+
+        layout(binding = 1) uniform sampler2D tex_sampler;
 
         void main() {
             out_color = vec4(in_color, 1.0);
+            out_color = texture(tex_sampler, in_tex_coord);
         }
     )___");
 
     auto surf =     new vku_surface_t(inst);
     auto dev =      new vku_device_t(surf);
-    auto sh_vert =  new vku_shader_t(dev, vert);
-    auto sh_frag =  new vku_shader_t(dev, frag);
-    auto swc =      new vku_swapchain_t(dev);
-    auto rp =       new vku_renderpass_t(swc);
-    auto pl =       new vku_pipeline_t(
-        opts,
-        rp,
-        {sh_vert, sh_frag},
-        vku_vertex2d_t::get_input_desc(),
-        vku_mvp_t::get_desc_set()
-    );
-    auto fbs =      new vku_framebuffs_t(rp);
     auto cp =       new vku_cmdpool_t(dev);
 
-    auto img_sem =  new vku_sem_t(dev);
-    auto draw_sem = new vku_sem_t(dev);
-    auto fence =    new vku_fence_t(dev);
-
-    auto cbuff =    new vku_cmdbuff_t(cp);
-
-    auto vbuff = create_vbuff(dev, cp, vertices);
-    auto ibuff = create_ibuff(dev, cp, indices);
+    auto img = load_image(cp, "test_image.png");
+    auto view = new vku_img_view_t(img);
+    auto sampl = new vku_img_sampl_t(dev);
 
     auto mvp_buff = new vku_buffer_t(
         dev,
@@ -162,9 +155,44 @@ int main(int argc, char const *argv[])
     );
     auto mvp_pbuff = mvp_buff->map_data(0, sizeof(vku_mvp_t));
 
-    auto desc_pool = new vku_desc_pool_t(dev, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1);
-    auto desc_set = new vku_desc_set_t(desc_pool, pl->vk_desc_set_layout, mvp_buff, 0,
-            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+    vku_binding_desc_t bindings = {
+        .binds = {
+            vku_binding_desc_t::sampl_binding_t::make_bind(
+                vku_img_sampl_t::get_desc_set(),
+                view,
+                sampl
+            ),
+            vku_binding_desc_t::buff_binding_t::make_bind(
+                vku_mvp_t::get_desc_set(),
+                mvp_buff
+            ),
+        },
+    };
+
+    auto sh_vert =  new vku_shader_t(dev, vert);
+    auto sh_frag =  new vku_shader_t(dev, frag);
+    auto swc =      new vku_swapchain_t(dev);
+    auto rp =       new vku_renderpass_t(swc);
+    auto pl =       new vku_pipeline_t(
+        opts,
+        rp,
+        {sh_vert, sh_frag},
+        vku_vertex2d_t::get_input_desc(),
+        bindings
+    );
+    auto fbs =      new vku_framebuffs_t(rp);
+
+    auto img_sem =  new vku_sem_t(dev);
+    auto draw_sem = new vku_sem_t(dev);
+    auto fence =    new vku_fence_t(dev);
+
+    auto cbuff =    new vku_cmdbuff_t(cp);
+
+    auto vbuff = create_vbuff(dev, cp, vertices);
+    auto ibuff = create_ibuff(dev, cp, indices);
+
+    auto desc_pool = new vku_desc_pool_t(dev, bindings, 1);
+    auto desc_set = new vku_desc_set_t(desc_pool, pl->vk_desc_set_layout, bindings);
 
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
@@ -225,7 +253,7 @@ int main(int argc, char const *argv[])
                     rp,
                     {sh_vert, sh_frag},
                     vku_vertex2d_t::get_input_desc(),
-                    vku_mvp_t::get_desc_set()
+                    bindings
                 );
                 fbs = new vku_framebuffs_t(rp);
             }
