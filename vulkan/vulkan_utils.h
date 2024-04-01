@@ -22,6 +22,9 @@
 #include <fstream>
 #include <vector>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #define VK_ASSERT(fn_call)                                                                         \
 do {                                                                                               \
     vk_result_t vk_err;                                                                            \
@@ -66,6 +69,8 @@ struct vku_vertex_p3n3c3t2_t;
 
 struct vku_binding_desc_t;
 struct vku_mvp_t;
+struct vku_ubo_t;
+struct vku_ssbo_t;
 
 struct vku_object_t;
 struct vku_instance_t;      /* uses (opts) */
@@ -156,8 +161,18 @@ struct vku_mvp_t {
     glm::mat4 model;
     glm::mat4 view;
     glm::mat4 proj;
+};
 
-    static vk_descriptor_set_layout_binding_t get_desc_set();
+/* Uniform Buffer Object */
+struct vku_ubo_t {
+    static vk_descriptor_set_layout_binding_t get_desc_set(uint32_t binding,
+            vk_shader_stage_flags_t stage);
+};
+
+/* Shader Storage Buffer Object */
+struct vku_ssbo_t {
+    static vk_descriptor_set_layout_binding_t get_desc_set(uint32_t binding,
+            vk_shader_stage_flags_t stage);
 };
 
 using vku_vertex2d_t = vku_vertex_p2n0c3t2_t;
@@ -254,6 +269,17 @@ struct vku_pipeline_t : public vku_object_t {
             const std::vector<vku_shader_t *> &shaders,
             vku_vertex_input_desc_t vid, const vku_binding_desc_t& bd);
     ~vku_pipeline_t();
+};
+
+struct vku_compute_pipeline_t : public vku_object_t {
+    vku_device_t                *dev;
+    vk_pipeline_t               vk_pipeline;
+    vk_pipeline_layout_t        vk_layout;
+    vk_descriptor_set_layout_t  vk_desc_set_layout;
+
+    vku_compute_pipeline_t(const vku_opts_t &opts, vku_device_t *dev,
+            vku_shader_t *shader, const vku_binding_desc_t& bd);
+    ~vku_compute_pipeline_t();
 };
 
 /*engine_create_framebuffs*/
@@ -363,7 +389,8 @@ struct vku_img_sampl_t : public vku_object_t {
     vku_img_sampl_t(vku_device_t *dev);
     ~vku_img_sampl_t();
 
-    static vk_descriptor_set_layout_binding_t get_desc_set();
+    static vk_descriptor_set_layout_binding_t get_desc_set(uint32_t binding,
+            vk_shader_stage_flags_t stage);
 };
 
 struct vku_desc_pool_t : public vku_object_t {
@@ -384,7 +411,6 @@ struct vku_desc_set_t : public vku_object_t {
             const vku_binding_desc_t& binds);
     ~vku_desc_set_t();
 };
-
 
 struct vku_binding_desc_t {
     struct binding_desc_t {
@@ -615,12 +641,26 @@ inline vku_vertex_input_desc_t vku_vertex_p3n3c3t2_t::get_input_desc() {
     };
 }
 
-inline vk_descriptor_set_layout_binding_t vku_mvp_t::get_desc_set() {
+inline vk_descriptor_set_layout_binding_t vku_ubo_t::get_desc_set(uint32_t binding,
+        vk_shader_stage_flags_t stage)
+{
     return {
-        .binding = 0,
+        .binding = binding,
         .descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .descriptor_count = 1,
-        .stage_flags = VK_SHADER_STAGE_VERTEX_BIT,
+        .stage_flags = stage,
+        .p_immutable_samplers = nullptr,
+    };
+}
+
+inline vk_descriptor_set_layout_binding_t vku_ssbo_t::get_desc_set(uint32_t binding,
+        vk_shader_stage_flags_t stage)
+{
+    return {
+        .binding = binding,
+        .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptor_count = 1,
+        .stage_flags = stage,
         .p_immutable_samplers = nullptr,
     };
 }
@@ -1283,6 +1323,68 @@ inline vku_pipeline_t::~vku_pipeline_t() {
     vk_destroy_descriptor_set_layout(rp->swc->dev->vk_dev, vk_desc_set_layout, nullptr);
 }
 
+vku_device_t                    *dev;
+    vk_pipeline_t               vk_pipeline;
+    vk_pipeline_layout_t        vk_layout;
+    vk_descriptor_set_layout_t  vk_desc_set_layout;
+
+inline vku_compute_pipeline_t::vku_compute_pipeline_t(const vku_opts_t &opts, vku_device_t *dev,
+        vku_shader_t *shader, const vku_binding_desc_t& bd)
+: dev(dev)
+{
+    FnScope err_scope;
+
+    auto bind_descriptors = bd.get_descriptors();
+    vk_descriptor_set_layout_create_info_t desc_set_layout_info {
+        .binding_count = (uint32_t)bind_descriptors.size(),
+        .p_bindings = bind_descriptors.data(),
+    };
+
+    VK_ASSERT(vk_create_descriptor_set_layout(dev->vk_dev, &desc_set_layout_info, nullptr,
+            &vk_desc_set_layout));
+    err_scope([&]{ vk_destroy_descriptor_set_layout(dev->vk_dev, vk_desc_set_layout, nullptr); });
+
+    vk_pipeline_layout_create_info_t pipeline_layout_info {
+        .set_layout_count           = 1,
+        .p_set_layouts              = &vk_desc_set_layout,
+        .push_constant_range_count  = 0,
+        .p_push_constant_ranges     = NULL,
+    };
+
+    VK_ASSERT(vk_create_pipeline_layout(dev->vk_dev, &pipeline_layout_info, NULL, &vk_layout));
+    err_scope([&]{ vk_destroy_pipeline_layout(dev->vk_dev, vk_layout, NULL); });
+
+    if (vku_get_shader_type(shader->type) != VK_SHADER_STAGE_COMPUTE_BIT) {
+        throw vku_err_t("compute_pipeline needs a compute shader");
+    }
+
+    vk_pipeline_shader_stage_create_info_t shader_info {
+        .stage  = vku_get_shader_type(shader->type),
+        .module = shader->vk_shader,
+        .p_name = "main",
+    };
+
+    vk_compute_pipeline_create_info_t pipeline_info {
+        .stage  = shader_info,
+        .layout = vk_layout,
+    };
+
+    VK_ASSERT(vk_create_compute_pipelines(
+            dev->vk_dev, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &vk_pipeline));
+
+    err_scope.disable();
+    dev->add_child(this);
+}
+
+inline vku_compute_pipeline_t::~vku_compute_pipeline_t() {
+    cleanup();
+    dev->rm_child(this);
+ 
+    vk_destroy_pipeline(dev->vk_dev, vk_pipeline, NULL);
+    vk_destroy_pipeline_layout(dev->vk_dev, vk_layout, NULL);
+    vk_destroy_descriptor_set_layout(dev->vk_dev, vk_desc_set_layout, nullptr);
+}
+
 inline vku_framebuffs_t::vku_framebuffs_t(vku_renderpass_t *rp) : rp(rp) {
     vk_fbuffs.resize(rp->swc->vk_sc_image_views.size());
 
@@ -1781,12 +1883,14 @@ inline vku_img_sampl_t::~vku_img_sampl_t() {
     vk_destroy_sampler(dev->vk_dev, vk_sampler, nullptr);
 }
 
-inline vk_descriptor_set_layout_binding_t vku_img_sampl_t::get_desc_set() {
+inline vk_descriptor_set_layout_binding_t vku_img_sampl_t::get_desc_set(uint32_t binding,
+        vk_shader_stage_flags_t stage)
+{
     return {
-        .binding = 1,
+        .binding = binding,
         .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .descriptor_count = 1,
-        .stage_flags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .stage_flags = stage,
         .p_immutable_samplers = nullptr,
     };
 }
@@ -2137,10 +2241,6 @@ inline vk_shader_stage_flag_bits_t vku_get_shader_type(vku_shader_stage_t own_ty
     }
     return VK_SHADER_STAGE_ALL;
 }
-
-
-#include <fcntl.h>
-#include <unistd.h>
 
 inline void vku_spirv_init() {
     glslang::InitializeProcess();
