@@ -304,13 +304,18 @@ int main(int argc, char const *argv[])
     auto draw_sem = new vku_sem_t(dev);
     auto fence =    new vku_fence_t(dev);
 
-    auto cbuff =    new vku_cmdbuff_t(cp);
+    auto cbuff =      new vku_cmdbuff_t(cp);
+    auto comp_cbuff = new vku_cmdbuff_t(cp);
 
     auto vbuff = create_vbuff(dev, cp, vertices);
     auto ibuff = create_ibuff(dev, cp, indices);
 
     auto desc_pool = new vku_desc_pool_t(dev, bindings, 1);
     auto desc_set = new vku_desc_set_t(desc_pool, pl->vk_desc_set_layout, bindings);
+
+    auto comp_desc_pool = new vku_desc_pool_t(dev, comp_bindings, 1);
+    auto comp_desc_set = new vku_desc_set_t(comp_desc_pool, comp_pl->vk_desc_set_layout,
+            comp_bindings);
 
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
@@ -320,7 +325,8 @@ int main(int argc, char const *argv[])
     // std::map<uint32_t, vku_sem_t *> draw_sems;
     // std::map<uint32_t, vku_fence_t *> fences;
     double start_time = get_time_ms();
-    
+   
+    DBG("Starting main loop"); 
     while (!glfwWindowShouldClose(inst->window)) {
         if (glfwGetKey(inst->window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             break;
@@ -329,6 +335,13 @@ int main(int argc, char const *argv[])
         try {
             uint32_t img_idx;
             vku_aquire_next_img(swc, img_sem, &img_idx);
+
+            comp_cbuff->begin(0);
+            comp_cbuff->bind_compute(comp_pl);
+            comp_cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_COMPUTE, comp_pl->vk_layout,
+                    comp_desc_set);
+            comp_cbuff->dispatch_compute(particles.size() / 256);
+            comp_cbuff->end();
 
             float curr_time = ((double)get_time_ms() - start_time)/100000.;
             curr_time *= 100;

@@ -318,7 +318,11 @@ struct vku_cmdbuff_t : public vku_object_t {
     void draw_idx(vku_pipeline_t *pl, uint64_t vert_cnt);
     void end_rpass();
     void end();
+
     void reset();
+
+    void bind_compute(vku_compute_pipeline_t *cpl);
+    void dispatch_compute(uint32_t x, uint32_t y = 1, uint32_t z = 1);
 };
 
 struct vku_sem_t : public vku_object_t {
@@ -1551,6 +1555,14 @@ inline void vku_cmdbuff_t::end() {
 
 inline void vku_cmdbuff_t::reset() {
     VK_ASSERT(vk_reset_command_buffer(vk_buff, 0));
+}
+
+inline void vku_cmdbuff_t::bind_compute(vku_compute_pipeline_t *cpl) {
+    vk_cmd_bind_pipeline(vk_buff, VK_PIPELINE_BIND_POINT_COMPUTE, cpl->vk_pipeline);
+}
+
+inline void vku_cmdbuff_t::dispatch_compute(uint32_t x, uint32_t y, uint32_t z) {
+    vk_cmd_dispatch(vk_buff, x, y, z);
 }
 
 inline vku_sem_t::vku_sem_t(vku_device_t *dev) : dev(dev) {
