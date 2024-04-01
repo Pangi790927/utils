@@ -1900,9 +1900,13 @@ inline vku_desc_pool_t::vku_desc_pool_t(vku_device_t *dev,
 : dev(dev)
 {
     std::vector<vk_descriptor_pool_size_t> pool_sizes;
+    std::map<decltype(binds.binds[0]->desc.descriptor_type), uint32_t> type_cnt;
     for (auto &b : binds.binds)
+        type_cnt[b->desc.descriptor_type]++;
+
+    for (auto &[type, cnt] : type_cnt)
         pool_sizes.push_back(vk_descriptor_pool_size_t{
-            .type = b->desc.descriptor_type,
+            .type = type,
             .descriptor_count = cnt,
         });
 
