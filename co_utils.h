@@ -409,6 +409,7 @@ inline task_t await(Awaiter& awaiter);
 inline task_t force_stop(int ret);
 
 /* Functions for rw from file descriptors if needed you can use them as an example */
+inline task_t connect(int fd, sockaddr *sa, socklen_t *len);
 inline task_t accept(int fd, sockaddr *sa, socklen_t *len);
 inline task_t read(int fd, void *buff, size_t len);
 inline task_t write(int fd, const void *buff, size_t len);
@@ -1410,6 +1411,46 @@ inline task_t force_stop(int ret) {
     }\
     if (ret < 0) \
         co_return ret; \
+}
+
+/* TODO: I don't really trust this transform from blocking to non-blocking of the socket,
+should investigate it further */
+inline task_t connect(int fd, sockaddr *sa, socklen_t len) {
+    int flags;
+    ASSERT_COFN(flags = fcntl(fd, F_GETFL, 0));
+    ASSERT_COFN(fcntl(fd, F_SETFL, flags | O_NONBLOCK));
+
+    int res = ::connect(fd, sa, len);
+
+    ASSERT_COFN(flags = fcntl(fd, F_GETFL, 0));
+    ASSERT_COFN(fcntl(fd, F_SETFL, flags & ~O_NONBLOCK));
+
+    if (res < 0 && errno != EINPROGRESS) {
+        co_return res;
+    }
+
+    if (res == 0)
+        co_return 0;
+
+    fd_awaiter_t awaiter {
+        .wait_cond = EPOLLOUT,
+        .fd = fd,
+    };
+    CO_INTERNAL_AWAIT(awaiter);
+
+    int result;
+    socklen_t result_len = sizeof(result);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &result, &result_len) < 0) {
+        // error, fail somehow, close socket
+        co_return -1;
+    }
+
+    if (result != 0) {
+        // connection failed; error code is in 'result'
+        co_return result;
+    }
+
+    co_return 0;
 }
 
 inline task_t accept(int fd, sockaddr *sa, socklen_t *len) {
