@@ -13,6 +13,26 @@
 
 #define LOGGER_BUFF_SIZE 1024
 
+/* or-ed with the values bellow */
+#ifndef LOGGER_VERBOSE_LVL
+#define LOGGER_VERBOSE_LVL 0
+#endif
+
+/* Additional info, but kept short, can still be on in product (example: initialization stages) */
+#ifndef LOGGER_VERBOSE_1_VAL
+#define LOGGER_VERBOSE_1_VAL false
+#endif
+
+/* A lot of additional info (example: at initialization, the contents of tables, pointers, etc.)*/
+#ifndef LOGGER_VERBOSE_2_VAL
+#define LOGGER_VERBOSE_2_VAL false
+#endif
+
+/* Logs even at runtime, so it will print lots of logs (example: inside draw loops) */
+#ifndef LOGGER_VERBOSE_3_VAL
+#define LOGGER_VERBOSE_3_VAL false
+#endif
+
 inline void logger_log_message(const char *msg) {
     printf("%s", msg);
     logger_log_autoinit(msg);
@@ -37,6 +57,28 @@ inline uint64_t logger_get_time() {
 }(dbg_filename_, dbg_line_, dbg_funcname_));
 
 #define DBG(fmt, ...) DBG_RAW(fmt, __FILE__, __LINE__, __func__, ##__VA_ARGS__)
+
+#define DBGV(fmt, ...)   \
+do { \
+    if ((LOGGER_VERBOSE_1_VAL) || ((LOGGER_VERBOSE_LVL) >= 1)) { \
+        DBG("[V  ] " fmt, ##__VA_ARGS__); \
+    } \
+} while (0)
+
+#define DBGVV(fmt, ...)  \
+do { \
+    if ((LOGGER_VERBOSE_2_VAL) || ((LOGGER_VERBOSE_LVL) >= 2)) { \
+        DBG("[VV ] " fmt, ##__VA_ARGS__); \
+    } \
+} while (0)
+
+#define DBGVVV(fmt, ...) \
+do { \
+    if ((LOGGER_VERBOSE_3_VAL) || ((LOGGER_VERBOSE_LVL) >= 3)) { \
+        DBG("[VVV] " fmt, ##__VA_ARGS__); \
+    } \
+} while (0)
+
 
 #define DBGE(fmt, ...)\
     DBG("[SYS] " fmt "[err: %s [%s], code: %d]", ##__VA_ARGS__,\

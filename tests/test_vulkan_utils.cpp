@@ -1,3 +1,5 @@
+#define LOGGER_VERBOSE_LVL 0
+
 #include "vulkan_utils.h"
 #include "debug.h"
 #include "misc_utils.h"
@@ -5,10 +7,6 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
-
-struct compute_ubo_t {
-    float dt;
-};
 
 struct part_t {
     glm::vec2 pos;
@@ -110,7 +108,6 @@ int main(int argc, char const *argv[])
     };
 
     vku_mvp_t mvp;
-    compute_ubo_t comp_ubo;
 
     vku_opts_t opts;
     auto inst = new vku_instance_t(opts);
@@ -156,109 +153,9 @@ int main(int argc, char const *argv[])
         }
     )___");
 
-    auto comp = vku_spirv_compile(inst, VKU_SPIRV_COMPUTE, R"___(
-        #version 450
-
-        layout (binding = 0) uniform params_ubo_t {
-            float dt;
-        } ubo;
-
-        struct part_t {
-            vec2 pos;
-            vec2 vel;
-            vec4 color;
-        };
-
-        layout(std140, binding = 1) readonly buffer part_ssbo_in_t {
-           part_t parts_in[];
-        };
-
-        layout(std140, binding = 2) buffer part_ssbo_out_t {
-           part_t parts_out[];
-        };
-
-        layout (local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
-
-        void main() 
-        {
-            uint index = gl_GlobalInvocationID.x;  
-
-            part_t part_in = parts_in[index];
-
-            parts_out[index].pos = part_in.pos + part_in.vel.xy * ubo.dt;
-            parts_out[index].vel = part_in.vel;
-        }
-    )___");
-
     auto surf =     new vku_surface_t(inst);
     auto dev =      new vku_device_t(surf);
     auto cp =       new vku_cmdpool_t(dev);
-
-    auto comp_ubo_buff = new vku_buffer_t(
-        dev,
-        sizeof(compute_ubo_t),
-        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-        VK_SHARING_MODE_EXCLUSIVE,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-    );
-    auto comp_ubp_pbuff = comp_ubo_buff->map_data(0, sizeof(compute_ubo_t));
-
-    std::vector<part_t> particles(256*1024);
-    uint32_t part_sz = sizeof(part_t) * particles.size();
-
-    /* TODO: initialize particle data here */
-
-    auto staging_pbuff = new vku_buffer_t(
-        dev,
-        part_sz,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_SHARING_MODE_EXCLUSIVE,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-    );
-    memcpy(staging_pbuff->map_data(0, part_sz), particles.data(), part_sz);
-    staging_pbuff->unmap_data();
-
-    auto comp_in = new vku_buffer_t(
-        dev,
-        part_sz,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_SHARING_MODE_EXCLUSIVE,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-    );
-    vku_copy_buff(cp, comp_in, staging_pbuff, part_sz);
-    delete staging_pbuff;
-
-    auto comp_out = new vku_buffer_t(
-        dev,
-        part_sz,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_SHARING_MODE_EXCLUSIVE,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-    );
-
-    vku_binding_desc_t comp_bindings = {
-        .binds = {
-            vku_binding_desc_t::buff_binding_t::make_bind(
-                vku_ubo_t::get_desc_set(0, VK_SHADER_STAGE_COMPUTE_BIT),
-                comp_ubo_buff
-            ),
-            vku_binding_desc_t::buff_binding_t::make_bind(
-                vku_ssbo_t::get_desc_set(1, VK_SHADER_STAGE_COMPUTE_BIT),
-                comp_in
-            ),
-            vku_binding_desc_t::buff_binding_t::make_bind(
-                vku_ssbo_t::get_desc_set(2, VK_SHADER_STAGE_COMPUTE_BIT),
-                comp_out
-            ),
-        }
-    };
-
-    auto sh_comp =  new vku_shader_t(dev, comp);
-    auto comp_pl =  new vku_compute_pipeline_t(opts, dev, sh_comp, comp_bindings);
-
-    /* here we have the compute pipeline created and ready to do stuff */
 
     auto img = load_image(cp, "test_image.png");
     auto view = new vku_img_view_t(img, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -295,6 +192,7 @@ int main(int argc, char const *argv[])
         opts,
         rp,
         {sh_vert, sh_frag},
+        VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         vku_vertex3d_t::get_input_desc(),
         bindings
     );
@@ -305,17 +203,12 @@ int main(int argc, char const *argv[])
     auto fence =    new vku_fence_t(dev);
 
     auto cbuff =      new vku_cmdbuff_t(cp);
-    auto comp_cbuff = new vku_cmdbuff_t(cp);
 
     auto vbuff = create_vbuff(dev, cp, vertices);
     auto ibuff = create_ibuff(dev, cp, indices);
 
     auto desc_pool = new vku_desc_pool_t(dev, bindings, 1);
     auto desc_set = new vku_desc_set_t(desc_pool, pl->vk_desc_set_layout, bindings);
-
-    auto comp_desc_pool = new vku_desc_pool_t(dev, comp_bindings, 1);
-    auto comp_desc_set = new vku_desc_set_t(comp_desc_pool, comp_pl->vk_desc_set_layout,
-            comp_bindings);
 
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
@@ -336,13 +229,6 @@ int main(int argc, char const *argv[])
             uint32_t img_idx;
             vku_aquire_next_img(swc, img_sem, &img_idx);
 
-            comp_cbuff->begin(0);
-            comp_cbuff->bind_compute(comp_pl);
-            comp_cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_COMPUTE, comp_pl->vk_layout,
-                    comp_desc_set);
-            comp_cbuff->dispatch_compute(particles.size() / 256);
-            comp_cbuff->end();
-
             float curr_time = ((double)get_time_ms() - start_time)/100000.;
             curr_time *= 100;
             mvp.model = glm::rotate(glm::mat4(1.0f), curr_time * glm::radians(90.0f),
@@ -359,7 +245,6 @@ int main(int argc, char const *argv[])
             cbuff->bind_vert_buffs(0, {{vbuff, 0}});
             cbuff->bind_idx_buff(ibuff, 0, VK_INDEX_TYPE_UINT16);
             cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_GRAPHICS, pl->vk_layout, desc_set);
-            // cbuff->draw(pl, vertices.size());
             cbuff->draw_idx(pl, indices.size());
             cbuff->end_rpass();
             cbuff->end();
@@ -383,6 +268,7 @@ int main(int argc, char const *argv[])
                     opts,
                     rp,
                     {sh_vert, sh_frag},
+                    VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
                     vku_vertex3d_t::get_input_desc(),
                     bindings
                 );

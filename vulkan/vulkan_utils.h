@@ -114,7 +114,7 @@ inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *dst, vku_buffer_t *sr
 ================================================================================================= */
 
 struct vku_err_t : public std::exception {
-    vk_result_t vk_err;
+    vk_result_t vk_err{};
     std::string err_str;
 
     vku_err_t(vk_result_t vk_err);
@@ -265,8 +265,11 @@ struct vku_pipeline_t : public vku_object_t {
     vk_pipeline_layout_t        vk_layout;
     vk_descriptor_set_layout_t  vk_desc_set_layout;
 
-    vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *rp,
+    vku_pipeline_t(
+            const vku_opts_t &opts,
+            vku_renderpass_t *rp,
             const std::vector<vku_shader_t *> &shaders,
+            vk_primitive_topology_t topology,
             vku_vertex_input_desc_t vid, const vku_binding_desc_t& bd);
     ~vku_pipeline_t();
 };
@@ -1156,9 +1159,13 @@ inline vku_renderpass_t::~vku_renderpass_t() {
     vk_destroy_render_pass(swc->dev->vk_dev, vk_render_pass, NULL);
 }
 
-inline vku_pipeline_t::vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *rp,
+inline vku_pipeline_t::vku_pipeline_t(
+        const vku_opts_t &opts, vku_renderpass_t *rp,
         const std::vector<vku_shader_t *> &shaders,
-        vku_vertex_input_desc_t vid, const vku_binding_desc_t& bd) : rp(rp)
+        vk_primitive_topology_t topology,
+        vku_vertex_input_desc_t vid,
+        const vku_binding_desc_t& bd)
+: rp(rp)
 {
     FnScope err_scope;
 
@@ -1190,7 +1197,7 @@ inline vku_pipeline_t::vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *
     };
 
     vk_pipeline_input_assembly_state_create_info_t input_assembly {
-        .topology                   = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .topology                   = topology,
         .primitive_restart_enable   = VK_FALSE,
     };
 
@@ -1273,6 +1280,12 @@ inline vku_pipeline_t::vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *
     };
 
     auto bind_descriptors = bd.get_descriptors();
+    DBGVV("cnt bind_descriptors: %ld", bind_descriptors.size());
+    for (auto &b : bind_descriptors) {
+        DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
+                b.descriptor_type, b.binding, b.stage_flags);
+    }
+
     vk_descriptor_set_layout_create_info_t desc_set_layout_info {
         .binding_count = (uint32_t)bind_descriptors.size(),
         .p_bindings = bind_descriptors.data(),
@@ -1282,6 +1295,7 @@ inline vku_pipeline_t::vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *
             &vk_desc_set_layout));
     err_scope([&]{ vk_destroy_descriptor_set_layout(
             rp->swc->dev->vk_dev, vk_desc_set_layout, nullptr); });
+    DBGVV("Allocated descriptor set layout: %p", vk_desc_set_layout);
 
     vk_pipeline_layout_create_info_t pipeline_layout_info {
         .set_layout_count           = 1,
@@ -1293,6 +1307,7 @@ inline vku_pipeline_t::vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *
     VK_ASSERT(vk_create_pipeline_layout(
             rp->swc->dev->vk_dev, &pipeline_layout_info, NULL, &vk_layout));
     err_scope([&]{ vk_destroy_pipeline_layout(rp->swc->dev->vk_dev, vk_layout, NULL); });
+    DBGVV("Allocated pipeline layout: %p", vk_layout);
 
     vk_graphics_pipeline_create_info_t pipeline_info {
         .stage_count = (uint32_t)shader_stages.size(),
@@ -1314,6 +1329,7 @@ inline vku_pipeline_t::vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *
 
     VK_ASSERT(vk_create_graphics_pipelines(
             rp->swc->dev->vk_dev, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &vk_pipeline));
+    DBGVV("Allocated pipeline: %p", vk_pipeline);
 
     err_scope.disable();
     rp->add_child(this);
@@ -1322,6 +1338,9 @@ inline vku_pipeline_t::vku_pipeline_t(const vku_opts_t &opts, vku_renderpass_t *
 inline vku_pipeline_t::~vku_pipeline_t() {
     cleanup();
     rp->rm_child(this);
+
+    DBGVV("Dealocating pipeline: %p", vk_pipeline);
+
     vk_destroy_pipeline(rp->swc->dev->vk_dev, vk_pipeline, NULL);
     vk_destroy_pipeline_layout(rp->swc->dev->vk_dev, vk_layout, NULL);
     vk_destroy_descriptor_set_layout(rp->swc->dev->vk_dev, vk_desc_set_layout, nullptr);
@@ -1339,6 +1358,11 @@ inline vku_compute_pipeline_t::vku_compute_pipeline_t(const vku_opts_t &opts, vk
     FnScope err_scope;
 
     auto bind_descriptors = bd.get_descriptors();
+    DBGVV("cnt bind_descriptors: %ld", bind_descriptors.size());
+    for (auto &b : bind_descriptors) {
+        DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
+                b.descriptor_type, b.binding, b.stage_flags);
+    }
     vk_descriptor_set_layout_create_info_t desc_set_layout_info {
         .binding_count = (uint32_t)bind_descriptors.size(),
         .p_bindings = bind_descriptors.data(),
@@ -1347,6 +1371,7 @@ inline vku_compute_pipeline_t::vku_compute_pipeline_t(const vku_opts_t &opts, vk
     VK_ASSERT(vk_create_descriptor_set_layout(dev->vk_dev, &desc_set_layout_info, nullptr,
             &vk_desc_set_layout));
     err_scope([&]{ vk_destroy_descriptor_set_layout(dev->vk_dev, vk_desc_set_layout, nullptr); });
+    DBGVV("Allocated descriptor set layout: %p", vk_desc_set_layout);
 
     vk_pipeline_layout_create_info_t pipeline_layout_info {
         .set_layout_count           = 1,
@@ -1357,6 +1382,7 @@ inline vku_compute_pipeline_t::vku_compute_pipeline_t(const vku_opts_t &opts, vk
 
     VK_ASSERT(vk_create_pipeline_layout(dev->vk_dev, &pipeline_layout_info, NULL, &vk_layout));
     err_scope([&]{ vk_destroy_pipeline_layout(dev->vk_dev, vk_layout, NULL); });
+    DBGVV("Allocated pipeline layout: %p", vk_layout);
 
     if (vku_get_shader_type(shader->type) != VK_SHADER_STAGE_COMPUTE_BIT) {
         throw vku_err_t("compute_pipeline needs a compute shader");
@@ -1375,6 +1401,7 @@ inline vku_compute_pipeline_t::vku_compute_pipeline_t(const vku_opts_t &opts, vk
 
     VK_ASSERT(vk_create_compute_pipelines(
             dev->vk_dev, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &vk_pipeline));
+    DBGVV("Allocated pipeline: %p", vk_pipeline);
 
     err_scope.disable();
     dev->add_child(this);
@@ -1383,7 +1410,9 @@ inline vku_compute_pipeline_t::vku_compute_pipeline_t(const vku_opts_t &opts, vk
 inline vku_compute_pipeline_t::~vku_compute_pipeline_t() {
     cleanup();
     dev->rm_child(this);
- 
+
+    DBGVV("Dealocating pipeline: %p", vk_pipeline);
+
     vk_destroy_pipeline(dev->vk_dev, vk_pipeline, NULL);
     vk_destroy_pipeline_layout(dev->vk_dev, vk_layout, NULL);
     vk_destroy_descriptor_set_layout(dev->vk_dev, vk_desc_set_layout, nullptr);
@@ -1504,7 +1533,9 @@ inline void vku_cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
 inline void vku_cmdbuff_t::bind_desc_set(vk_pipeline_bind_point_t bind_point,
         vk_pipeline_layout_t pipeline_layout, vku_desc_set_t *desc_set)
 {
-    vk_cmd_bind_descriptor_sets(vk_buff, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1,
+    DBGVVV("bind desc_set: %p with layout: %p bind_point: %d",
+            desc_set->vk_desc_set, pipeline_layout, bind_point);
+    vk_cmd_bind_descriptor_sets(vk_buff, bind_point, pipeline_layout, 0, 1,
             &desc_set->vk_desc_set, 0, nullptr);
 }
 
@@ -1536,7 +1567,6 @@ inline void vku_cmdbuff_draw_helper(auto vk_buff, auto pl) {
 
 inline void vku_cmdbuff_t::draw(vku_pipeline_t *pl, uint64_t vert_cnt) {
     vku_cmdbuff_draw_helper(vk_buff, pl);
-    /* TODO: more than 3 vertexes... */
     vk_cmd_draw(vk_buff, vert_cnt, 1, 0, 0);
 }
 
@@ -1558,6 +1588,7 @@ inline void vku_cmdbuff_t::reset() {
 }
 
 inline void vku_cmdbuff_t::bind_compute(vku_compute_pipeline_t *cpl) {
+    DBGVVV("bind compute pipeline: %p", cpl->vk_pipeline);
     vk_cmd_bind_pipeline(vk_buff, VK_PIPELINE_BIND_POINT_COMPUTE, cpl->vk_pipeline);
 }
 
@@ -1914,13 +1945,15 @@ inline vku_desc_pool_t::vku_desc_pool_t(vku_device_t *dev,
     std::vector<vk_descriptor_pool_size_t> pool_sizes;
     std::map<decltype(binds.binds[0]->desc.descriptor_type), uint32_t> type_cnt;
     for (auto &b : binds.binds)
-        type_cnt[b->desc.descriptor_type]++;
+        type_cnt[b->desc.descriptor_type] += cnt;
 
-    for (auto &[type, cnt] : type_cnt)
+    for (auto &[type, cnt] : type_cnt) {
         pool_sizes.push_back(vk_descriptor_pool_size_t{
             .type = type,
             .descriptor_count = cnt,
         });
+        DBGVV("pool_size: type: %x sz: %d", type, cnt);
+    }
 
     vk_descriptor_pool_create_info_t pool_info{
         .max_sets = cnt,
@@ -1929,6 +1962,8 @@ inline vku_desc_pool_t::vku_desc_pool_t(vku_device_t *dev,
     };
 
     VK_ASSERT(vk_create_descriptor_pool(dev->vk_dev, &pool_info, nullptr, &vk_descpool));
+    DBGVV("Allocated pool: %p", vk_descpool);
+
     dev->add_child(this);
 }
 
@@ -1949,6 +1984,8 @@ inline vku_desc_set_t::vku_desc_set_t(vku_desc_pool_t *dp, vk_descriptor_set_lay
     };
 
     VK_ASSERT(vk_allocate_descriptor_sets(dp->dev->vk_dev, &alloc_info, &vk_desc_set));
+    DBGVV("Allocated descriptor set: %p from pool: %p with layout: %p",
+            vk_desc_set, dp->vk_descpool, layout);
 
     /* TODO: this sucks, it references the buffer, but doesn't have a mechanism to do something
     if the buffer is freed without it's knowledge. So the buffer and descriptor set must
@@ -1957,6 +1994,12 @@ inline vku_desc_set_t::vku_desc_set_t(vku_desc_pool_t *dp, vk_descriptor_set_lay
     auto desc_writes = binds.get_writes();
     for (auto &dw : desc_writes)
         dw.dst_set = vk_desc_set;
+
+    DBGVV("writes: %ld", desc_writes.size());
+    for (auto &w : desc_writes) {
+        DBGVV("write: type: %x, bind: %d, dst_set: %p",
+                w.descriptor_type, w.dst_binding, w.dst_set);
+    }
 
     vk_update_descriptor_sets(dp->dev->vk_dev, (uint32_t)desc_writes.size(),
             desc_writes.data(), 0, nullptr);
