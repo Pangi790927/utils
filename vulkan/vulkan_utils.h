@@ -1,6 +1,10 @@
 #ifndef VULKAN_UTILS_H
 #define VULKAN_UTILS_H
 
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+
 #include "gpu_defines.h"
 #include "debug.h"
 #include "misc_utils.h"
@@ -8,10 +12,6 @@
 #include <glslang/SPIRV/GlslangToSpv.h>
 #include <vulkan/vulkan.h>
 #include <exception>
-
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>

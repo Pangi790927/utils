@@ -15,7 +15,7 @@ struct compute_ubo_t {
 struct part_t {
     glm::vec2 pos;
     glm::vec2 vel;
-    glm::vec3 color;
+    glm::vec4 color;
 
     static vku_vertex_input_desc_t get_input_desc() {
         return {
@@ -34,7 +34,7 @@ struct part_t {
                 {
                     .location = 1,
                     .binding = 0,
-                    .format = VK_FORMAT_R32G32B32_SFLOAT,
+                    .format = VK_FORMAT_R32G32B32A32_SFLOAT,
                     .offset = offsetof(part_t, color)
                 }
             }
@@ -61,7 +61,7 @@ int main(int argc, char const *argv[])
         layout(location = 0) out vec3 out_color;
 
         void main() {
-            gl_PointSize = 2.0;
+            gl_PointSize = 1.0;
             gl_Position = vec4(in_pos.xy, 0.0, 1.0);
             out_color = in_color;
         }
@@ -71,13 +71,13 @@ int main(int argc, char const *argv[])
     auto frag = vku_spirv_compile(inst, VKU_SPIRV_FRAGMENT, R"___(
         #version 450
 
-        layout(location = 0) in vec3 in_color;      // this is referenced by the vert shader
+        layout(location = 0) in vec4 in_color;      // this is referenced by the vert shader
 
         layout(location = 0) out vec4 out_color;
 
         void main() {
             vec2 coord = gl_PointCoord - vec2(0.5);
-            out_color = vec4(in_color, 0.5 - length(coord));
+            out_color = vec4(in_color.rgb, 0.5 - length(coord));
         }
     )___");
 
@@ -91,7 +91,7 @@ int main(int argc, char const *argv[])
         struct part_t {
             vec2 pos;
             vec2 vel;
-            vec3 color;
+            vec4 color;
         };
 
         layout(std140, binding = 1) readonly buffer part_ssbo_in_t {
@@ -110,6 +110,7 @@ int main(int argc, char const *argv[])
 
             part_t part_in = parts_in[index];
 
+            vec2 pos_pre = part_in.pos;
             parts_out[index].pos = part_in.pos + part_in.vel.xy * ubo.dt;
             parts_out[index].vel = part_in.vel;
             parts_out[index].color = part_in.color;
@@ -117,9 +118,11 @@ int main(int argc, char const *argv[])
             // Flip movement at window border
             if ((parts_out[index].pos.x <= -1.0) || (parts_out[index].pos.x >= 1.0)) {
                 parts_out[index].vel.x = -parts_out[index].vel.x;
+                parts_out[index].pos = pos_pre;
             }
             if ((parts_out[index].pos.y <= -1.0) || (parts_out[index].pos.y >= 1.0)) {
                 parts_out[index].vel.y = -parts_out[index].vel.y;
+                parts_out[index].pos = pos_pre;
             }
         }
     )___");
@@ -137,7 +140,7 @@ int main(int argc, char const *argv[])
     );
     auto comp_ubp_pbuff = comp_ubo_buff->map_data(0, sizeof(compute_ubo_t));
 
-    std::vector<part_t> particles(256*2048);
+    std::vector<part_t> particles(256*1024);
     uint32_t part_sz = sizeof(part_t) * particles.size();
 
     double pi = 3.141592653589;
@@ -145,15 +148,17 @@ int main(int argc, char const *argv[])
     int i = 0;
     for (auto &p : particles) {
         p.pos = glm::vec2(
-            sin(ang * i) / 2.,
-            cos(ang * i) / 2.
+            cos(ang * i) / 2.,
+            sin(ang * i) / 2.
         );
-        p.vel = glm::vec2(sin(ang * i), cos(ang * i));
+        p.vel = glm::vec2(cos(ang * i), sin(ang * i));
+        // p.vel = glm::vec2(1, 1);
         // p.color = glm::vec3(1, 1, 1);
-        p.color = glm::vec3(
+        p.color = glm::vec4(
             0.5 + sin(ang * i) / 2.,
             0.5 + cos(ang * i) / 2.,
-            0.5 + sin(ang * i) * cos(ang * i) / 2.
+            0.5 + sin(ang * i) * cos(ang * i) / 2.,
+            1.0
         );
         i++;
     }
@@ -270,7 +275,8 @@ int main(int argc, char const *argv[])
     // std::map<uint32_t, vku_fence_t *> fences;
     double start_time = get_time_ms();
    
-    DBG("Starting main loop"); 
+    uint64_t last_time_ms = get_time_ms();
+    DBG("Starting main loop");
     while (!glfwWindowShouldClose(inst->window)) {
         if (glfwGetKey(inst->window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             break;
@@ -280,8 +286,10 @@ int main(int argc, char const *argv[])
             uint32_t img_idx;
             vku_aquire_next_img(swc, img_sem, &img_idx);
 
-            comp_ubo.dt = 0.01;
+            uint64_t curr_time = get_time_ms();
+            comp_ubo.dt = (curr_time - last_time_ms) / 1000.;
             memcpy(comp_ubp_pbuff, &comp_ubo, sizeof(comp_ubo));
+            last_time_ms = curr_time;
 
             comp_cbuff->begin(0);
             comp_cbuff->bind_compute(comp_pl);
@@ -295,7 +303,7 @@ int main(int argc, char const *argv[])
 
             cbuff->begin(0);
             cbuff->begin_rpass(fbs, img_idx);
-            cbuff->bind_vert_buffs(0, {{comp_in, 0}});
+            cbuff->bind_vert_buffs(0, {{img_idx % 2 == 0 ? comp_out : comp_in, 0}});
             cbuff->draw(pl, particles.size());
             cbuff->end_rpass();
             cbuff->end();
