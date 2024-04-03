@@ -2,9 +2,18 @@ INCLCUDES := -I../ -I../ap -I../generic -I../vulkan -I.
 LIBS      := -lpthread -ldl -lglfw -lcurl -lvulkan
 # LIBS      += -lSPIRV -lSPIRV-Tools -lSPIRV-Tools-opt -lglslang -lOGLCompiler -lOSDependent 
 # LIBS      += -lSPVRemapper -lpthread -lHLSL
+
+MACHINE_INDEPENDENT := $(shell g++ -lMachineIndependent)
+ifneq (,$(findstring "cannot find -lMachineIndependent",$(MACHINE_INDEPENDENT)))
+	GLSL_ADDITIONAL_LIB := -lMachineIndependent -lGenericCodeGen
+else
+	GLSL_ADDITIONAL_LIB :=
+endif
+
 LIBS      += -Wl,--start-group
-LIBS 	  += -lglslang -lOGLCompiler -lSPIRV -lOSDependent -lMachineIndependent
-LIBS 	  += -lSPIRV-Tools -lSPIRV-Tools-opt -lSPVRemapper -lHLSL -lGenericCodeGen
+LIBS 	  += -lglslang -lOGLCompiler -lSPIRV -lOSDependent 
+LIBS 	  += -lSPIRV-Tools -lSPIRV-Tools-opt -lSPVRemapper -lHLSL 
+LIBS 	  += ${GLSL_ADDITIONAL_LIB}
 LIBS 	  += -Wl,--end-group
 LIBS      += -lpthread
 
