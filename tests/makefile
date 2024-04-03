@@ -1,7 +1,11 @@
 INCLCUDES := -I../ -I../ap -I../generic -I../vulkan -I.
 LIBS      := -lpthread -ldl -lglfw -lcurl -lvulkan
-LIBS      += -lSPIRV -lSPIRV-Tools -lSPIRV-Tools-opt -lglslang -lOGLCompiler -lOSDependent 
-LIBS      += -lSPVRemapper -lpthread -lHLSL
+# LIBS      += -lSPIRV -lSPIRV-Tools -lSPIRV-Tools-opt -lglslang -lOGLCompiler -lOSDependent 
+# LIBS      += -lSPVRemapper -lpthread -lHLSL
+LIBS      += -Wl,--start-group
+LIBS 	  += -lglslang -lOGLCompiler -lSPIRV -lOSDependent -lMachineIndependent
+LIBS 	  += -lSPIRV-Tools -lSPIRV-Tools-opt -lSPVRemapper -lHLSL -lGenericCodeGen
+LIBS 	  += -Wl,--end-group
 LIBS      += -lpthread
 
 CXX       := g++-11

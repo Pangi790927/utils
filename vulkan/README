@@ -1,2 +1,2 @@
 depends on:
-	vulkan, glfw, glslang, glm
+	vulkan, glfw, glslang, glm, vulkan-validationlayers-dev

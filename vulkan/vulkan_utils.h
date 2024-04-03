@@ -12,7 +12,7 @@
 #if __has_include(<glslang/Include/glslang_c_interface.h>)
 # define VKU_HAS_NEW_GLSLANG
 # include <glslang/Include/glslang_c_interface.h>
-# include <glslang/Public/resource_limits_c.h>
+// # include <glslang/Public/resource_limits_c.h>
 #else
 # include <glslang/SPIRV/GlslangToSpv.h>
 #endif 
@@ -28,6 +28,7 @@
 #include <set>
 #include <fstream>
 #include <vector>
+#include <map>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -568,6 +569,8 @@ inline vk_shader_stage_flag_bits_t vku_get_shader_type(vku_shader_stage_t own_ty
 
 #ifndef VKU_HAS_NEW_GLSLANG
 inline TBuiltInResource vku_spirv_resources = {};
+#else
+inline glslang_resource_t vku_spirv_resources = {};
 #endif
 
 inline void vku_spirv_uninit();
@@ -2312,17 +2315,200 @@ inline vk_shader_stage_flag_bits_t vku_get_shader_type(vku_shader_stage_t own_ty
 
 #ifdef VKU_HAS_NEW_GLSLANG
 
-inline void vku_spirv_init() {
-    /* TODO */
-}
-inline void vku_spirv_uninit() {
-    /* TODO */
-}
-
 inline vku_spirv_t vku_spirv_compile(vku_instance_t *inst, vku_shader_stage_t vku_stage,
         const char *code)
 {
+    glslang_stage_t stage;
+    switch (vku_stage) {
+        case VKU_SPIRV_VERTEX:    stage = GLSLANG_STAGE_VERTEX;         break;
+        case VKU_SPIRV_TESS_CTRL: stage = GLSLANG_STAGE_TESSCONTROL;    break;
+        case VKU_SPIRV_TESS_EVAL: stage = GLSLANG_STAGE_TESSEVALUATION; break;
+        case VKU_SPIRV_GEOMETRY:  stage = GLSLANG_STAGE_GEOMETRY;       break;
+        case VKU_SPIRV_FRAGMENT:  stage = GLSLANG_STAGE_FRAGMENT;       break;
+        case VKU_SPIRV_COMPUTE:   stage = GLSLANG_STAGE_COMPUTE;        break;
+        default:
+            DBG("Unknown shader stage type: %d", (uint32_t)vku_stage);
+            throw vku_err_t(VK_ERROR_UNKNOWN);
+    }
+
+    const glslang_input_t input = {
+        .language = GLSLANG_SOURCE_GLSL,
+        .stage = stage,
+        .client = GLSLANG_CLIENT_VULKAN,
+        .client_version = GLSLANG_TARGET_VULKAN_1_2,
+        .target_language = GLSLANG_TARGET_SPV,
+        .target_language_version = GLSLANG_TARGET_SPV_1_5,
+        .code = code,
+        .default_version = 100,
+        .default_profile = GLSLANG_NO_PROFILE,
+        .force_default_version_and_profile = false,
+        .forward_compatible = false,
+        .messages = GLSLANG_MSG_DEFAULT_BIT,
+        .resource = &vku_spirv_resources,
+    };
+
+    glslang_shader_t* shader = glslang_shader_create(&input);
+
+    if (!glslang_shader_preprocess(shader, &input)) {
+        DBG("GLSL preprocessing failed \n");
+        DBG("info_log: %s", glslang_shader_get_info_log(shader));
+        DBG("debug_log: %s", glslang_shader_get_info_debug_log(shader));
+        DBG("source_code: %s", input.code);
+        glslang_shader_delete(shader);
+        throw vku_err_t("GLSL preprocessing failed");
+    }
+
+    if (!glslang_shader_parse(shader, &input)) {
+        DBG("GLSL parsing failed");
+        DBG("%s", glslang_shader_get_info_log(shader));
+        DBG("%s", glslang_shader_get_info_debug_log(shader));
+        DBG("%s", glslang_shader_get_preprocessed_code(shader));
+        glslang_shader_delete(shader);
+        throw vku_err_t("GLSL parsing failed");
+    }
+
+    glslang_program_t* program = glslang_program_create();
+    glslang_program_add_shader(program, shader);
+
+    if (!glslang_program_link(program, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT)) {
+        DBG("%s", glslang_program_get_info_log(program));
+        DBG("%s", glslang_program_get_info_debug_log(program));
+        glslang_program_delete(program);
+        glslang_shader_delete(shader);
+        throw vku_err_t("GLSL linking failed");
+    }
+
+    glslang_program_SPIRV_generate(program, stage);
+
+    int size = glslang_program_SPIRV_get_size(program);
+    vku_spirv_t ret;
+    ret.type = vku_stage;
+    ret.content.resize(size);
+    glslang_program_SPIRV_get(program, ret.content.data());
+
+    const char* spirv_messages = glslang_program_SPIRV_get_messages(program);
+    if (spirv_messages) {
+        DBG("(SHADER) %s\b", spirv_messages);
+    }
+
+    glslang_program_delete(program);
+    glslang_shader_delete(shader);
+
+    return ret;
+}
+
+inline void vku_spirv_init() {
     /* TODO */
+    if (!glslang_initialize_process()) {
+        throw vku_err_t("Failed glslang_initialize_process");
+    }
+
+    vku_spirv_resources.max_lights = 32;
+    vku_spirv_resources.max_clip_planes = 6;
+    vku_spirv_resources.max_texture_units = 32;
+    vku_spirv_resources.max_texture_coords = 32;
+    vku_spirv_resources.max_vertex_attribs = 64;
+    vku_spirv_resources.max_vertex_uniform_components = 4096;
+    vku_spirv_resources.max_varying_floats = 64;
+    vku_spirv_resources.max_vertex_texture_image_units = 32;
+    vku_spirv_resources.max_combined_texture_image_units = 80;
+    vku_spirv_resources.max_texture_image_units = 32;
+    vku_spirv_resources.max_fragment_uniform_components = 4096;
+    vku_spirv_resources.max_draw_buffers = 32;
+    vku_spirv_resources.max_vertex_uniform_vectors = 128;
+    vku_spirv_resources.max_varying_vectors = 8;
+    vku_spirv_resources.max_fragment_uniform_vectors = 16;
+    vku_spirv_resources.max_vertex_output_vectors = 16;
+    vku_spirv_resources.max_fragment_input_vectors = 15;
+    vku_spirv_resources.min_program_texel_offset = -8;
+    vku_spirv_resources.max_program_texel_offset = 7;
+    vku_spirv_resources.max_clip_distances = 8;
+    vku_spirv_resources.max_compute_work_group_count_x = 65535;
+    vku_spirv_resources.max_compute_work_group_count_y = 65535;
+    vku_spirv_resources.max_compute_work_group_count_z = 65535;
+    vku_spirv_resources.max_compute_work_group_size_x = 1024;
+    vku_spirv_resources.max_compute_work_group_size_y = 1024;
+    vku_spirv_resources.max_compute_work_group_size_z = 64;
+    vku_spirv_resources.max_compute_uniform_components = 1024;
+    vku_spirv_resources.max_compute_texture_image_units = 16;
+    vku_spirv_resources.max_compute_image_uniforms = 8;
+    vku_spirv_resources.max_compute_atomic_counters = 8;
+    vku_spirv_resources.max_compute_atomic_counter_buffers = 1;
+    vku_spirv_resources.max_varying_components = 60;
+    vku_spirv_resources.max_vertex_output_components = 64;
+    vku_spirv_resources.max_geometry_input_components = 64;
+    vku_spirv_resources.max_geometry_output_components = 128;
+    vku_spirv_resources.max_fragment_input_components = 128;
+    vku_spirv_resources.max_image_units = 8;
+    vku_spirv_resources.max_combined_image_units_and_fragment_outputs = 8;
+    vku_spirv_resources.max_combined_shader_output_resources = 8;
+    vku_spirv_resources.max_image_samples = 0;
+    vku_spirv_resources.max_vertex_image_uniforms = 0;
+    vku_spirv_resources.max_tess_control_image_uniforms = 0;
+    vku_spirv_resources.max_tess_evaluation_image_uniforms = 0;
+    vku_spirv_resources.max_geometry_image_uniforms = 0;
+    vku_spirv_resources.max_fragment_image_uniforms = 8;
+    vku_spirv_resources.max_combined_image_uniforms = 8;
+    vku_spirv_resources.max_geometry_texture_image_units = 16;
+    vku_spirv_resources.max_geometry_output_vertices = 256;
+    vku_spirv_resources.max_geometry_total_output_components = 1024;
+    vku_spirv_resources.max_geometry_uniform_components = 1024;
+    vku_spirv_resources.max_geometry_varying_components = 64;
+    vku_spirv_resources.max_tess_control_input_components = 128;
+    vku_spirv_resources.max_tess_control_output_components = 128;
+    vku_spirv_resources.max_tess_control_texture_image_units = 16;
+    vku_spirv_resources.max_tess_control_uniform_components = 1024;
+    vku_spirv_resources.max_tess_control_total_output_components = 4096;
+    vku_spirv_resources.max_tess_evaluation_input_components = 128;
+    vku_spirv_resources.max_tess_evaluation_output_components = 128;
+    vku_spirv_resources.max_tess_evaluation_texture_image_units = 16;
+    vku_spirv_resources.max_tess_evaluation_uniform_components = 1024;
+    vku_spirv_resources.max_tess_patch_components = 120;
+    vku_spirv_resources.max_patch_vertices = 32;
+    vku_spirv_resources.max_tess_gen_level = 64;
+    vku_spirv_resources.max_viewports = 16;
+    vku_spirv_resources.max_vertex_atomic_counters = 0;
+    vku_spirv_resources.max_tess_control_atomic_counters = 0;
+    vku_spirv_resources.max_tess_evaluation_atomic_counters = 0;
+    vku_spirv_resources.max_geometry_atomic_counters = 0;
+    vku_spirv_resources.max_fragment_atomic_counters = 8;
+    vku_spirv_resources.max_combined_atomic_counters = 8;
+    vku_spirv_resources.max_atomic_counter_bindings = 1;
+    vku_spirv_resources.max_vertex_atomic_counter_buffers = 0;
+    vku_spirv_resources.max_tess_control_atomic_counter_buffers = 0;
+    vku_spirv_resources.max_tess_evaluation_atomic_counter_buffers = 0;
+    vku_spirv_resources.max_geometry_atomic_counter_buffers = 0;
+    vku_spirv_resources.max_fragment_atomic_counter_buffers = 1;
+    vku_spirv_resources.max_combined_atomic_counter_buffers = 1;
+    vku_spirv_resources.max_atomic_counter_buffer_size = 16384;
+    vku_spirv_resources.max_transform_feedback_buffers = 4;
+    vku_spirv_resources.max_transform_feedback_interleaved_components = 64;
+    vku_spirv_resources.max_cull_distances = 8;
+    vku_spirv_resources.max_combined_clip_and_cull_distances = 8;
+    vku_spirv_resources.max_samples = 4;
+    vku_spirv_resources.max_mesh_output_vertices_nv = 256;
+    vku_spirv_resources.max_mesh_output_primitives_nv = 512;
+    vku_spirv_resources.max_mesh_work_group_size_x_nv = 32;
+    vku_spirv_resources.max_mesh_work_group_size_y_nv = 1;
+    vku_spirv_resources.max_mesh_work_group_size_z_nv = 1;
+    vku_spirv_resources.max_task_work_group_size_x_nv = 32;
+    vku_spirv_resources.max_task_work_group_size_y_nv = 1;
+    vku_spirv_resources.max_task_work_group_size_z_nv = 1;
+    vku_spirv_resources.max_mesh_view_count_nv = 4;
+    vku_spirv_resources.limits.non_inductive_for_loops = 1;
+    vku_spirv_resources.limits.while_loops = 1;
+    vku_spirv_resources.limits.do_while_loops = 1;
+    vku_spirv_resources.limits.general_uniform_indexing = 1;
+    vku_spirv_resources.limits.general_attribute_matrix_vector_indexing = 1;
+    vku_spirv_resources.limits.general_varying_indexing = 1;
+    vku_spirv_resources.limits.general_sampler_indexing = 1;
+    vku_spirv_resources.limits.general_variable_indexing = 1;
+    vku_spirv_resources.limits.general_constant_matrix_vector_indexing = 1;
+    vku_spirv_resources.maxDualSourceDrawBuffersEXT = 1;
+}
+
+inline void vku_spirv_uninit() {
+    glslang_finalize_process();
 }
 
 #else /* VKU_HAS_NEW_GLSLANG */
