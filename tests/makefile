@@ -3,12 +3,15 @@ LIBS      := -lpthread -ldl -lglfw -lcurl -lvulkan
 # LIBS      += -lSPIRV -lSPIRV-Tools -lSPIRV-Tools-opt -lglslang -lOGLCompiler -lOSDependent 
 # LIBS      += -lSPVRemapper -lpthread -lHLSL
 
-MACHINE_INDEPENDENT := $(shell g++ -lMachineIndependent)
+MACHINE_INDEPENDENT := $(shell g++ -lMachineIndependent 2>&1)
 ifneq (,$(findstring "cannot find -lMachineIndependent",$(MACHINE_INDEPENDENT)))
-	GLSL_ADDITIONAL_LIB := -lMachineIndependent -lGenericCodeGen
-else
 	GLSL_ADDITIONAL_LIB :=
+else
+	GLSL_ADDITIONAL_LIB := -lMachineIndependent -lGenericCodeGen
 endif
+
+$(info "MACHINE_INDEPENDENT: ${MACHINE_INDEPENDENT}")
+$(info "GLSL_ADDITIONAL_LIB: ${GLSL_ADDITIONAL_LIB}")
 
 LIBS      += -Wl,--start-group
 LIBS 	  += -lglslang -lOGLCompiler -lSPIRV -lOSDependent 
