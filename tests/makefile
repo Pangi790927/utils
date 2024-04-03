@@ -4,7 +4,7 @@ LIBS      := -lpthread -ldl -lglfw -lcurl -lvulkan
 # LIBS      += -lSPVRemapper -lpthread -lHLSL
 
 MACHINE_INDEPENDENT := $(shell g++ -lMachineIndependent 2>&1)
-ifneq (,$(findstring "cannot find -lMachineIndependent",$(MACHINE_INDEPENDENT)))
+ifneq (,$(findstring cannot find -lMachineIndependent,$(MACHINE_INDEPENDENT)))
 	GLSL_ADDITIONAL_LIB :=
 else
 	GLSL_ADDITIONAL_LIB := -lMachineIndependent -lGenericCodeGen
