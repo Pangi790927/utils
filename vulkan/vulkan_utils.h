@@ -9,7 +9,14 @@
 #include "debug.h"
 #include "misc_utils.h"
 
-#include <glslang/SPIRV/GlslangToSpv.h>
+#if __has_include(<glslang/Include/glslang_c_interface.h>)
+# define VKU_HAS_NEW_GLSLANG
+# include <glslang/Include/glslang_c_interface.h>
+# include <glslang/Public/resource_limits_c.h>
+#else
+# include <glslang/SPIRV/GlslangToSpv.h>
+#endif 
+
 #include <vulkan/vulkan.h>
 #include <exception>
 
@@ -559,7 +566,9 @@ inline vk_extent2d_t vku_choose_extent(GLFWwindow *window, vk_surface_capabiliti
 inline int vku_score_phydev(vk_physical_device_t dev, vk_surface_khr_t surf);
 inline vk_shader_stage_flag_bits_t vku_get_shader_type(vku_shader_stage_t own_type);
 
+#ifndef VKU_HAS_NEW_GLSLANG
 inline TBuiltInResource vku_spirv_resources = {};
+#endif
 
 inline void vku_spirv_uninit();
 inline void vku_spirv_init();
@@ -2301,6 +2310,65 @@ inline vk_shader_stage_flag_bits_t vku_get_shader_type(vku_shader_stage_t own_ty
     return VK_SHADER_STAGE_ALL;
 }
 
+#ifdef VKU_HAS_NEW_GLSLANG
+
+inline void vku_spirv_init() {
+    /* TODO */
+}
+inline void vku_spirv_uninit() {
+    /* TODO */
+}
+
+inline vku_spirv_t vku_spirv_compile(vku_instance_t *inst, vku_shader_stage_t vku_stage,
+        const char *code)
+{
+    /* TODO */
+}
+
+#else /* VKU_HAS_NEW_GLSLANG */
+
+inline vku_spirv_t vku_spirv_compile(vku_instance_t *inst, vku_shader_stage_t vku_stage,
+        const char *code)
+{
+    EShLanguage stage;
+    switch (vku_stage) {
+        case VKU_SPIRV_VERTEX:    stage = EShLangVertex;         break;
+        case VKU_SPIRV_TESS_CTRL: stage = EShLangTessControl;    break;
+        case VKU_SPIRV_TESS_EVAL: stage = EShLangTessEvaluation; break;
+        case VKU_SPIRV_GEOMETRY:  stage = EShLangGeometry;       break;
+        case VKU_SPIRV_FRAGMENT:  stage = EShLangFragment;       break;
+        case VKU_SPIRV_COMPUTE:   stage = EShLangCompute;        break;
+        default:
+            DBG("Unknown shader stage type: %d", (uint32_t)vku_stage);
+            throw vku_err_t(VK_ERROR_UNKNOWN);
+    }
+    glslang::TShader shader(stage);
+    glslang::TProgram program;
+    const char *shader_strings[] = { code };
+
+    // Enable SPIR-V and Vulkan rules when parsing GLSL
+    EShMessages messages = (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules);
+
+    shader.setStrings(shader_strings, 1);
+    if (!shader.parse(&vku_spirv_resources, 100, false, messages)) {
+        DBG("Parse Failed(Log): [%s]", shader.getInfoLog());
+        DBG("Parse Failed(Dbg): [%s]", shader.getInfoDebugLog());
+        throw vku_err_t(VK_ERROR_UNKNOWN);
+    }
+
+    program.addShader(&shader);
+    if (!program.link(messages)) {
+        DBG("Link Failed(Log): [%s]", shader.getInfoLog());
+        DBG("Link Failed(Dbg): [%s]", shader.getInfoDebugLog());
+        throw vku_err_t(VK_ERROR_UNKNOWN);
+    }
+
+    vku_spirv_t ret;
+    glslang::GlslangToSpv(*program.getIntermediate(stage), ret.content);
+    ret.type = vku_stage;
+    return ret;
+}
+
 inline void vku_spirv_init() {
     glslang::InitializeProcess();
     vku_spirv_resources.maxLights = 32;
@@ -2410,47 +2478,7 @@ inline void vku_spirv_uninit() {
     glslang::FinalizeProcess();
 }
 
-inline vku_spirv_t vku_spirv_compile(vku_instance_t *inst, vku_shader_stage_t vku_stage,
-        const char *code)
-{
-    EShLanguage stage;
-    switch (vku_stage) {
-        case VKU_SPIRV_VERTEX:    stage = EShLangVertex;         break;
-        case VKU_SPIRV_TESS_CTRL: stage = EShLangTessControl;    break;
-        case VKU_SPIRV_TESS_EVAL: stage = EShLangTessEvaluation; break;
-        case VKU_SPIRV_GEOMETRY:  stage = EShLangGeometry;       break;
-        case VKU_SPIRV_FRAGMENT:  stage = EShLangFragment;       break;
-        case VKU_SPIRV_COMPUTE:   stage = EShLangCompute;        break;
-        default:
-            DBG("Unknown shader stage type: %d", (uint32_t)vku_stage);
-            throw vku_err_t(VK_ERROR_UNKNOWN);
-    }
-    glslang::TShader shader(stage);
-    glslang::TProgram program;
-    const char *shader_strings[] = { code };
-
-    // Enable SPIR-V and Vulkan rules when parsing GLSL
-    EShMessages messages = (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules);
-
-    shader.setStrings(shader_strings, 1);
-    if (!shader.parse(&vku_spirv_resources, 100, false, messages)) {
-        DBG("Parse Failed(Log): [%s]", shader.getInfoLog());
-        DBG("Parse Failed(Dbg): [%s]", shader.getInfoDebugLog());
-        throw vku_err_t(VK_ERROR_UNKNOWN);
-    }
-
-    program.addShader(&shader);
-    if (!program.link(messages)) {
-        DBG("Link Failed(Log): [%s]", shader.getInfoLog());
-        DBG("Link Failed(Dbg): [%s]", shader.getInfoDebugLog());
-        throw vku_err_t(VK_ERROR_UNKNOWN);
-    }
-
-    vku_spirv_t ret;
-    glslang::GlslangToSpv(*program.getIntermediate(stage), ret.content);
-    ret.type = vku_stage;
-    return ret;
-}
+#endif /* VKU_HAS_NEW_GLSLANG */
 
 inline uint32_t vku_find_memory_type(vku_device_t *dev,
         uint32_t type_filter, vk_memory_property_flags_t properties)

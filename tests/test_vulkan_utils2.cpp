@@ -56,9 +56,9 @@ int main(int argc, char const *argv[])
         #version 450
 
         layout(location = 0) in vec2 in_pos;    // those are referenced by
-        layout(location = 1) in vec3 in_color;  // part_t::get_input_desc()
+        layout(location = 1) in vec4 in_color;  // part_t::get_input_desc()
 
-        layout(location = 0) out vec3 out_color;
+        layout(location = 0) out vec4 out_color;
 
         void main() {
             gl_PointSize = 1.0;
@@ -102,7 +102,7 @@ int main(int argc, char const *argv[])
            part_t parts_out[];
         };
 
-        layout (local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+        layout (local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
 
         void main() 
         {
@@ -140,20 +140,20 @@ int main(int argc, char const *argv[])
     );
     auto comp_ubp_pbuff = comp_ubo_buff->map_data(0, sizeof(compute_ubo_t));
 
-    std::vector<part_t> particles(256*1024);
+    std::vector<part_t> particles(1024*1024);
     uint32_t part_sz = sizeof(part_t) * particles.size();
 
     double pi = 3.141592653589;
     double ang = pi * 2. / particles.size();
     int i = 0;
     for (auto &p : particles) {
-        p.pos = glm::vec2(
-            cos(ang * i) / 2.,
-            sin(ang * i) / 2.
-        );
-        p.vel = glm::vec2(cos(ang * i), sin(ang * i));
-        // p.vel = glm::vec2(1, 1);
-        // p.color = glm::vec3(1, 1, 1);
+        p.pos = glm::vec2(cos(ang * i) / 2., sin(ang * i) / 2.);
+        // p.pos = glm::vec2((i / 1024) / 1024. * 2 - 1, (i % 1024) / 1024. * 2 - 1);
+        
+        float a = sin(i * ang * 6.);
+        // p.vel = glm::vec2(cos(ang * i) * a, sin(ang * i) * a);
+        p.vel = glm::vec2(p.pos.x * a, p.pos.y * a);
+        // p.vel = glm::vec2(0, 0);
         p.color = glm::vec4(
             0.5 + sin(ang * i) / 2.,
             0.5 + cos(ang * i) / 2.,
@@ -295,7 +295,7 @@ int main(int argc, char const *argv[])
             comp_cbuff->bind_compute(comp_pl);
             comp_cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_COMPUTE, comp_pl->vk_layout,
                     comp_desc_set[img_idx % 2]);
-            comp_cbuff->dispatch_compute(particles.size() / 256);
+            comp_cbuff->dispatch_compute(particles.size() / 1024);
             comp_cbuff->end();
 
             /* start particle computation and signal comp_sem when done */
