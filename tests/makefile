@@ -10,9 +10,6 @@ else
 	GLSL_ADDITIONAL_LIB := -lMachineIndependent -lGenericCodeGen
 endif
 
-$(info "MACHINE_INDEPENDENT: ${MACHINE_INDEPENDENT}")
-$(info "GLSL_ADDITIONAL_LIB: ${GLSL_ADDITIONAL_LIB}")
-
 LIBS      += -Wl,--start-group
 LIBS 	  += -lglslang -lOGLCompiler -lSPIRV -lOSDependent 
 LIBS 	  += -lSPIRV-Tools -lSPIRV-Tools-opt -lSPVRemapper -lHLSL 

@@ -10,6 +10,7 @@
 
 struct compute_ubo_t {
     float dt;
+    float ang;
 };
 
 struct part_t {
@@ -86,6 +87,7 @@ int main(int argc, char const *argv[])
 
         layout (binding = 0) uniform params_ubo_t {
             float dt;
+            float ang;
         } ubo;
 
         struct part_t {
@@ -112,18 +114,23 @@ int main(int argc, char const *argv[])
 
             vec2 pos_pre = part_in.pos;
             parts_out[index].pos = part_in.pos + part_in.vel.xy * ubo.dt;
-            parts_out[index].vel = part_in.vel;
+            parts_out[index].vel = part_in.vel + vec2(cos(ubo.ang), sin(ubo.ang)) * ubo.dt;
             parts_out[index].color = part_in.color;
 
+            if (length(parts_out[index].pos) > 1) {
+                parts_out[index].vel = -parts_out[index].vel;
+                parts_out[index].pos = pos_pre;
+            }
+
             // Flip movement at window border
-            if ((parts_out[index].pos.x <= -1.0) || (parts_out[index].pos.x >= 1.0)) {
-                parts_out[index].vel.x = -parts_out[index].vel.x;
-                parts_out[index].pos = pos_pre;
-            }
-            if ((parts_out[index].pos.y <= -1.0) || (parts_out[index].pos.y >= 1.0)) {
-                parts_out[index].vel.y = -parts_out[index].vel.y;
-                parts_out[index].pos = pos_pre;
-            }
+            // if ((parts_out[index].pos.x <= -1.0) || (parts_out[index].pos.x >= 1.0)) {
+            //     parts_out[index].vel.x = -parts_out[index].vel.x;
+            //     parts_out[index].pos = pos_pre;
+            // }
+            // if ((parts_out[index].pos.y <= -1.0) || (parts_out[index].pos.y >= 1.0)) {
+            //     parts_out[index].vel.y = -parts_out[index].vel.y;
+            //     parts_out[index].pos = pos_pre;
+            // }
         }
     )___");
 
@@ -140,14 +147,15 @@ int main(int argc, char const *argv[])
     );
     auto comp_ubp_pbuff = comp_ubo_buff->map_data(0, sizeof(compute_ubo_t));
 
-    std::vector<part_t> particles(1024*1024);
+    std::vector<part_t> particles(1024*4096);
     uint32_t part_sz = sizeof(part_t) * particles.size();
 
     double pi = 3.141592653589;
     double ang = pi * 2. / particles.size();
     int i = 0;
     for (auto &p : particles) {
-        p.pos = glm::vec2(cos(ang * i) / 2., sin(ang * i) / 2.);
+        float b = 1 + float(sin(i/100.));
+        p.pos = glm::vec2(cos(ang * i) / 2. * b, sin(ang * i) / 2. * b);
         // p.pos = glm::vec2((i / 1024) / 1024. * 2 - 1, (i % 1024) / 1024. * 2 - 1);
         
         float a = sin(i * ang * 6.);
@@ -288,6 +296,7 @@ int main(int argc, char const *argv[])
 
             uint64_t curr_time = get_time_ms();
             comp_ubo.dt = (curr_time - last_time_ms) / 1000.;
+            comp_ubo.ang += comp_ubo.dt / 10.;
             memcpy(comp_ubp_pbuff, &comp_ubo, sizeof(comp_ubo));
             last_time_ms = curr_time;
 
