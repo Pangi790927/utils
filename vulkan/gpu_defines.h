@@ -6878,243 +6878,245 @@ inline VKAPI_ATTR void VKAPI_CALL vk_cmd_end_conditional_rendering_ext(
     return vkCmdEndConditionalRenderingEXT (
             *(    VkCommandBuffer                             *)&commandBuffer);
 }
-#define vk_object_table_nvx_t                                             VkObjectTableNVX 
-#define vk_indirect_commands_layout_nvx_t                                 VkIndirectCommandsLayoutNVX 
-#define vk_indirect_commands_token_type_nvx_t                             VkIndirectCommandsTokenTypeNVX
-#define vk_object_entry_type_nvx_t                                        VkObjectEntryTypeNVX
-#define vk_indirect_commands_layout_usage_flag_bits_nvx_t                 VkIndirectCommandsLayoutUsageFlagBitsNVX
-#define vk_indirect_commands_layout_usage_flags_nvx_t                     VkIndirectCommandsLayoutUsageFlagsNVX 
-#define vk_object_entry_usage_flag_bits_nvx_t                             VkObjectEntryUsageFlagBitsNVX
-#define vk_object_entry_usage_flags_nvx_t                                 VkObjectEntryUsageFlagsNVX 
 
-typedef struct vk_device_generated_commands_features_nvx_t {
-    vk_structure_type_t s_type =                       VK_STRUCTURE_TYPE_DEVICE_GENERATED_COMMANDS_FEATURES_NVX;
-    const void* p_next =                               NULL;
-    vk_bool32_t                                        compute_binding_point_support;
-} vk_device_generated_commands_features_nvx_t;
+/* This nvx stuff, I don't know what it does and it doesn't exist on one of my computers */
+// #define vk_object_table_nvx_t                                             VkObjectTableNVX 
+// #define vk_indirect_commands_layout_nvx_t                                 VkIndirectCommandsLayoutNVX 
+// #define vk_indirect_commands_token_type_nvx_t                             VkIndirectCommandsTokenTypeNVX
+// #define vk_object_entry_type_nvx_t                                        VkObjectEntryTypeNVX
+// #define vk_indirect_commands_layout_usage_flag_bits_nvx_t                 VkIndirectCommandsLayoutUsageFlagBitsNVX
+// #define vk_indirect_commands_layout_usage_flags_nvx_t                     VkIndirectCommandsLayoutUsageFlagsNVX 
+// #define vk_object_entry_usage_flag_bits_nvx_t                             VkObjectEntryUsageFlagBitsNVX
+// #define vk_object_entry_usage_flags_nvx_t                                 VkObjectEntryUsageFlagsNVX 
 
-typedef struct vk_device_generated_commands_limits_nvx_t {
-    vk_structure_type_t s_type =                       VK_STRUCTURE_TYPE_DEVICE_GENERATED_COMMANDS_LIMITS_NVX;
-    const void* p_next =                               NULL;
-    uint32_t                                           max_indirect_commands_layout_token_count;
-    uint32_t                                           max_object_entry_counts;
-    uint32_t                                           min_sequence_count_buffer_offset_alignment;
-    uint32_t                                           min_sequence_index_buffer_offset_alignment;
-    uint32_t                                           min_commands_token_buffer_offset_alignment;
-} vk_device_generated_commands_limits_nvx_t;
+// typedef struct vk_device_generated_commands_features_nvx_t {
+//     vk_structure_type_t s_type =                       VK_STRUCTURE_TYPE_DEVICE_GENERATED_COMMANDS_FEATURES_NVX;
+//     const void* p_next =                               NULL;
+//     vk_bool32_t                                        compute_binding_point_support;
+// } vk_device_generated_commands_features_nvx_t;
 
-typedef struct vk_indirect_commands_token_nvx_t {
-    vk_indirect_commands_token_type_nvx_t              token_type;
-    vk_buffer_t                                        buffer;
-    vk_device_size_t                                   offset;
-} vk_indirect_commands_token_nvx_t;
+// typedef struct vk_device_generated_commands_limits_nvx_t {
+//     vk_structure_type_t s_type =                       VK_STRUCTURE_TYPE_DEVICE_GENERATED_COMMANDS_LIMITS_NVX;
+//     const void* p_next =                               NULL;
+//     uint32_t                                           max_indirect_commands_layout_token_count;
+//     uint32_t                                           max_object_entry_counts;
+//     uint32_t                                           min_sequence_count_buffer_offset_alignment;
+//     uint32_t                                           min_sequence_index_buffer_offset_alignment;
+//     uint32_t                                           min_commands_token_buffer_offset_alignment;
+// } vk_device_generated_commands_limits_nvx_t;
 
-typedef struct vk_indirect_commands_layout_token_nvx_t {
-    vk_indirect_commands_token_type_nvx_t              token_type;
-    uint32_t                                           binding_unit;
-    uint32_t                                           dynamic_count;
-    uint32_t                                           divisor;
-} vk_indirect_commands_layout_token_nvx_t;
+// typedef struct vk_indirect_commands_token_nvx_t {
+//     vk_indirect_commands_token_type_nvx_t              token_type;
+//     vk_buffer_t                                        buffer;
+//     vk_device_size_t                                   offset;
+// } vk_indirect_commands_token_nvx_t;
 
-typedef struct vk_indirect_commands_layout_create_info_nvx_t {
-    vk_structure_type_t s_type =                       VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_CREATE_INFO_NVX;
-    const void* p_next =                               NULL;
-    vk_pipeline_bind_point_t                           pipeline_bind_point;
-    vk_indirect_commands_layout_usage_flags_nvx_t      flags;
-    uint32_t                                           token_count;
-    const vk_indirect_commands_layout_token_nvx_t*     p_tokens;
-} vk_indirect_commands_layout_create_info_nvx_t;
+// typedef struct vk_indirect_commands_layout_token_nvx_t {
+//     vk_indirect_commands_token_type_nvx_t              token_type;
+//     uint32_t                                           binding_unit;
+//     uint32_t                                           dynamic_count;
+//     uint32_t                                           divisor;
+// } vk_indirect_commands_layout_token_nvx_t;
 
-typedef struct vk_cmd_process_commands_info_nvx_t {
-    vk_structure_type_t s_type =                       VK_STRUCTURE_TYPE_CMD_PROCESS_COMMANDS_INFO_NVX;
-    const void* p_next =                               NULL;
-    vk_object_table_nvx_t                              object_table;
-    vk_indirect_commands_layout_nvx_t                  indirect_commands_layout;
-    uint32_t                                           indirect_commands_token_count;
-    const vk_indirect_commands_token_nvx_t*            p_indirect_commands_tokens;
-    uint32_t                                           max_sequences_count;
-    vk_command_buffer_t                                target_command_buffer;
-    vk_buffer_t                                        sequences_count_buffer;
-    vk_device_size_t                                   sequences_count_offset;
-    vk_buffer_t                                        sequences_index_buffer;
-    vk_device_size_t                                   sequences_index_offset;
-} vk_cmd_process_commands_info_nvx_t;
+// typedef struct vk_indirect_commands_layout_create_info_nvx_t {
+//     vk_structure_type_t s_type =                       VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_CREATE_INFO_NVX;
+//     const void* p_next =                               NULL;
+//     vk_pipeline_bind_point_t                           pipeline_bind_point;
+//     vk_indirect_commands_layout_usage_flags_nvx_t      flags;
+//     uint32_t                                           token_count;
+//     const vk_indirect_commands_layout_token_nvx_t*     p_tokens;
+// } vk_indirect_commands_layout_create_info_nvx_t;
 
-typedef struct vk_cmd_reserve_space_for_commands_info_nvx_t {
-    vk_structure_type_t s_type =                       VK_STRUCTURE_TYPE_CMD_RESERVE_SPACE_FOR_COMMANDS_INFO_NVX;
-    const void* p_next =                               NULL;
-    vk_object_table_nvx_t                              object_table;
-    vk_indirect_commands_layout_nvx_t                  indirect_commands_layout;
-    uint32_t                                           max_sequences_count;
-} vk_cmd_reserve_space_for_commands_info_nvx_t;
+// typedef struct vk_cmd_process_commands_info_nvx_t {
+//     vk_structure_type_t s_type =                       VK_STRUCTURE_TYPE_CMD_PROCESS_COMMANDS_INFO_NVX;
+//     const void* p_next =                               NULL;
+//     vk_object_table_nvx_t                              object_table;
+//     vk_indirect_commands_layout_nvx_t                  indirect_commands_layout;
+//     uint32_t                                           indirect_commands_token_count;
+//     const vk_indirect_commands_token_nvx_t*            p_indirect_commands_tokens;
+//     uint32_t                                           max_sequences_count;
+//     vk_command_buffer_t                                target_command_buffer;
+//     vk_buffer_t                                        sequences_count_buffer;
+//     vk_device_size_t                                   sequences_count_offset;
+//     vk_buffer_t                                        sequences_index_buffer;
+//     vk_device_size_t                                   sequences_index_offset;
+// } vk_cmd_process_commands_info_nvx_t;
 
-typedef struct vk_object_table_create_info_nvx_t {
-    vk_structure_type_t s_type =                       VK_STRUCTURE_TYPE_OBJECT_TABLE_CREATE_INFO_NVX;
-    const void* p_next =                               NULL;
-    uint32_t                                           object_count;
-    const vk_object_entry_type_nvx_t*                  p_object_entry_types;
-    const uint32_t*                                    p_object_entry_counts;
-    const vk_object_entry_usage_flags_nvx_t*           p_object_entry_usage_flags;
-    uint32_t                                           max_uniform_buffers_per_descriptor;
-    uint32_t                                           max_storage_buffers_per_descriptor;
-    uint32_t                                           max_storage_images_per_descriptor;
-    uint32_t                                           max_sampled_images_per_descriptor;
-    uint32_t                                           max_pipeline_layouts;
-} vk_object_table_create_info_nvx_t;
+// typedef struct vk_cmd_reserve_space_for_commands_info_nvx_t {
+//     vk_structure_type_t s_type =                       VK_STRUCTURE_TYPE_CMD_RESERVE_SPACE_FOR_COMMANDS_INFO_NVX;
+//     const void* p_next =                               NULL;
+//     vk_object_table_nvx_t                              object_table;
+//     vk_indirect_commands_layout_nvx_t                  indirect_commands_layout;
+//     uint32_t                                           max_sequences_count;
+// } vk_cmd_reserve_space_for_commands_info_nvx_t;
 
-typedef struct vk_object_table_entry_nvx_t {
-    vk_object_entry_type_nvx_t                         type;
-    vk_object_entry_usage_flags_nvx_t                  flags;
-} vk_object_table_entry_nvx_t;
+// typedef struct vk_object_table_create_info_nvx_t {
+//     vk_structure_type_t s_type =                       VK_STRUCTURE_TYPE_OBJECT_TABLE_CREATE_INFO_NVX;
+//     const void* p_next =                               NULL;
+//     uint32_t                                           object_count;
+//     const vk_object_entry_type_nvx_t*                  p_object_entry_types;
+//     const uint32_t*                                    p_object_entry_counts;
+//     const vk_object_entry_usage_flags_nvx_t*           p_object_entry_usage_flags;
+//     uint32_t                                           max_uniform_buffers_per_descriptor;
+//     uint32_t                                           max_storage_buffers_per_descriptor;
+//     uint32_t                                           max_storage_images_per_descriptor;
+//     uint32_t                                           max_sampled_images_per_descriptor;
+//     uint32_t                                           max_pipeline_layouts;
+// } vk_object_table_create_info_nvx_t;
 
-typedef struct vk_object_table_pipeline_entry_nvx_t {
-    vk_object_entry_type_nvx_t                         type;
-    vk_object_entry_usage_flags_nvx_t                  flags;
-    vk_pipeline_t                                      pipeline;
-} vk_object_table_pipeline_entry_nvx_t;
+// typedef struct vk_object_table_entry_nvx_t {
+//     vk_object_entry_type_nvx_t                         type;
+//     vk_object_entry_usage_flags_nvx_t                  flags;
+// } vk_object_table_entry_nvx_t;
 
-typedef struct vk_object_table_descriptor_set_entry_nvx_t {
-    vk_object_entry_type_nvx_t                         type;
-    vk_object_entry_usage_flags_nvx_t                  flags;
-    vk_pipeline_layout_t                               pipeline_layout;
-    vk_descriptor_set_t                                descriptor_set;
-} vk_object_table_descriptor_set_entry_nvx_t;
+// typedef struct vk_object_table_pipeline_entry_nvx_t {
+//     vk_object_entry_type_nvx_t                         type;
+//     vk_object_entry_usage_flags_nvx_t                  flags;
+//     vk_pipeline_t                                      pipeline;
+// } vk_object_table_pipeline_entry_nvx_t;
 
-typedef struct vk_object_table_vertex_buffer_entry_nvx_t {
-    vk_object_entry_type_nvx_t                         type;
-    vk_object_entry_usage_flags_nvx_t                  flags;
-    vk_buffer_t                                        buffer;
-} vk_object_table_vertex_buffer_entry_nvx_t;
+// typedef struct vk_object_table_descriptor_set_entry_nvx_t {
+//     vk_object_entry_type_nvx_t                         type;
+//     vk_object_entry_usage_flags_nvx_t                  flags;
+//     vk_pipeline_layout_t                               pipeline_layout;
+//     vk_descriptor_set_t                                descriptor_set;
+// } vk_object_table_descriptor_set_entry_nvx_t;
 
-typedef struct vk_object_table_index_buffer_entry_nvx_t {
-    vk_object_entry_type_nvx_t                         type;
-    vk_object_entry_usage_flags_nvx_t                  flags;
-    vk_buffer_t                                        buffer;
-    vk_index_type_t                                    index_type;
-} vk_object_table_index_buffer_entry_nvx_t;
+// typedef struct vk_object_table_vertex_buffer_entry_nvx_t {
+//     vk_object_entry_type_nvx_t                         type;
+//     vk_object_entry_usage_flags_nvx_t                  flags;
+//     vk_buffer_t                                        buffer;
+// } vk_object_table_vertex_buffer_entry_nvx_t;
 
-typedef struct vk_object_table_push_constant_entry_nvx_t {
-    vk_object_entry_type_nvx_t                         type;
-    vk_object_entry_usage_flags_nvx_t                  flags;
-    vk_pipeline_layout_t                               pipeline_layout;
-    vk_shader_stage_flags_t                            stage_flags;
-} vk_object_table_push_constant_entry_nvx_t;
-#define pfn_vk_cmd_process_commands_nvx_fn_t                              PFN_vkCmdProcessCommandsNVX
-#define pfn_vk_cmd_reserve_space_for_commands_nvx_fn_t                    PFN_vkCmdReserveSpaceForCommandsNVX
-#define pfn_vk_create_indirect_commands_layout_nvx_fn_t                   PFN_vkCreateIndirectCommandsLayoutNVX
-#define pfn_vk_destroy_indirect_commands_layout_nvx_fn_t                  PFN_vkDestroyIndirectCommandsLayoutNVX
-#define pfn_vk_create_object_table_nvx_fn_t                               PFN_vkCreateObjectTableNVX
-#define pfn_vk_destroy_object_table_nvx_fn_t                              PFN_vkDestroyObjectTableNVX
-#define pfn_vk_register_objects_nvx_fn_t                                  PFN_vkRegisterObjectsNVX
-#define pfn_vk_unregister_objects_nvx_fn_t                                PFN_vkUnregisterObjectsNVX
-#define pfn_vk_get_physical_device_generated_commands_properties_nvx_fn_t PFN_vkGetPhysicalDeviceGeneratedCommandsPropertiesNVX
+// typedef struct vk_object_table_index_buffer_entry_nvx_t {
+//     vk_object_entry_type_nvx_t                         type;
+//     vk_object_entry_usage_flags_nvx_t                  flags;
+//     vk_buffer_t                                        buffer;
+//     vk_index_type_t                                    index_type;
+// } vk_object_table_index_buffer_entry_nvx_t;
 
-inline VKAPI_ATTR void VKAPI_CALL vk_cmd_process_commands_nvx(
-    vk_command_buffer_t                                commandBuffer,
-    const vk_cmd_process_commands_info_nvx_t*          pProcessCommandsInfo)
-{
-    return vkCmdProcessCommandsNVX (
-            *(    VkCommandBuffer                             *)&commandBuffer,
-            *(    const VkCmdProcessCommandsInfoNVX*          *)&pProcessCommandsInfo);
-}
+// typedef struct vk_object_table_push_constant_entry_nvx_t {
+//     vk_object_entry_type_nvx_t                         type;
+//     vk_object_entry_usage_flags_nvx_t                  flags;
+//     vk_pipeline_layout_t                               pipeline_layout;
+//     vk_shader_stage_flags_t                            stage_flags;
+// } vk_object_table_push_constant_entry_nvx_t;
+// #define pfn_vk_cmd_process_commands_nvx_fn_t                              PFN_vkCmdProcessCommandsNVX
+// #define pfn_vk_cmd_reserve_space_for_commands_nvx_fn_t                    PFN_vkCmdReserveSpaceForCommandsNVX
+// #define pfn_vk_create_indirect_commands_layout_nvx_fn_t                   PFN_vkCreateIndirectCommandsLayoutNVX
+// #define pfn_vk_destroy_indirect_commands_layout_nvx_fn_t                  PFN_vkDestroyIndirectCommandsLayoutNVX
+// #define pfn_vk_create_object_table_nvx_fn_t                               PFN_vkCreateObjectTableNVX
+// #define pfn_vk_destroy_object_table_nvx_fn_t                              PFN_vkDestroyObjectTableNVX
+// #define pfn_vk_register_objects_nvx_fn_t                                  PFN_vkRegisterObjectsNVX
+// #define pfn_vk_unregister_objects_nvx_fn_t                                PFN_vkUnregisterObjectsNVX
+// #define pfn_vk_get_physical_device_generated_commands_properties_nvx_fn_t PFN_vkGetPhysicalDeviceGeneratedCommandsPropertiesNVX
 
-inline VKAPI_ATTR void VKAPI_CALL vk_cmd_reserve_space_for_commands_nvx(
-    vk_command_buffer_t                                commandBuffer,
-    const vk_cmd_reserve_space_for_commands_info_nvx_t* pReserveSpaceInfo)
-{
-    return vkCmdReserveSpaceForCommandsNVX (
-            *(    VkCommandBuffer                             *)&commandBuffer,
-            *(    const VkCmdReserveSpaceForCommandsInfoNVX*  *)&pReserveSpaceInfo);
-}
+// inline VKAPI_ATTR void VKAPI_CALL vk_cmd_process_commands_nvx(
+//     vk_command_buffer_t                                commandBuffer,
+//     const vk_cmd_process_commands_info_nvx_t*          pProcessCommandsInfo)
+// {
+//     return vkCmdProcessCommandsNVX (
+//             *(    VkCommandBuffer                             *)&commandBuffer,
+//             *(    const VkCmdProcessCommandsInfoNVX*          *)&pProcessCommandsInfo);
+// }
 
-inline VKAPI_ATTR vk_result_t VKAPI_CALL vk_create_indirect_commands_layout_nvx(
-    vk_device_t                                        device,
-    const vk_indirect_commands_layout_create_info_nvx_t* pCreateInfo,
-    const vk_allocation_callbacks_t*                   pAllocator,
-    vk_indirect_commands_layout_nvx_t*                 pIndirectCommandsLayout)
-{
-    return vkCreateIndirectCommandsLayoutNVX (
-            *(    VkDevice                                    *)&device,
-            *(    const VkIndirectCommandsLayoutCreateInfoNVX* *)&pCreateInfo,
-            *(    const VkAllocationCallbacks*                *)&pAllocator,
-            *(    VkIndirectCommandsLayoutNVX*                *)&pIndirectCommandsLayout);
-}
+// inline VKAPI_ATTR void VKAPI_CALL vk_cmd_reserve_space_for_commands_nvx(
+//     vk_command_buffer_t                                commandBuffer,
+//     const vk_cmd_reserve_space_for_commands_info_nvx_t* pReserveSpaceInfo)
+// {
+//     return vkCmdReserveSpaceForCommandsNVX (
+//             *(    VkCommandBuffer                             *)&commandBuffer,
+//             *(    const VkCmdReserveSpaceForCommandsInfoNVX*  *)&pReserveSpaceInfo);
+// }
 
-inline VKAPI_ATTR void VKAPI_CALL vk_destroy_indirect_commands_layout_nvx(
-    vk_device_t                                        device,
-    vk_indirect_commands_layout_nvx_t                  indirectCommandsLayout,
-    const vk_allocation_callbacks_t*                   pAllocator)
-{
-    return vkDestroyIndirectCommandsLayoutNVX (
-            *(    VkDevice                                    *)&device,
-            *(    VkIndirectCommandsLayoutNVX                 *)&indirectCommandsLayout,
-            *(    const VkAllocationCallbacks*                *)&pAllocator);
-}
+// inline VKAPI_ATTR vk_result_t VKAPI_CALL vk_create_indirect_commands_layout_nvx(
+//     vk_device_t                                        device,
+//     const vk_indirect_commands_layout_create_info_nvx_t* pCreateInfo,
+//     const vk_allocation_callbacks_t*                   pAllocator,
+//     vk_indirect_commands_layout_nvx_t*                 pIndirectCommandsLayout)
+// {
+//     return vkCreateIndirectCommandsLayoutNVX (
+//             *(    VkDevice                                    *)&device,
+//             *(    const VkIndirectCommandsLayoutCreateInfoNVX* *)&pCreateInfo,
+//             *(    const VkAllocationCallbacks*                *)&pAllocator,
+//             *(    VkIndirectCommandsLayoutNVX*                *)&pIndirectCommandsLayout);
+// }
 
-inline VKAPI_ATTR vk_result_t VKAPI_CALL vk_create_object_table_nvx(
-    vk_device_t                                        device,
-    const vk_object_table_create_info_nvx_t*           pCreateInfo,
-    const vk_allocation_callbacks_t*                   pAllocator,
-    vk_object_table_nvx_t*                             pObjectTable)
-{
-    return vkCreateObjectTableNVX (
-            *(    VkDevice                                    *)&device,
-            *(    const VkObjectTableCreateInfoNVX*           *)&pCreateInfo,
-            *(    const VkAllocationCallbacks*                *)&pAllocator,
-            *(    VkObjectTableNVX*                           *)&pObjectTable);
-}
+// inline VKAPI_ATTR void VKAPI_CALL vk_destroy_indirect_commands_layout_nvx(
+//     vk_device_t                                        device,
+//     vk_indirect_commands_layout_nvx_t                  indirectCommandsLayout,
+//     const vk_allocation_callbacks_t*                   pAllocator)
+// {
+//     return vkDestroyIndirectCommandsLayoutNVX (
+//             *(    VkDevice                                    *)&device,
+//             *(    VkIndirectCommandsLayoutNVX                 *)&indirectCommandsLayout,
+//             *(    const VkAllocationCallbacks*                *)&pAllocator);
+// }
 
-inline VKAPI_ATTR void VKAPI_CALL vk_destroy_object_table_nvx(
-    vk_device_t                                        device,
-    vk_object_table_nvx_t                              objectTable,
-    const vk_allocation_callbacks_t*                   pAllocator)
-{
-    return vkDestroyObjectTableNVX (
-            *(    VkDevice                                    *)&device,
-            *(    VkObjectTableNVX                            *)&objectTable,
-            *(    const VkAllocationCallbacks*                *)&pAllocator);
-}
+// inline VKAPI_ATTR vk_result_t VKAPI_CALL vk_create_object_table_nvx(
+//     vk_device_t                                        device,
+//     const vk_object_table_create_info_nvx_t*           pCreateInfo,
+//     const vk_allocation_callbacks_t*                   pAllocator,
+//     vk_object_table_nvx_t*                             pObjectTable)
+// {
+//     return vkCreateObjectTableNVX (
+//             *(    VkDevice                                    *)&device,
+//             *(    const VkObjectTableCreateInfoNVX*           *)&pCreateInfo,
+//             *(    const VkAllocationCallbacks*                *)&pAllocator,
+//             *(    VkObjectTableNVX*                           *)&pObjectTable);
+// }
 
-inline VKAPI_ATTR vk_result_t VKAPI_CALL vk_register_objects_nvx(
-    vk_device_t                                        device,
-    vk_object_table_nvx_t                              objectTable,
-    uint32_t                                           objectCount,
-    const vk_object_table_entry_nvx_t* const*          ppObjectTableEntries,
-    const uint32_t*                                    pObjectIndices)
-{
-    return vkRegisterObjectsNVX (
-            *(    VkDevice                                    *)&device,
-            *(    VkObjectTableNVX                            *)&objectTable,
-            *(    uint32_t                                    *)&objectCount,
-            *(    const VkObjectTableEntryNVX* const*         *)&ppObjectTableEntries,
-            *(    const uint32_t*                             *)&pObjectIndices);
-}
+// inline VKAPI_ATTR void VKAPI_CALL vk_destroy_object_table_nvx(
+//     vk_device_t                                        device,
+//     vk_object_table_nvx_t                              objectTable,
+//     const vk_allocation_callbacks_t*                   pAllocator)
+// {
+//     return vkDestroyObjectTableNVX (
+//             *(    VkDevice                                    *)&device,
+//             *(    VkObjectTableNVX                            *)&objectTable,
+//             *(    const VkAllocationCallbacks*                *)&pAllocator);
+// }
 
-inline VKAPI_ATTR vk_result_t VKAPI_CALL vk_unregister_objects_nvx(
-    vk_device_t                                        device,
-    vk_object_table_nvx_t                              objectTable,
-    uint32_t                                           objectCount,
-    const vk_object_entry_type_nvx_t*                  pObjectEntryTypes,
-    const uint32_t*                                    pObjectIndices)
-{
-    return vkUnregisterObjectsNVX (
-            *(    VkDevice                                    *)&device,
-            *(    VkObjectTableNVX                            *)&objectTable,
-            *(    uint32_t                                    *)&objectCount,
-            *(    const VkObjectEntryTypeNVX*                 *)&pObjectEntryTypes,
-            *(    const uint32_t*                             *)&pObjectIndices);
-}
+// inline VKAPI_ATTR vk_result_t VKAPI_CALL vk_register_objects_nvx(
+//     vk_device_t                                        device,
+//     vk_object_table_nvx_t                              objectTable,
+//     uint32_t                                           objectCount,
+//     const vk_object_table_entry_nvx_t* const*          ppObjectTableEntries,
+//     const uint32_t*                                    pObjectIndices)
+// {
+//     return vkRegisterObjectsNVX (
+//             *(    VkDevice                                    *)&device,
+//             *(    VkObjectTableNVX                            *)&objectTable,
+//             *(    uint32_t                                    *)&objectCount,
+//             *(    const VkObjectTableEntryNVX* const*         *)&ppObjectTableEntries,
+//             *(    const uint32_t*                             *)&pObjectIndices);
+// }
 
-inline VKAPI_ATTR void VKAPI_CALL vk_get_physical_device_generated_commands_properties_nvx(
-    vk_physical_device_t                               physicalDevice,
-    vk_device_generated_commands_features_nvx_t*       pFeatures,
-    vk_device_generated_commands_limits_nvx_t*         pLimits)
-{
-    return vkGetPhysicalDeviceGeneratedCommandsPropertiesNVX (
-            *(    VkPhysicalDevice                            *)&physicalDevice,
-            *(    VkDeviceGeneratedCommandsFeaturesNVX*       *)&pFeatures,
-            *(    VkDeviceGeneratedCommandsLimitsNVX*         *)&pLimits);
-}
+// inline VKAPI_ATTR vk_result_t VKAPI_CALL vk_unregister_objects_nvx(
+//     vk_device_t                                        device,
+//     vk_object_table_nvx_t                              objectTable,
+//     uint32_t                                           objectCount,
+//     const vk_object_entry_type_nvx_t*                  pObjectEntryTypes,
+//     const uint32_t*                                    pObjectIndices)
+// {
+//     return vkUnregisterObjectsNVX (
+//             *(    VkDevice                                    *)&device,
+//             *(    VkObjectTableNVX                            *)&objectTable,
+//             *(    uint32_t                                    *)&objectCount,
+//             *(    const VkObjectEntryTypeNVX*                 *)&pObjectEntryTypes,
+//             *(    const uint32_t*                             *)&pObjectIndices);
+// }
+
+// inline VKAPI_ATTR void VKAPI_CALL vk_get_physical_device_generated_commands_properties_nvx(
+//     vk_physical_device_t                               physicalDevice,
+//     vk_device_generated_commands_features_nvx_t*       pFeatures,
+//     vk_device_generated_commands_limits_nvx_t*         pLimits)
+// {
+//     return vkGetPhysicalDeviceGeneratedCommandsPropertiesNVX (
+//             *(    VkPhysicalDevice                            *)&physicalDevice,
+//             *(    VkDeviceGeneratedCommandsFeaturesNVX*       *)&pFeatures,
+//             *(    VkDeviceGeneratedCommandsLimitsNVX*         *)&pLimits);
+// }
 
 typedef struct vk_viewport_w_scaling_nv_t {
     float                                              xcoeff;
