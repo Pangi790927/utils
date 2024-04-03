@@ -192,7 +192,7 @@ int main(int argc, char const *argv[])
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     );
     vku_copy_buff(cp, comp_in, staging_pbuff, part_sz);
-    delete staging_pbuff;
+    // delete staging_pbuff;
 
     auto comp_out = new vku_buffer_t(
         dev,
@@ -291,6 +291,9 @@ int main(int argc, char const *argv[])
         glfwPollEvents();
 
         try {
+            if (glfwGetKey(inst->window, GLFW_KEY_R) == GLFW_PRESS) {
+                vku_copy_buff(cp, comp_in, staging_pbuff, part_sz);
+            }
             uint32_t img_idx;
             vku_aquire_next_img(swc, img_sem, &img_idx);
 
