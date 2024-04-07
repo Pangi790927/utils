@@ -447,11 +447,13 @@ struct vku_binding_desc_t {
             auto ptr = new buff_binding_t;
             ptr->desc = desc;
             ptr->buff = buff;
-            ptr->desc_buff_info = vk_descriptor_buffer_info_t {
-                .buffer = buff->vk_buff,
-                .offset = 0,
-                .range = buff->size
-            };
+            if (buff) {
+                ptr->desc_buff_info = vk_descriptor_buffer_info_t {
+                    .buffer = buff->vk_buff,
+                    .offset = 0,
+                    .range = buff->size
+                };
+            }
             return std::shared_ptr<binding_desc_t>{ptr};
         }
 
@@ -483,11 +485,13 @@ struct vku_binding_desc_t {
             ptr->desc = desc;
             ptr->view = view;
             ptr->sampl = sampl;
-            ptr->imag_info = vk_descriptor_image_info_t {
-                .sampler = sampl->vk_sampler,
-                .image_view = view->vk_view,
-                .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            };
+            if (view && sampl) {
+                ptr->imag_info = vk_descriptor_image_info_t {
+                    .sampler = sampl->vk_sampler,
+                    .image_view = view->vk_view,
+                    .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                };
+            }
             return std::shared_ptr<binding_desc_t>(ptr);
         }
 
