@@ -401,7 +401,7 @@ struct vku_img_sampl_t : public vku_object_t {
     vku_device_t *dev;
     vk_sampler_t vk_sampler;
 
-    vku_img_sampl_t(vku_device_t *dev);
+    vku_img_sampl_t(vku_device_t *dev, vk_filter_t filter = VK_FILTER_LINEAR);
     ~vku_img_sampl_t();
 
     static vk_descriptor_set_layout_binding_t get_desc_set(uint32_t binding,
@@ -1197,7 +1197,8 @@ inline vku_pipeline_t::vku_pipeline_t(
     /* mark prop of pipeline to be mutable */
     std::vector<vk_dynamic_state_t> dyn_states {
         VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR
+        VK_DYNAMIC_STATE_SCISSOR,
+        VK_DYNAMIC_STATE_LINE_WIDTH
     };
 
     vk_pipeline_dynamic_state_create_info_t dyn_info {
@@ -1905,19 +1906,20 @@ inline vku_img_view_t::~vku_img_view_t() {
     vk_destroy_image_view(img->dev->vk_dev, vk_view, nullptr);
 }
 
-inline vku_img_sampl_t::vku_img_sampl_t(vku_device_t *dev) : dev(dev) {
+inline vku_img_sampl_t::vku_img_sampl_t(vku_device_t *dev, vk_filter_t filter) : dev(dev) {
     vk_physical_device_properties_t dev_props;
     vk_get_physical_device_properties(dev->vk_phy_dev, &dev_props);
 
     vk_sampler_create_info_t sampler_info {
-        .mag_filter = VK_FILTER_LINEAR,
-        .min_filter = VK_FILTER_LINEAR,
-        .mipmap_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .mag_filter = filter,
+        .min_filter = filter,
+        .mipmap_mode = filter == VK_FILTER_LINEAR ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+                                                  : VK_SAMPLER_MIPMAP_MODE_NEAREST,
         .address_mode_u = VK_SAMPLER_ADDRESS_MODE_REPEAT,
         .address_mode_v = VK_SAMPLER_ADDRESS_MODE_REPEAT,
         .address_mode_w = VK_SAMPLER_ADDRESS_MODE_REPEAT,
         .mip_lod_bias = 0.0f,
-        .anisotropy_enable = VK_TRUE,
+        .anisotropy_enable = vk_bool32_t(filter == VK_FILTER_NEAREST ? VK_FALSE : VK_TRUE),
         .max_anisotropy = dev_props.limits.max_sampler_anisotropy,
         .compare_enable = VK_FALSE,
         .compare_op = VK_COMPARE_OP_ALWAYS,
