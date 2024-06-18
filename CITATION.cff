@@ -1,0 +1,9 @@
+cff-version: 1.0.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: Pangratie
+    given-names: Andrei
+
+title: "Utilitary library"
+version: 0.0.1
+date-released: 2023-12-12
