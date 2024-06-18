@@ -1,9 +1,16 @@
-cff-version: 1.0.0
-message: "If you use this software, please cite it as below."
-authors:
-  - family-names: Pangratie
-    given-names: Andrei
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
 
-title: "Utilitary library"
+cff-version: 1.2.0
+title: Utilitary library
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Andrei
+    family-names: Pangratie
+    email: andrpangr@gmail.com
+commit: 0fbb6b42f6c12de7eb33d800a94f546573c2620b
 version: 0.0.1
-date-released: 2023-12-12
+date-released: '2024-06-18'
