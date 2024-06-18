@@ -115,8 +115,9 @@ inline void vku_present(
         std::vector<vku_sem_t *> wait_sems,
         uint32_t img_idx);
 
+/* if no command buffer is provided, one will be allocated from the command pool */
 inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *dst, vku_buffer_t *src,
-        vk_device_size_t sz);
+        vk_device_size_t sz, vku_cmdbuff_t *pcbuff = nullptr);
 
 /* VKU Objects: 
 ================================================================================================= */
@@ -314,8 +315,9 @@ struct vku_cmdpool_t : public vku_object_t {
 struct vku_cmdbuff_t : public vku_object_t {
     vku_cmdpool_t *cp;
     vk_command_buffer_t vk_buff;
+    bool host_free;
 
-    vku_cmdbuff_t(vku_cmdpool_t *cp);
+    vku_cmdbuff_t(vku_cmdpool_t *cp, bool host_free = false);
     ~vku_cmdbuff_t();
 
     void begin(vk_command_buffer_usage_flags_t flags);
@@ -384,9 +386,12 @@ struct vku_image_t : public vku_object_t {
             vk_image_usage_flags_t usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     ~vku_image_t();
 
+    /* if no command buffer is provided, one will be allocated from the command pool */
     void transition_layout(vku_cmdpool_t *cp,
-            vk_image_layout_t old_layout, vk_image_layout_t new_layout);
-    void set_data(vku_cmdpool_t *cp, void *data, uint32_t sz);
+            vk_image_layout_t old_layout, vk_image_layout_t new_layout, vku_cmdbuff_t *pcbuff = nullptr);
+
+    /* if no command buffer is provided, one will be allocated from the command pool */
+    void set_data(vku_cmdpool_t *cp, void *data, uint32_t sz, vku_cmdbuff_t *pcbuff = nullptr);
 };
 
 struct vku_img_view_t : public vku_object_t {
@@ -401,7 +406,7 @@ struct vku_img_sampl_t : public vku_object_t {
     vku_device_t *dev;
     vk_sampler_t vk_sampler;
 
-    vku_img_sampl_t(vku_device_t *dev);
+    vku_img_sampl_t(vku_device_t *dev, vk_filter_t filter = VK_FILTER_LINEAR);
     ~vku_img_sampl_t();
 
     static vk_descriptor_set_layout_binding_t get_desc_set(uint32_t binding,
@@ -447,11 +452,13 @@ struct vku_binding_desc_t {
             auto ptr = new buff_binding_t;
             ptr->desc = desc;
             ptr->buff = buff;
-            ptr->desc_buff_info = vk_descriptor_buffer_info_t {
-                .buffer = buff->vk_buff,
-                .offset = 0,
-                .range = buff->size
-            };
+            if (buff) {
+                ptr->desc_buff_info = vk_descriptor_buffer_info_t {
+                    .buffer = buff->vk_buff,
+                    .offset = 0,
+                    .range = buff->size
+                };
+            }
             return std::shared_ptr<binding_desc_t>{ptr};
         }
 
@@ -483,11 +490,13 @@ struct vku_binding_desc_t {
             ptr->desc = desc;
             ptr->view = view;
             ptr->sampl = sampl;
-            ptr->imag_info = vk_descriptor_image_info_t {
-                .sampler = sampl->vk_sampler,
-                .image_view = view->vk_view,
-                .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            };
+            if (view && sampl) {
+                ptr->imag_info = vk_descriptor_image_info_t {
+                    .sampler = sampl->vk_sampler,
+                    .image_view = view->vk_view,
+                    .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                };
+            }
             return std::shared_ptr<binding_desc_t>(ptr);
         }
 
@@ -1193,7 +1202,8 @@ inline vku_pipeline_t::vku_pipeline_t(
     /* mark prop of pipeline to be mutable */
     std::vector<vk_dynamic_state_t> dyn_states {
         VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR
+        VK_DYNAMIC_STATE_SCISSOR,
+        VK_DYNAMIC_STATE_LINE_WIDTH
     };
 
     vk_pipeline_dynamic_state_create_info_t dyn_info {
@@ -1481,7 +1491,7 @@ inline vku_cmdpool_t::~vku_cmdpool_t() {
     vk_destroy_command_pool(dev->vk_dev, vk_pool, NULL);
 }
 
-inline vku_cmdbuff_t::vku_cmdbuff_t(vku_cmdpool_t *cp) : cp(cp) {
+inline vku_cmdbuff_t::vku_cmdbuff_t(vku_cmdpool_t *cp, bool host_free) : cp(cp), host_free(host_free) {
     vk_command_buffer_allocate_info_t buff_info {
         .command_pool = cp->vk_pool,
         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
@@ -1494,6 +1504,9 @@ inline vku_cmdbuff_t::vku_cmdbuff_t(vku_cmdpool_t *cp) : cp(cp) {
 inline vku_cmdbuff_t::~vku_cmdbuff_t() {
     cleanup();
     cp->rm_child(this);
+    if (host_free) {
+        vkFreeCommandBuffers(cp->dev->vk_dev, cp->vk_pool, 1, &vk_buff);
+    }
 }
 
 inline void vku_cmdbuff_t::begin(vk_command_buffer_usage_flags_t flags) {
@@ -1729,12 +1742,19 @@ inline vku_image_t::vku_image_t(vku_device_t *dev, uint32_t width, uint32_t heig
 }
 
 inline void vku_image_t::transition_layout(vku_cmdpool_t *cp,
-        vk_image_layout_t old_layout, vk_image_layout_t new_layout)
+        vk_image_layout_t old_layout, vk_image_layout_t new_layout, vku_cmdbuff_t *pcbuff)
 {
-    auto cbuff = std::make_unique<vku_cmdbuff_t>(cp);
+    std::unique_ptr<vku_cmdbuff_t> cbuff;
+    bool existing_cbuff = true;
+    if (!pcbuff) {
+        cbuff = std::make_unique<vku_cmdbuff_t>(cp, true);
+        pcbuff = cbuff.get();
+        existing_cbuff = false;
+    }
     auto fence = std::make_unique<vku_fence_t>(cp->dev);
 
-    cbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    if (!existing_cbuff)
+        pcbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
     
     vk_image_memory_barrier_t barrier {
         .old_layout = old_layout,
@@ -1797,16 +1817,18 @@ inline void vku_image_t::transition_layout(vku_cmdpool_t *cp,
     /* TODO: don't we need a transition from shader_read to transfer_dst? That for transfering
     inside the image later on? */
 
-    vk_cmd_pipeline_barrier(cbuff->vk_buff, src_stage, dst_stage,
+    vk_cmd_pipeline_barrier(pcbuff->vk_buff, src_stage, dst_stage,
             0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    cbuff->end();
+    if (!existing_cbuff) {
+        pcbuff->end();
 
-    vku_submit_cmdbuff({}, cbuff.get(), fence.get(), {});
-    vku_wait_fences({fence.get()});
+        vku_submit_cmdbuff({}, cbuff.get(), fence.get(), {});
+        vku_wait_fences({fence.get()});
+    }
 }
 
-inline void vku_image_t::set_data(vku_cmdpool_t *cp, void *data, uint32_t sz) {
+inline void vku_image_t::set_data(vku_cmdpool_t *cp, void *data, uint32_t sz, vku_cmdbuff_t *pcbuff) {
     uint32_t img_sz = width * height * 4;
 
     if (img_sz != sz)
@@ -1823,12 +1845,21 @@ inline void vku_image_t::set_data(vku_cmdpool_t *cp, void *data, uint32_t sz) {
     memcpy(buff->map_data(0, img_sz), data, img_sz);
     buff->unmap_data();
 
-    transition_layout(cp, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    transition_layout(cp, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, pcbuff);
 
-    auto cbuff = std::make_unique<vku_cmdbuff_t>(cp);
     auto fence = std::make_unique<vku_fence_t>(cp->dev);
 
-    cbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    std::unique_ptr<vku_cmdbuff_t> cbuff;
+    vku_cmdbuff_t *aux_pcbuff = pcbuff;
+    bool existing_cbuff = true;
+    if (!aux_pcbuff) {
+        cbuff = std::make_unique<vku_cmdbuff_t>(cp, true);
+        aux_pcbuff = cbuff.get();
+        existing_cbuff = false;
+    }
+
+    if (!existing_cbuff)
+        aux_pcbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
     vk_buffer_image_copy_t region{
         .buffer_offset = 0,
@@ -1848,7 +1879,7 @@ inline void vku_image_t::set_data(vku_cmdpool_t *cp, void *data, uint32_t sz) {
         } 
     };
     vk_cmd_copy_buffer_to_image(
-        cbuff->vk_buff,
+        aux_pcbuff->vk_buff,
         buff->vk_buff,
         vk_img,
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -1856,13 +1887,15 @@ inline void vku_image_t::set_data(vku_cmdpool_t *cp, void *data, uint32_t sz) {
         &region
     );
 
-    cbuff->end();
+    if (!existing_cbuff) {
+        aux_pcbuff->end();
 
-    vku_submit_cmdbuff({}, cbuff.get(), fence.get(), {});
-    vku_wait_fences({fence.get()});
+        vku_submit_cmdbuff({}, cbuff.get(), fence.get(), {});
+        vku_wait_fences({fence.get()});
+    }
 
     transition_layout(cp, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, pcbuff);
 }
 
 inline vku_image_t::~vku_image_t() {
@@ -1901,19 +1934,20 @@ inline vku_img_view_t::~vku_img_view_t() {
     vk_destroy_image_view(img->dev->vk_dev, vk_view, nullptr);
 }
 
-inline vku_img_sampl_t::vku_img_sampl_t(vku_device_t *dev) : dev(dev) {
+inline vku_img_sampl_t::vku_img_sampl_t(vku_device_t *dev, vk_filter_t filter) : dev(dev) {
     vk_physical_device_properties_t dev_props;
     vk_get_physical_device_properties(dev->vk_phy_dev, &dev_props);
 
     vk_sampler_create_info_t sampler_info {
-        .mag_filter = VK_FILTER_LINEAR,
-        .min_filter = VK_FILTER_LINEAR,
-        .mipmap_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .mag_filter = filter,
+        .min_filter = filter,
+        .mipmap_mode = filter == VK_FILTER_LINEAR ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+                                                  : VK_SAMPLER_MIPMAP_MODE_NEAREST,
         .address_mode_u = VK_SAMPLER_ADDRESS_MODE_REPEAT,
         .address_mode_v = VK_SAMPLER_ADDRESS_MODE_REPEAT,
         .address_mode_w = VK_SAMPLER_ADDRESS_MODE_REPEAT,
         .mip_lod_bias = 0.0f,
-        .anisotropy_enable = VK_TRUE,
+        .anisotropy_enable = vk_bool32_t(filter == VK_FILTER_NEAREST ? VK_FALSE : VK_TRUE),
         .max_anisotropy = dev_props.limits.max_sampler_anisotropy,
         .compare_enable = VK_FALSE,
         .compare_op = VK_COMPARE_OP_ALWAYS,
@@ -2113,23 +2147,32 @@ inline void vku_present(
 }
 
 inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *dst, vku_buffer_t *src,
-        vk_device_size_t sz)
+        vk_device_size_t sz, vku_cmdbuff_t *pcbuff)
 {
-    auto cbuff = std::make_unique<vku_cmdbuff_t>(cp);
+    std::unique_ptr<vku_cmdbuff_t> cbuff;
+    bool existing_cbuff = true;
+    if (!pcbuff) {
+        cbuff = std::make_unique<vku_cmdbuff_t>(cp, true);
+        pcbuff = cbuff.get();
+        existing_cbuff = false;
+    }
     auto fence = std::make_unique<vku_fence_t>(cp->dev);
 
-    cbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    if (!existing_cbuff)
+        pcbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
     vk_buffer_copy_t copy_region{
         .src_offset = 0,
         .dst_offset = 0,
         .size = sz
     };
-    vk_cmd_copy_buffer(cbuff->vk_buff, src->vk_buff, dst->vk_buff, 1, &copy_region);
-    cbuff->end();
+    vk_cmd_copy_buffer(pcbuff->vk_buff, src->vk_buff, dst->vk_buff, 1, &copy_region);
 
+    if (!existing_cbuff) {
+        pcbuff->end();
 
-    vku_submit_cmdbuff({}, cbuff.get(), fence.get(), {});
-    vku_wait_fences({fence.get()});
+        vku_submit_cmdbuff({}, cbuff.get(), fence.get(), {});
+        vku_wait_fences({fence.get()});
+    }
 }
 
 inline std::string vku_glfw_err() {
