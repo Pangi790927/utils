@@ -294,28 +294,48 @@ int main(int argc, char const *argv[])
             if (glfwGetKey(inst->window, GLFW_KEY_R) == GLFW_PRESS) {
                 vku_copy_buff(cp, comp_in, staging_pbuff, part_sz);
             }
+            static bool is_stopped = false;
+            static bool space_pressed = false;
+            if (glfwGetKey(inst->window, GLFW_KEY_SPACE) == GLFW_PRESS && !space_pressed) {
+                space_pressed = true;
+                is_stopped = !is_stopped;
+            }
+            else if (glfwGetKey(inst->window, GLFW_KEY_SPACE) == GLFW_RELEASE) {
+                space_pressed = false;
+            }
             uint32_t img_idx;
             vku_aquire_next_img(swc, img_sem, &img_idx);
 
-            uint64_t curr_time = get_time_ms();
-            comp_ubo.dt = (curr_time - last_time_ms) / 1000.;
-            comp_ubo.ang += comp_ubo.dt / 10.;
-            memcpy(comp_ubp_pbuff, &comp_ubo, sizeof(comp_ubo));
-            last_time_ms = curr_time;
+            if (!is_stopped) {
+                uint64_t curr_time = get_time_ms();
+                comp_ubo.dt = (curr_time - last_time_ms) / 1000.;
+                comp_ubo.ang += comp_ubo.dt / 10.;
+                memcpy(comp_ubp_pbuff, &comp_ubo, sizeof(comp_ubo));
+                last_time_ms = curr_time;
 
-            comp_cbuff->begin(0);
-            comp_cbuff->bind_compute(comp_pl);
-            comp_cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_COMPUTE, comp_pl->vk_layout,
-                    comp_desc_set[img_idx % 2]);
-            comp_cbuff->dispatch_compute(particles.size() / 1024);
-            comp_cbuff->end();
+                comp_cbuff->begin(0);
+                comp_cbuff->bind_compute(comp_pl);
+                comp_cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_COMPUTE, comp_pl->vk_layout,
+                        comp_desc_set[img_idx % 2]);
+                comp_cbuff->dispatch_compute(particles.size() / 1024);
+                comp_cbuff->end();
 
-            /* start particle computation and signal comp_sem when done */
-            vku_submit_cmdbuff({}, comp_cbuff, nullptr, {comp_sem});
+                /* start particle computation and signal comp_sem when done */
+                vku_submit_cmdbuff({}, comp_cbuff, nullptr, {comp_sem});
+            }
+            else {
+                comp_cbuff->begin(0);
+                comp_cbuff->end();
+
+                /* start particle computation and signal comp_sem when done */
+                vku_submit_cmdbuff({}, comp_cbuff, nullptr, {comp_sem});
+
+                last_time_ms = get_time_ms();
+            }
 
             cbuff->begin(0);
             cbuff->begin_rpass(fbs, img_idx);
-            cbuff->bind_vert_buffs(0, {{img_idx % 2 == 0 ? comp_out : comp_in, 0}});
+            cbuff->bind_vert_buffs(0, {{img_idx % 2 == 0 || is_stopped ? comp_out : comp_in, 0}});
             cbuff->draw(pl, particles.size());
             cbuff->end_rpass();
             cbuff->end();
