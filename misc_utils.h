@@ -205,5 +205,39 @@ inline std::vector<std::string> ssplit(const std::string& src, const std::string
     return ret;
 }
 
+static int ssplit_args(const std::string& str, std::vector<std::string>& args) {
+    const char *cstr = str.c_str();
+    std::string token = "";
+    bool quoted = false;
+    while (*cstr) {
+        if (isspace(*cstr) && !quoted) {
+            if (token != "") {
+                args.push_back(token);
+                token = "";
+            }
+            cstr++;
+        }
+        else if (*cstr == '\\' && (
+                *(cstr + 1) == '\\' || *(cstr + 1) == '\'' || *(cstr + 1) == '\"'))
+        {
+            token += *(cstr + 1);
+            cstr += 2;
+        }
+        else if (*cstr == '\"') {
+            quoted = !quoted;
+            cstr++;
+        }
+        else {
+            token += *cstr;
+            cstr++;
+        }
+    }
+    if (quoted) {
+        return -1;
+    }
+    if (token != "")
+        args.push_back(token);
+    return 0;
+}
 
 #endif
