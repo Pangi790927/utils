@@ -67,8 +67,22 @@ inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
 			return -1;
 		}
 
-		_logger_data.active_file = std::string(logfile_path) + ".log";
-		_logger_data.old_file = std::string(logfile_path) + ".old.log";
+		std::string logfile_relpath;
+
+		if (logfile_path[0] != '/') {
+			char exe_path[PATH_MAX] = {0};
+		    if (!realpath("/proc/self/exe", exe_path)) {
+		    	printf("Can't get proc path\n");
+		    	return -1;
+		    }
+			logfile_relpath = std::string(exe_path) + "/" + logfile_path;
+		}
+		else {
+			logfile_relpath = logfile_path;
+		}
+
+		_logger_data.active_file = std::string(logfile_relpath) + ".log";
+		_logger_data.old_file = std::string(logfile_relpath) + ".old.log";
 		_logger_data.maxsz = maxsz / 2; /* half for active and half for old */
 
 		int flags = O_CREAT | O_RDWR | O_CLOEXEC;
