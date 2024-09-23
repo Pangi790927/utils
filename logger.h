@@ -10,6 +10,11 @@
 #include <string.h>
 #include <atomic>
 
+#if __GLIBC__ == 2 && __GLIBC_MINOR__ <= 28
+#include <sys/syscall.h>
+#include <linux/fs.h>
+#endif
+
 #define LOGGER_DEFAULT_MAXSZ	(16*1024*1024)
 #define LOGGER_DEFAULT_NAME		"./logfile"
 #define LOGGER_DEFAULT_PERM		0666
@@ -121,10 +126,21 @@ inline void logger_uninit() {
 	_logger_data.is_init = false;
 }
 
+#if __GLIBC__ == 2 && __GLIBC_MINOR__ <= 28
+
+inline int renameat2(int olddirfd, const char *oldpath,
+             int newdirfd, const char *newpath, unsigned int flags)
+{
+	return syscall(SYS_renameat2, olddirfd, oldpath, newdirfd, newpath, flags);
+}
+
+#endif
+
 inline int logger_swap_files() {
 	/* atomically moves active file to old file */
 	int ret = renameat2(AT_FDCWD, _logger_data.active_file.c_str(),
 			AT_FDCWD, _logger_data.old_file.c_str(), RENAME_EXCHANGE);
+
 	if (ret < 0) {
 		printf("Couldn't exchange old and active files, strerror[errno]: %s[%d]\n",
 				strerror(errno), errno);
