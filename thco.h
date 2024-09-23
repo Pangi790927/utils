@@ -21,7 +21,7 @@ struct thco_t2c_queue_t {
     int             que_sig[2] = {};
 
     thco_t2c_queue_t() {
-        int ret = pipe(que_sig);
+        int ret = pipe2(que_sig, O_CLOEXEC);
         if (ret < 0) {
             throw std::runtime_error("Very unusual pipe fail");
         }
