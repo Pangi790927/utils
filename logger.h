@@ -67,15 +67,17 @@ inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
 			return -1;
 		}
 
+		/* quick and dirty relative-path for linux (relative to the binary) */
 		std::string logfile_relpath;
-
 		if (logfile_path[0] != '/') {
 			char exe_path[PATH_MAX] = {0};
 		    if (!realpath("/proc/self/exe", exe_path)) {
 		    	printf("Can't get proc path\n");
 		    	return -1;
 		    }
-			logfile_relpath = std::string(exe_path) + "/" + logfile_path;
+		    logfile_relpath = exe_path;
+		    std::size_t found = logfile_relpath.find_last_of("/\\");
+		    logfile_relpath = logfile_relpath.substr(0, found + 1) + "/" + logfile_path;
 		}
 		else {
 			logfile_relpath = logfile_path;
