@@ -1108,7 +1108,7 @@ inline handle_vt sleep_awaiter_t::await_suspend(handle_t caller_handle) {
         err_scope([&]{ close(timer_fd); });
     }
     else {
-        timer_fd = timerfd_create(CLOCK_REALTIME, 0);
+        timer_fd = timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC);
         if (timer_fd < 0) {
             DBGE("Failed to allocate new timer");
             return CO_NEXT(std::noop_coroutine());
