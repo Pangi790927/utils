@@ -71,13 +71,14 @@ inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
 		_logger_data.old_file = std::string(logfile_path) + ".old.log";
 		_logger_data.maxsz = maxsz / 2; /* half for active and half for old */
 
-		_logger_data.active_fd = open(_logger_data.active_file.c_str(), O_CREAT | O_RDWR, perm);
+		int flags = O_CREAT | O_RDWR | O_CLOEXEC;
+		_logger_data.active_fd = open(_logger_data.active_file.c_str(), flags, perm);
 		if (_logger_data.active_fd < 0) {
 			printf("Couldn't open logfile, strerror[errno]: %s[%d]\n", strerror(errno), errno);
 			return -1;
 		}
 
-		_logger_data.old_fd = open(_logger_data.old_file.c_str(), O_CREAT | O_RDWR, perm);
+		_logger_data.old_fd = open(_logger_data.old_file.c_str(), flags, perm);
 		if (_logger_data.old_fd < 0) {
 			printf("Couldn't open old logfile, strerror[errno]: %s[%d]\n", strerror(errno), errno);
 			return -1;
