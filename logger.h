@@ -162,7 +162,7 @@ inline int logger_swap_files() {
 
 inline int logger_log(const char *msg) {
 	/* if file would grow longer than maxsz the write will be done in  */
-	uint32_t len = strlen(msg) + 1;
+	uint32_t len = strlen(msg);
 	if (len > _logger_data.maxsz) {
 		/* TODO: print maxsz with platform agnostic printf */
 		printf("Can't log more than allowed size: len[%u] maxsz[%ld]", len, _logger_data.maxsz);
