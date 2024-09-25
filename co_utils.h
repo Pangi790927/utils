@@ -851,8 +851,8 @@ inline int fd_sched_t::insert_wait(handle_t to_wait, int fd, uint32_t wait_cond)
     if (HAS(waiting_tasks, fd)) {
         auto &fd_data = waiting_tasks[fd];
         if (fd_data.mask & wait_cond) {
-            DBG("Can't have two coroutines waiting on the same fd and same events %x vs %x",
-                    fd_data.mask, wait_cond);
+            DBG("Can't have two coroutines waiting on the same fd[%d] and same events %x vs %x",
+                    fd, fd_data.mask, wait_cond);
             return -1;
         }
         struct epoll_event ev = {};
@@ -1057,13 +1057,14 @@ inline int fd_awaiter_t::await_resume() {
     we can request the return value for the fd we just queried */
 
     co_mod_t::handle_pmods_fd_unwait(caller_handle);
-    return caller_handle.promise().call_res;
+    int res = caller_handle.promise().call_res;
+    if (res != CO_MOD_ERR_TIMEO && res != CO_WAKEUP_ERR) {
+        pool->fd_sched.remove_wait(fd, wait_cond);
+    }
+    return res;
 }
 
 inline fd_awaiter_t::~fd_awaiter_t() {
-    int res = caller_handle.promise().call_res;
-    if (res != CO_MOD_ERR_TIMEO && res != CO_WAKEUP_ERR)
-        pool->fd_sched.remove_wait(fd, wait_cond);
 }
 
 /* sched_awaiter_t ------------------------------------------------------------------------------ */
