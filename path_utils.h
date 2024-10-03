@@ -7,16 +7,29 @@
 #include <vector>
 #include <dirent.h>
 
+inline std::string path_pid_path(pid_t pid) {
+    char path_buff[PATH_MAX] = {0};
+    if (!realpath(sformat("/proc/%d/exe", pid).c_str(), path_buff)) {
+        DBG("Failed to get parrent path");
+        return "";
+    }
+    return path_buff;
+}
+
+inline std::string path_pid_dir(pid_t pid) {
+    std::string ppath_dir = path_pid_path(pid);
+    std::size_t found = ppath_dir.find_last_of("/\\");
+    ppath_dir = ppath_dir.substr(0, found + 1);
+    return ppath_dir;
+}
+
 inline std::string path_get_module_path() {
     // Dl_info info;
     // if (!dladdr((void *)&path_get_module_path, &info)) {
     //     return "";
     // }
     // return info.dli_fname;
-    char path_buff[PATH_MAX] = {0};
-    if (!realpath("/proc/self/exe", path_buff))
-        return "[path_error]";
-    return path_buff;
+    return path_pid_dir(getpid());
 }
 
 inline std::string path_get_module_dir() {
