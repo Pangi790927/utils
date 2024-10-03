@@ -947,6 +947,10 @@ inline int fd_sched_t::handle_events(int num_evs) {
                     ready_tasks.push(handle);
                 }
             }
+            else {
+                /* If you get this you will want to make sure to treat the respective event */
+                DBG("UNSOLICITED EVENT: %s", epoll_ev2str(ret_evs[i].events).c_str());
+            }
         }
     }
     return 0;
@@ -1456,7 +1460,7 @@ inline task_t connect(int fd, sockaddr *sa, socklen_t len) {
 
 inline task_t accept(int fd, sockaddr *sa, socklen_t *len) {
     fd_awaiter_t awaiter {
-        .wait_cond = EPOLLIN,
+        .wait_cond = EPOLLIN | EPOLLHUP,
         .fd = fd,
     };
     CO_INTERNAL_AWAIT(awaiter);
