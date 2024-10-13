@@ -81,8 +81,9 @@ inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
 		    	return -1;
 		    }
 		    logfile_relpath = exe_path;
-		    std::size_t found = logfile_relpath.find_last_of("/\\");
-		    logfile_relpath = logfile_relpath.substr(0, found + 1) + "/" + logfile_path;
+			std::size_t found = logfile_relpath.find_last_of("/\\");
+		    logfile_relpath = logfile_relpath.substr(0, found + 1);
+			logfile_relpath = logfile_relpath + "/" + logfile_path;
 		}
 		else {
 			logfile_relpath = logfile_path;
@@ -95,13 +96,15 @@ inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
 		int flags = O_CREAT | O_RDWR | O_CLOEXEC;
 		_logger_data.active_fd = open(_logger_data.active_file.c_str(), flags, perm);
 		if (_logger_data.active_fd < 0) {
-			printf("Couldn't open logfile, strerror[errno]: %s[%d]\n", strerror(errno), errno);
+			printf("Couldn't open logfile[%s], strerror[errno]: %s[%d]\n",
+					_logger_data.active_file.c_str(), strerror(errno), errno);
 			return -1;
 		}
 
 		_logger_data.old_fd = open(_logger_data.old_file.c_str(), flags, perm);
 		if (_logger_data.old_fd < 0) {
-			printf("Couldn't open old logfile, strerror[errno]: %s[%d]\n", strerror(errno), errno);
+			printf("Couldn't open old logfile[%s], strerror[errno]: %s[%d]\n",
+					_logger_data.old_file.c_str(), strerror(errno), errno);
 			return -1;
 		}
 
