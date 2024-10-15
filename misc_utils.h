@@ -243,6 +243,7 @@ static int ssplit_args(const std::string& str, std::vector<std::string>& args) {
     return 0;
 }
 
+/* TODO: test this function */
 /* string split, but also keeps empty strings, good for csv, example: field1,field2,,,field5 */
 inline std::vector<std::string> ssplit_empty(const std::string& src, const std::string& delim) {
     std::vector<std::string> ret;
