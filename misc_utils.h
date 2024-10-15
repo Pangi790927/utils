@@ -190,6 +190,8 @@ inline uint32_t round_up(uint32_t to_div, uint32_t div) {
     return ((to_div + (div - 1)) / div) * div;
 }
 
+/* string split, eliminates all delim strings from src and outputs a vector with the remaininig
+elements */
 inline std::vector<std::string> ssplit(const std::string& src, const std::string& delim) {
     std::vector<std::string> ret;
     std::string copystr = src;
@@ -205,6 +207,7 @@ inline std::vector<std::string> ssplit(const std::string& src, const std::string
     return ret;
 }
 
+/* string split, but tries to keep arguments intact */
 static int ssplit_args(const std::string& str, std::vector<std::string>& args) {
     const char *cstr = str.c_str();
     std::string token = "";
@@ -238,6 +241,21 @@ static int ssplit_args(const std::string& str, std::vector<std::string>& args) {
     if (token != "")
         args.push_back(token);
     return 0;
+}
+
+/* string split, but also keeps empty strings, good for csv, example: field1,field2,,,field5 */
+inline std::vector<std::string> ssplit_empty(const std::string& src, const std::string& delim) {
+    std::vector<std::string> ret;
+    std::string copystr = src;
+    while (true) {
+        size_t pos = copystr.find(delim);
+        std::string token = copystr.substr(0, pos);
+        ret.push_back(token);
+        if (pos == std::string::npos)
+            break;
+        copystr.erase(0, pos + delim.size());
+    }
+    return ret;
 }
 
 #endif
