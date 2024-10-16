@@ -4,6 +4,9 @@
 #include <functional>
 #include <memory>
 
+#define PY_SSIZE_T_CLEAN
+#include "Python.h"
+
 /* TODO: Should I add mutexes in this implementation? */
 struct pymod_cbk_t;
 using pymod_cbk_wp = std::weak_ptr<pymod_cbk_t>;
@@ -18,6 +21,16 @@ int pymod_trigger_int(uint64_t trig, const std::string& strval, int64_t intval);
 int pymod_trigger_str(const std::string &trig, const std::string& strval, int64_t intval);
 int pymod_trigger_cbk(pymod_cbk_wp cbk, const std::string& strval, int64_t intval);
 
+/* This is a function that must be provided by the implementer of this header and this function
+will be called right after the python module is initialized. define PYMOD_NOINIT_FUNCTION to ignore
+it */
+int pymod_pre_init(std::vector<PyMethodDef> &methods, PyModuleDef *module_def);
+int pymod_post_init();
+
+#ifdef PYMOD_NOINIT_FUNCTION
+inline int pymod_pre_init(std::vector<PyMethodDef> &, PyModuleDef *) { return 0; }
+inline int pymod_post_init() { return 0; }
+#endif
 
 /* those will be called by the python side whenever a callback is to be registered to the C++ side.
 */

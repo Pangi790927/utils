@@ -10,6 +10,7 @@
 
 #include "debug.h"
 #include "misc_utils.h"
+#include "path_utils.h"
 
 #include <map>
 
@@ -40,23 +41,14 @@ static std::map<std::string, pymod_cbk_p> str_cbks;
 static std::map<PyObject *, pymod_cbk_wp> self_cbks;
 
 static PyObject *pymod_error;
-
-static PyMethodDef pymod_methods[] = {
-    {"sset_cbk",  pymod_sset_cbk, METH_VARARGS, "Adds a callback with a context to a string trigger"},
-    {"iset_cbk",  pymod_iset_cbk, METH_VARARGS, "Adds a callback with a context to a integer trigger"},
-    {"unset_cbk",  pymod_unset_cbk, METH_VARARGS, "Removes a callback"},
-    {"trigger_str", pymod_str_trigger, METH_VARARGS, "Forces the trigger of a string callback"},
-    {"trigger_int", pymod_int_trigger, METH_VARARGS, "Forces the trigger of an integer callback"},
-    {NULL, NULL, 0, NULL}        /* Sentinel */
-};
-
+static std::vector<PyMethodDef> pymod_methods;
 static struct PyModuleDef pymod_cfg = {
-    PyModuleDef_HEAD_INIT,
-    "pymod",        /* name of module */
-    NULL,           /* module documentation, may be NULL */
-    -1,             /* size of per-interpreter state of the module,
-                    or -1 if the module keeps state in global variables. */
-    pymod_methods
+    .m_base = PyModuleDef_HEAD_INIT,
+    .m_name = "pymod",          /* name of module */
+    .m_doc = NULL,              /* module documentation, may be NULL */
+    .m_size = -1,               /* size of per-interpreter state of the module,
+                                or -1 if the module keeps state in global variables. */
+    .m_methods = NULL           /* will be filled later */
 };
 
 static void pymod_deleter(pymod_cbk_t *ptr) {
@@ -113,6 +105,23 @@ PyMODINIT_FUNC PyInit_pymod() {
     DBG_SCOPE();
     PyObject *m;
 
+    if (pymod_pre_init(pymod_methods, &pymod_cfg) < 0) {
+        DBG("Implementer pre-init returned error");
+        return NULL;
+    }
+    pymod_methods.push_back(PyMethodDef{"sset_cbk", pymod_sset_cbk, METH_VARARGS,
+            "Adds a callback with a context to a string trigger"});
+    pymod_methods.push_back(PyMethodDef{"iset_cbk", pymod_iset_cbk, METH_VARARGS,
+            "Adds a callback with a context to a integer trigger"});
+    pymod_methods.push_back(PyMethodDef{"unset_cbk", pymod_unset_cbk, METH_VARARGS,
+            "Removes a callback"});
+    pymod_methods.push_back(PyMethodDef{"trigger_str", pymod_str_trigger, METH_VARARGS,
+            "Forces the trigger of a string callback"});
+    pymod_methods.push_back(PyMethodDef{"trigger_int", pymod_int_trigger, METH_VARARGS,
+            "Forces the trigger of an integer callback"});
+    pymod_methods.push_back(PyMethodDef{NULL, NULL, 0, NULL}); /* Sentinel */
+
+    pymod_cfg.m_methods = pymod_methods.data();
     m = PyModule_Create(&pymod_cfg);
     if (m == NULL)
         return NULL;
@@ -123,6 +132,11 @@ PyMODINIT_FUNC PyInit_pymod() {
         Py_XDECREF(pymod_error);
         Py_CLEAR(pymod_error);
         Py_DECREF(m);
+        return NULL;
+    }
+
+    if (pymod_post_init() < 0) {
+        DBG("Implementer post-init returned error");
         return NULL;
     }
 

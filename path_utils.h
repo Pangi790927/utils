@@ -7,11 +7,14 @@
 #include <vector>
 #include <dirent.h>
 
+/* path utils is a pre-debug header */
+
 inline std::string path_pid_path(pid_t pid) {
     char path_buff[PATH_MAX] = {0};
-    if (!realpath(sformat("/proc/%d/exe", pid).c_str(), path_buff)) {
-        DBG("Failed to get parrent path");
-        return "";
+    char proc_pid_path[64];
+    snprintf(proc_pid_path, sizeof(proc_pid_path), "/proc/%d/exe", pid);
+    if (!realpath(proc_pid_path, path_buff)) {
+        return ""; /* it's clear that a path can't be empty, hence error */
     }
     return path_buff;
 }
@@ -24,12 +27,18 @@ inline std::string path_pid_dir(pid_t pid) {
 }
 
 inline std::string path_get_module_path() {
-    // Dl_info info;
-    // if (!dladdr((void *)&path_get_module_path, &info)) {
-    //     return "";
-    // }
-    // return info.dli_fname;
-    return path_pid_dir(getpid());
+    std::string mod_path;
+    Dl_info info;
+    if (!dladdr((void *)&path_get_module_path, &info)) {
+        mod_path = "";
+    }
+    mod_path = info.dli_fname;
+    if (mod_path.size() && mod_path[0] == '/') {
+        return mod_path;
+    }
+    else {
+        return path_pid_dir(getpid());
+    }
 }
 
 inline std::string path_get_module_dir() {
@@ -41,7 +50,7 @@ inline std::string path_get_module_dir() {
 inline std::string path_get_abs(std::string path) {
     char path_buff[PATH_MAX] = {0};
     if (!realpath(path.c_str(), path_buff))
-        return "[path_error]";
+        return ""; /* it's clear that a path can't be empty, hence error */
     return path_buff;
 }
 
@@ -68,8 +77,7 @@ inline std::vector<std::string> list_dir(std::string dirname) {
     char buf[512];
 
     if (!(dir = opendir(dirname.c_str()))) {
-        DBGE("can't open %s", dirname.c_str());
-        return {};
+        return {}; /* the directory has to have at least .. and . */
     }
 
     std::vector<std::string> ret;
