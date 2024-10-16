@@ -101,7 +101,7 @@ int pymod_trigger_cbk(pymod_cbk_wp _cbk, const std::string& s, int64_t intval) {
     return 0;
 }
 
-PyMODINIT_FUNC PyInit_pymod() {
+PyMODINIT_FUNC PYMOD_MODULE_NAME () {
     DBG_SCOPE();
     PyObject *m;
 
