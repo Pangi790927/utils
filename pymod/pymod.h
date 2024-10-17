@@ -1,11 +1,11 @@
 #ifndef PYMOD_H
 #define PYMOD_H
 
-#include <functional>
-#include <memory>
-
 #define PY_SSIZE_T_CLEAN
 #include "Python.h"
+
+#include <functional>
+#include <memory>
 
 /* TODO: Should I add mutexes in this implementation? */
 struct pymod_cbk_t;
@@ -20,6 +20,12 @@ to the c++ part and the reverse should also be possible */
 int pymod_trigger_int(uint64_t trig, const std::string& strval, int64_t intval);
 int pymod_trigger_str(const std::string &trig, const std::string& strval, int64_t intval);
 int pymod_trigger_cbk(pymod_cbk_wp cbk, const std::string& strval, int64_t intval);
+
+/* also a kind of callback, but this time those callbacks are meant to be used inside await stuff
+inside python. Those awaitables will have 3 fields .intval, .strval, .usrval, where usrval can
+be set iniside the constructor. */
+PyObject *pymod_await_new(PyObject *ctx);
+int pymod_await_trig(PyObject *aw, int64_t intval, const std::string& strval);
 
 /* This is a function that must be provided by the implementer of this header and this function
 will be called right after the python module is initialized. define PYMOD_NOINIT_FUNCTION to ignore

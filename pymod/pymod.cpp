@@ -1,6 +1,3 @@
-#define PY_SSIZE_T_CLEAN
-#include "Python.h"
-
 // - include this file first because python needs to be included first
 // - with the respective version do:
 // INCLCUDES += -I/usr/include/python3.8
@@ -50,6 +47,120 @@ static struct PyModuleDef pymod_cfg = {
                                 or -1 if the module keeps state in global variables. */
     .m_methods = NULL           /* will be filled later */
 };
+
+/* EXPERIMENT -- AWAITABLES -- !! FAILED EXPERIMENT !! -> try using the future from asyncio?
+================================================================================================= */
+
+struct pymod_awaitable_internal_t {
+    std::string strval;
+    int64_t intval;
+};
+
+struct pymod_awaitable_t {
+    pymod_awaitable_internal_t *p;
+};
+
+static PyObject *awaitable_await(PyObject *self);
+static PyObject *awaitable_new(PyTypeObject *tp, PyObject *args, PyObject *kwds);
+static PyObject *awaitable_next(PyObject *self);
+static void awaitable_dealloc(PyObject *self);
+
+#if PY_MINOR_VERSION > 9
+static PySendResult awaitable_am_send(PyObject *self, PyObject *arg, PyObject **presult);
+#endif /* PY_MINOR_VERSION > 9 */
+
+static PyAsyncMethods pymod_async_methods = {
+#if PY_MINOR_VERSION > 9
+    .am_await = awaitable_await,
+    .am_send = awaitable_am_send
+#else
+    .am_await = awaitable_await
+#endif /* PY_MINOR_VERSION > 9 */
+};
+
+static PyTypeObject pymod_awaitable_type =
+{
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "pymod.awaitable",
+    .tp_basicsize = sizeof(pymod_awaitable_t),
+    .tp_dealloc = awaitable_dealloc,
+    .tp_as_async = &pymod_async_methods,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_iter = PyObject_SelfIter,
+    .tp_iternext = awaitable_next,
+    .tp_new = awaitable_new,
+};
+
+static void awaitable_dealloc(PyObject *self) {
+    DBG_SCOPE();
+    pymod_awaitable_t *aw = (pymod_awaitable_t *) self;
+    delete aw->p;
+    Py_TYPE(self)->tp_free(self);
+}
+
+static PyObject *awaitable_new(PyTypeObject *tp, PyObject *args, PyObject *kwds) {
+    DBG_SCOPE();
+    if (!tp || !tp->tp_alloc) {
+        DBG("Invalid object descriptor");
+        return NULL;
+    }
+
+    PyObject *ret = tp->tp_alloc(tp, 0);
+    if (ret == NULL) {
+        DBG("Failed allocation");
+        return NULL;
+    }
+
+    pymod_awaitable_t *aw = (pymod_awaitable_t *) ret;
+    aw->p = new pymod_awaitable_internal_t;
+
+    if (args) {
+        DBG("TODO: Constructor needs implementation");
+        /* TODO: parse args and take from them intval, strval, usrval */
+    }
+
+    return ret;
+}
+
+static PyObject *awaitable_next(PyObject *self) {
+    DBG_SCOPE();
+    return self;
+}
+
+#if PY_MINOR_VERSION > 9
+static PySendResult awaitable_am_send(PyObject *self, PyObject *arg, PyObject **presult) {
+    return NULL;
+}
+#endif /*PY_MINOR_VERSION > 9*/
+
+static PyObject *awaitable_await(PyObject *self) {
+    DBG_SCOPE();
+    return self;
+}
+
+PyObject *pymod_await_new(PyObject *ctx) {
+    return awaitable_new(&pymod_awaitable_type, NULL, NULL);
+}
+
+int pymod_await_trig(PyObject *aw, int64_t intval, const std::string& strval) {
+    return 0;
+}
+
+static int init_awaitable_type(PyObject *m, PyTypeObject *obj_type, const std::string &type_name) {
+    Py_INCREF(obj_type);
+    if (PyType_Ready(obj_type) < 0) {
+        Py_DECREF(obj_type);
+        return -1;
+    }
+    if (PyModule_AddObject(m, type_name.c_str(), (PyObject *)obj_type) < 0) {
+        Py_DECREF(obj_type);
+        return -1;
+    }
+    return 0;
+}
+
+/* DONE EXPERIMENT
+================================================================================================= */
 
 static void pymod_deleter(pymod_cbk_t *ptr) {
     Py_XDECREF(ptr->cbk);
@@ -103,12 +214,17 @@ int pymod_trigger_cbk(pymod_cbk_wp _cbk, const std::string& s, int64_t intval) {
 
 PyMODINIT_FUNC PYMOD_MODULE_NAME () {
     DBG_SCOPE();
-    PyObject *m;
 
+    PyObject *m;
+    FnScope scope;
+
+    /* call client before anything is initialized */
     if (pymod_pre_init(pymod_methods, &pymod_cfg) < 0) {
         DBG("Implementer pre-init returned error");
         return NULL;
     }
+
+    /* add own functions to the function list */
     pymod_methods.push_back(PyMethodDef{"sset_cbk", pymod_sset_cbk, METH_VARARGS,
             "Adds a callback with a context to a string trigger"});
     pymod_methods.push_back(PyMethodDef{"iset_cbk", pymod_iset_cbk, METH_VARARGS,
@@ -121,25 +237,40 @@ PyMODINIT_FUNC PYMOD_MODULE_NAME () {
             "Forces the trigger of an integer callback"});
     pymod_methods.push_back(PyMethodDef{NULL, NULL, 0, NULL}); /* Sentinel */
 
+    /* initialize the module object */
     pymod_cfg.m_methods = pymod_methods.data();
     m = PyModule_Create(&pymod_cfg);
-    if (m == NULL)
+    if (m == NULL) {
+        DBG("Failed to create the module");
         return NULL;
+    }
+    scope([&m]{ Py_DECREF(m); });
 
+    /* adding own error type */
     pymod_error = PyErr_NewException("pymod.error", NULL, NULL);
     Py_INCREF(pymod_error);
-    if (PyModule_AddObject(m, "error", pymod_error) < 0) {
+    scope([]{
         Py_XDECREF(pymod_error);
         Py_CLEAR(pymod_error);
-        Py_DECREF(m);
+    });
+    if (PyModule_AddObject(m, "error", pymod_error) < 0) {
+        DBG("Failed to add error object");
         return NULL;
     }
 
+    /* adding own awaitable type */
+    if (init_awaitable_type(m, &pymod_awaitable_type, "awaitable") < 0) {
+        DBG("Failed to register awaitable type");
+        return NULL;
+    }
+
+    /* call client once everything is initialized */
     if (pymod_post_init() < 0) {
         DBG("Implementer post-init returned error");
         return NULL;
     }
 
+    scope.disable();
     return m;
 }
 
