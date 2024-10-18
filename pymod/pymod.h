@@ -25,13 +25,13 @@ int pymod_trigger_cbk(pymod_cbk_wp cbk, const std::string& strval, int64_t intva
 inside python. Those awaitables will have 3 fields .intval, .strval, .usrval, where usrval can
 be set iniside the constructor. */
 PyObject *pymod_await_new(PyObject *ctx);
-int pymod_await_trig(PyObject *aw, int64_t intval, const std::string& strval);
+int pymod_await_trig(PyObject *aw, const std::string& strval, int64_t intval);
 
 /* This is a function that must be provided by the implementer of this header and this function
 will be called right after the python module is initialized. define PYMOD_NOINIT_FUNCTION to ignore
 it */
 int pymod_pre_init(std::vector<PyMethodDef> &methods, PyModuleDef *module_def);
-int pymod_post_init();
+int pymod_post_init(PyObject *m);
 
 #ifdef PYMOD_NOINIT_FUNCTION
 inline int pymod_pre_init(std::vector<PyMethodDef> &, PyModuleDef *) { return 0; }
