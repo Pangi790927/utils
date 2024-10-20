@@ -48,6 +48,9 @@ static struct PyModuleDef pymod_cfg = {
     .m_methods = NULL           /* will be filled later */
 };
 
+static std::shared_ptr<int> uniniter =
+        std::shared_ptr<int>(new int, [](int *p){ pymod_uninit(); delete p; });
+
 /* EXPERIMENT -- AWAITABLES -- !! FAILED EXPERIMENT !! -> try using the future from asyncio?
 ================================================================================================= */
 
@@ -167,7 +170,6 @@ PyObject *pymod_await_new(PyObject *ctx) {
         }
         future_ctx[ret] = ctx;
     }
-    print_object(ret);
     return ret;
 }
 
@@ -201,20 +203,15 @@ int pymod_await_trig(PyObject *future, const std::string& strval, int64_t intval
         DBG("Failed to get futre loop");
         return -1;
     }
-    DBG("Got the loop")
-    print_object(loop);
     PyObject *set_result;
     if (!(set_result = PyObject_GetAttrString(future, "set_result"))) {
         DBG("Failed to get the set_result function");
         return -1;
     }
-    DBG("Got the set_result")
-    print_object(set_result);
     if (!PyObject_CallMethod(loop, "call_soon_threadsafe", "(OO)", set_result, tup)) {
         DBG("Failed to schedule awake future");
         return -1;
     }
-    DBG("Scheduled the awaker");
     Py_XDECREF(ctx);
     Py_DECREF(future);
     return 0;
@@ -222,15 +219,6 @@ int pymod_await_trig(PyObject *future, const std::string& strval, int64_t intval
 
 static int init_awaitable_type(PyObject *m, PyTypeObject *obj_type, const std::string &type_name) {
     DBG_SCOPE();
-    // Py_INCREF(obj_type);
-    // if (PyType_Ready(obj_type) < 0) {
-    //     Py_DECREF(obj_type);
-    //     return -1;
-    // }
-    // if (PyModule_AddObject(m, type_name.c_str(), (PyObject *)obj_type) < 0) {
-    //     Py_DECREF(obj_type);
-    //     return -1;
-    // }
 
     if (!(aio = PyImport_ImportModule("asyncio"))) {
         DBG("Failed to load asyncio module");

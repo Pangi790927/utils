@@ -32,10 +32,12 @@ will be called right after the python module is initialized. define PYMOD_NOINIT
 it */
 int pymod_pre_init(std::vector<PyMethodDef> &methods, PyModuleDef *module_def);
 int pymod_post_init(PyObject *m);
+void pymod_uninit();
 
 #ifdef PYMOD_NOINIT_FUNCTION
 inline int pymod_pre_init(std::vector<PyMethodDef> &, PyModuleDef *) { return 0; }
 inline int pymod_post_init() { return 0; }
+inline void pymod_uninit() { return 0; }
 #endif
 
 /* those will be called by the python side whenever a callback is to be registered to the C++ side.
