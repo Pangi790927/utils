@@ -51,14 +51,8 @@ static struct PyModuleDef pymod_cfg = {
 static std::shared_ptr<int> uniniter =
         std::shared_ptr<int>(new int, [](int *p){ pymod_uninit(); delete p; });
 
-/* EXPERIMENT -- AWAITABLES -- !! FAILED EXPERIMENT !! -> try using the future from asyncio?
-================================================================================================= */
-
 static PyObject *aio;
 static PyObject *aio_future_class;
-
-static std::mutex future_mu;
-static std::map<PyObject *, PyObject *> future_ctx;
 
 static void print_object(PyObject *obj) {
     if (PyObject_Print(obj, stdout, 0) < 0) {
@@ -68,158 +62,52 @@ static void print_object(PyObject *obj) {
     printf("\n");
 }
 
-
-struct pymod_awaitable_internal_t {
-    std::string strval;
-    int64_t intval;
-};
-
-struct pymod_awaitable_t {
-    pymod_awaitable_internal_t *p;
-};
-
-static PyObject *awaitable_await(PyObject *self);
-static PyObject *awaitable_new(PyTypeObject *tp, PyObject *args, PyObject *kwds);
-static PyObject *awaitable_next(PyObject *self);
-static void awaitable_dealloc(PyObject *self);
-
-#if PY_MINOR_VERSION > 9
-static PySendResult awaitable_am_send(PyObject *self, PyObject *arg, PyObject **presult);
-#endif /* PY_MINOR_VERSION > 9 */
-
-static PyAsyncMethods pymod_async_methods = {
-#if PY_MINOR_VERSION > 9
-    .am_await = awaitable_await,
-    .am_send = awaitable_am_send
-#else
-    .am_await = awaitable_await
-#endif /* PY_MINOR_VERSION > 9 */
-};
-
-static PyTypeObject pymod_awaitable_type =
-{
-    .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "pymod.awaitable",
-    .tp_basicsize = sizeof(pymod_awaitable_t),
-    .tp_dealloc = awaitable_dealloc,
-    .tp_as_async = &pymod_async_methods,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
-    .tp_iter = PyObject_SelfIter,
-    .tp_iternext = awaitable_next,
-    .tp_new = awaitable_new,
-};
-
-static void awaitable_dealloc(PyObject *self) {
-    DBG_SCOPE();
-    pymod_awaitable_t *aw = (pymod_awaitable_t *) self;
-    delete aw->p;
-    Py_TYPE(self)->tp_free(self);
-}
-
-static PyObject *awaitable_new(PyTypeObject *tp, PyObject *args, PyObject *kwds) {
-    DBG_SCOPE();
-    if (!tp || !tp->tp_alloc) {
-        DBG("Invalid object descriptor");
-        return NULL;
-    }
-
-    PyObject *ret = tp->tp_alloc(tp, 0);
-    if (ret == NULL) {
-        DBG("Failed allocation");
-        return NULL;
-    }
-
-    pymod_awaitable_t *aw = (pymod_awaitable_t *) ret;
-    aw->p = new pymod_awaitable_internal_t;
-
-    if (args) {
-        DBG("TODO: Constructor needs implementation");
-        /* TODO: parse args and take from them intval, strval, usrval */
-    }
-
-    return ret;
-}
-
-static PyObject *awaitable_next(PyObject *self) {
-    DBG_SCOPE();
-    return self;
-}
-
-#if PY_MINOR_VERSION > 9
-static PySendResult awaitable_am_send(PyObject *self, PyObject *arg, PyObject **presult) {
-    return NULL;
-}
-#endif /*PY_MINOR_VERSION > 9*/
-
-static PyObject *awaitable_await(PyObject *self) {
-    DBG_SCOPE();
-    return self;
-}
-
 PyObject *pymod_await_new(PyObject *ctx) {
-    DBG_SCOPE();
     PyObject* args = Py_BuildValue("()");
-    auto ret = PyObject_Call(aio_future_class, args, NULL);
-    Py_INCREF(ret);
-    Py_XINCREF(ctx);
-    {
-        std::lock_guard guard(future_mu);
-        if (HAS(future_ctx, ret)) {
-            DBG("This is absurd");
-            return NULL;
-        }
-        future_ctx[ret] = ctx;
-    }
-    return ret;
+    return PyObject_Call(aio_future_class, args, NULL);
 }
 
-int pymod_await_trig(PyObject *future, const std::string& strval, int64_t intval) {
+int pymod_await_trig(PyObject *future, PyObject *result, PyObject *err) {
     DBG_SCOPE();
-    PyObject *ctx;
-    {
-        std::lock_guard guard(future_mu);
-        if (!HAS(future_ctx, future)) {
-            DBG("You are not allowed to trigger a future twice...");
-            return -1;
-        }
-        ctx = future_ctx[future];
-        future_ctx.erase(future);
-    }
 
-    PyObject *tup;
-    if (ctx) {
-        tup = Py_BuildValue("(sLO)", strval.c_str(), intval, ctx);
-    }
-    else {
-        tup = Py_BuildValue("(sL)", strval.c_str(), intval);
-    }
-    if (!tup) {
-        DBG("Failed to create future result");
-        return -1;
-    }
     // self.loop.call_soon_threadsafe(self.futures[k].set_result, v)
     PyObject *loop;
     if (!(loop = PyObject_CallMethod(future, "get_loop", "()"))) {
         DBG("Failed to get futre loop");
         return -1;
     }
-    PyObject *set_result;
-    if (!(set_result = PyObject_GetAttrString(future, "set_result"))) {
-        DBG("Failed to get the set_result function");
+    if (err && result) {
+        DBG("Can't be both errored and not errored");
         return -1;
     }
-    if (!PyObject_CallMethod(loop, "call_soon_threadsafe", "(OO)", set_result, tup)) {
-        DBG("Failed to schedule awake future");
-        return -1;
+    if (!err && !result)
+        err = pymod_error;
+    if (err) {
+        PyObject *set_exception;
+        if (!(set_exception = PyObject_GetAttrString(future, "set_exception"))) {
+            DBG("Failed to get the set_exception function");
+            return -1;
+        }
+        if (!PyObject_CallMethod(loop, "call_soon_threadsafe", "(OO)", set_exception, err)) {
+            DBG("Failed to schedule awake exception future");
+            return -1;
+        }
     }
-    Py_XDECREF(ctx);
-    Py_DECREF(future);
+    if (result) {
+        PyObject *set_result;
+        if (!(set_result = PyObject_GetAttrString(future, "set_result"))) {
+            DBG("Failed to get the set_result function");
+            return -1;
+        }
+        if (!PyObject_CallMethod(loop, "call_soon_threadsafe", "(OO)", set_result, result)) {
+            DBG("Failed to schedule awake future");
+            return -1;
+        }
+    }
     return 0;
 }
 
-static int init_awaitable_type(PyObject *m, PyTypeObject *obj_type, const std::string &type_name) {
-    DBG_SCOPE();
-
+static int init_awaitable_type() {
     if (!(aio = PyImport_ImportModule("asyncio"))) {
         DBG("Failed to load asyncio module");
         return -1;
@@ -232,9 +120,6 @@ static int init_awaitable_type(PyObject *m, PyTypeObject *obj_type, const std::s
     Py_INCREF(aio_future_class);
     return 0;
 }
-
-/* DONE EXPERIMENT
-================================================================================================= */
 
 static void pymod_deleter(pymod_cbk_t *ptr) {
     Py_XDECREF(ptr->cbk);
@@ -287,8 +172,6 @@ int pymod_trigger_cbk(pymod_cbk_wp _cbk, const std::string& s, int64_t intval) {
 }
 
 PyMODINIT_FUNC PYMOD_MODULE_NAME () {
-    DBG_SCOPE();
-
     PyObject *m;
     FnScope scope;
 
@@ -333,7 +216,7 @@ PyMODINIT_FUNC PYMOD_MODULE_NAME () {
     }
 
     /* adding own awaitable type */
-    if (init_awaitable_type(m, &pymod_awaitable_type, "awaitable") < 0) {
+    if (init_awaitable_type() < 0) {
         DBG("Failed to register awaitable type");
         return NULL;
     }

@@ -3,9 +3,16 @@
 
 #define PY_SSIZE_T_CLEAN
 #include "Python.h"
-
 #include <functional>
 #include <memory>
+
+#define ASSERT_PYFN(fn) { \
+    int ret = (fn); \
+    if (ret < 0) { \
+        DBGE("Failed function: %s [%d]", #fn, ret); \
+        return NULL; \
+    } \
+}
 
 /* TODO: Should I add mutexes in this implementation? */
 struct pymod_cbk_t;
@@ -25,7 +32,7 @@ int pymod_trigger_cbk(pymod_cbk_wp cbk, const std::string& strval, int64_t intva
 inside python. Those awaitables will have 3 fields .intval, .strval, .usrval, where usrval can
 be set iniside the constructor. */
 PyObject *pymod_await_new(PyObject *ctx);
-int pymod_await_trig(PyObject *aw, const std::string& strval, int64_t intval);
+int pymod_await_trig(PyObject *aw, PyObject *res, PyObject *err = NULL);
 
 /* This is a function that must be provided by the implementer of this header and this function
 will be called right after the python module is initialized. define PYMOD_NOINIT_FUNCTION to ignore
