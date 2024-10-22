@@ -68,8 +68,6 @@ PyObject *pymod_await_new(PyObject *ctx) {
 }
 
 int pymod_await_trig(PyObject *future, PyObject *result, PyObject *err) {
-    DBG_SCOPE();
-
     // self.loop.call_soon_threadsafe(self.futures[k].set_result, v)
     PyObject *loop;
     if (!(loop = PyObject_CallMethod(future, "get_loop", "()"))) {
