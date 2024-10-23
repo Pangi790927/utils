@@ -51,7 +51,7 @@ to a callback that will be called from another thread */
 /* If CO_ENABLE_DEBUG_NAMES you can also define CORO_REG and use it to register a corutine's name */
 #if CO_ENABLE_DEBUG_NAMES
 # ifndef CORO_REG
-#  define CORO_REG(t)   coro::dbg_register_name(t, "%20s:%5d:%s", __FILE__, __LINE__, #t)
+#  define CORO_REG(t)   coro::dbg_register_name((t), "%20s:%5d:%s", __FILE__, __LINE__, #t)
 # endif
 #else
 # define CORO_REG(t)    t
@@ -124,9 +124,12 @@ struct sem_internal_t;
 #endif
 
 struct pool_t {
+    pool_t();
+
     void sched(task_t task, const std::vector<modif_p>& v = {}); /* ignores return type */
     run_e run();
 
+    /* Not private, but don't touch, not yours, leave it alone */
     std::unique_ptr<pool_internal_t> internal;
 };
 
@@ -139,7 +142,7 @@ struct sem_t {
     };
 
     /* can be created and moved, but not copied */
-    sem_t(pool_wp pool);
+    sem_t(pool_wp pool, int64_t val = 0);
     sem_t(sem_t& sem) = delete;
     sem_t(sem_t&& sem) { internal = std::move(sem.internal); }
     sem_t &operator = (sem_t& sem) = delete;
@@ -149,8 +152,7 @@ struct sem_t {
     bool try_dec();
     /* await instead of dec() */
 
-    template <typename ret_t>
-    task<ret_t> await_suspend(task<ret_t> to_suspend);
+    task_t      await_suspend(task_t to_suspend);
     bool        await_ready();
     unlocker_t  await_resume();
 private:
@@ -266,8 +268,8 @@ type is error_e).
 */
 
 /* Creates semaphores, those need the pool to exist */
-inline sem_t create_sem(pool_wp pool);
-inline task<sem_t> create_sem();
+inline sem_t create_sem(pool_wp pool, int64_t val = 0);
+inline task<sem_t> create_sem(int64_t val = 0);
 
 /* a modification that depends on the pool, this is used in scheduled coroutines to end the current
 corutine if they die. This is not inherited by either calls or spawns, but it is inherited by other
@@ -276,10 +278,9 @@ inline task<modif_p> creat_depend();
 
 /* modifier that, once signaled, will awake the corutine and make it return ERROR_WAKEUP. If the
 corutine is not waiting it will return as soon as it reaches any co_await ?or co_yield? */
-/* TODO: what to do if not basic type? except? */
 /* TODO: don't forget to awake the fds nicely(something like stopfd) */
 inline modif_p creat_killer();
-inline void sig_killer(modif_p p);
+inline error_e sig_killer(modif_p p);
 
 /* takes a task and adds the requred modifications to it such that the returned object will be
 returned once the return value of the task is available so:
@@ -359,10 +360,51 @@ inline std::function<int(const std::string&)> log_str;
 =================================================================================================
 ================================================================================================= */
 
-/* holds fd and things... */
+/* The Pool
+------------------------------------------------------------------------------------------------- */
+
 struct pool_internal_t {
+    void sched(task_t task, const std::vector<modif_p>& v) {
+
+    }
+
+    run_e run() {
+
+    }
+};
+
+inline pool_t pool() : internal(std::make_unique<pool_internal_t>()) {}
+
+inline void pool_t::sched(task_t task, const std::vector<modif_p>& v = {}) {
+    internal->sched(task, v);
+}
+
+inline run_e run() {
+    return internal->run();
+}
+
+/* The Task & Awaiters
+------------------------------------------------------------------------------------------------- */
+
+/* The promise */
+struct task_state_t {
 
 };
+
+template<typename RetType> struct task {
+    
+};
+
+struct yield_awaiter_t {
+
+};
+
+struct sched_awaiter_t {
+
+};
+
+/* File descriptors
+------------------------------------------------------------------------------------------------- */
 
 /* This is the object with which you wait for a file descriptor, you create it with a valid
 wait_cond and fd and co_await on it. The resulting integer must be positive to not be an error */
@@ -371,43 +413,132 @@ struct fd_awaiter_t {
     int wait_cond;  /* set with epoll wait condition */
     int fd;         /* set with waited file descriptor */
 
-    std::coroutine_handle<void> await_suspend(task<ret_t> t);
-    bool                        await_ready();  /* never */
-    error_e                     await_resume(); /* resume  */
+    task_t await_suspend(task_t t) {
+        /* TODO: wait the thing */
+    }
+
+    bool await_ready() {
+        return false;
+    };
+
+    error_e await_resume() {
+        return caller->err;
+    }
+
 private:
-    task<ret_t> caller; /* who to wake up */
-    pool_wp _pool;      /* the pool that holds this coroutine */
+    task_t caller; /* who to wake up */
+    pool_wp _pool; /* the pool that holds this coroutine */
 };
 
-/* Those are the types of modifications that a corutine can have, including user created ones. */
-/* TODO: This should also dissapear once the object has callbacks, simply implement our own modif
-for timer and trace */
-// enum modif_type_e : int32_t {
-//     MODIF_TIMEOUT,
-//     MODIF_TRACE,
+/* Semaphore
+------------------------------------------------------------------------------------------------- */
 
-//     MODIF_FIRST_USABLE,
-//     /* MODIF_FIRST_USABLE marks the first number that can be used by the user, as to not interact
-//     with the system. To be explicit, this means the user can add it's own modifications as long
-//     as those are defined as numbers larger than MODIF_FIRST_USABLE. */
-// };
+struct sem_internal_t {
+    sem_internal_t(pool_wp pool, int64_t val) : _pool(pool), val(val) {}
 
-/* Those are the points that the pmods should be called */
-/* TODO: may not be needed if the function callbacks are not set, we don't call them, will remove
-them after writing modif_t */
-// enum modif_type_call_e : int32_t {
-//     MODIF_CALL_CALL         = 0x01, /* called when a new corutine is called (created and awaited) */    
-//     MODIF_CALL_SPAWN        = 0x02, /* called when a new corutine is scheduled (create and sched) */
+    task_t await_suspend(task_t to_suspend) {
+        /* TODO; */
+    }
 
-//     MODIF_CALL_LEAVE        = 0x04, /* called when the corutine is leaving the execution */
-//     MODIF_CALL_REENTRY      = 0x08, /* called when the corutine is resuming execution */
-//     MODIF_CALL_EXIT         = 0x10, /* called when the corutine is exiting */
+    bool await_ready() {
+        if (val > 0) {
+            val--;
+            return true;
+        }
+        return false;
+    }
 
-//     MODIF_CALL_FD_WAIT      = 0x20, /* called when the corutine awaits a file descriptor */
-//     MODIF_CALL_FD_UNWAIT    = 0x40, /* called when the corutine stops waiting on a file descriptor */
-//     MODIF_CALL_SEM_WAIT     = 0x80, /* called when the corutine starts waiting on a semaphore */
-//     MODIF_CALL_SEM_UNWAIT   = 0x100,/* called when the corutine stops waiting on a semaphore */
-// };
+private:
+    uint64_t val;
+    pool_wp _pool;
+};
+
+inline sem_t::sem_t(pool_wp pool, int64_t val = 0)
+: internal(std::make_unique<sem_internal_t>(pool, val)) {}
+
+inline void         sem_t::inc() { internal->inc(); }
+inline bool         sem_t::try_dec() { return internal->try_dec(); }
+inline task_t       sem_t::await_suspend(task_t to_suspend) { return internal->await_suspend(); }
+inline bool         sem_t::await_ready() { return internal->await_ready(); }
+inline unlocker_t   sem_t::await_resume() { return unlocker_t(*this); }
+
+/* Functions
+------------------------------------------------------------------------------------------------  */
+
+template <typename ...ret_v>
+inline task_t wait_all(task_t<ret_v>... tasks);
+
+template <typename ret_t>
+inline sched_awaiter_t sched(task<ret_t> to_sched, const std::vector<modif_p>& v = {});
+
+template <typename Awaiter>
+inline task_t await(Awaiter&& awaiter);
+
+inline yield_awaiter_t yield();
+inline task<pool_wp> get_pool();
+
+inline task<sem_t> create_sem(int64_t val = 0) {
+    auto pool = co_await get_pool();
+    co_return sem_t(pool, val);
+}
+
+inline task<modif_p> creat_depend();
+
+inline task_t stopfd(int fd);
+inline task_t force_stop(int ret);
+
+inline task_t sleep(const std::chrono::milliseconds& us);
+inline task_t sleep_us(uint64_t timeo_us);
+inline task_t sleep_ms(uint64_t timeo_ms);
+inline task_t sleep_s(uint64_t timeo_s);
+
+inline task_t wait_event(int fd, int event);
+inline task_t connect(int fd, sockaddr *sa, socklen_t *len);
+inline task_t accept(int fd, sockaddr *sa, socklen_t *len);
+inline task_t read(int fd, void *buff, size_t len);
+inline task_t write(int fd, const void *buff, size_t len);
+inline task_t read_sz(int fd, void *buff, size_t len);
+inline task_t write_sz(int fd, const void *buff, size_t len);
+
+/* non awaitable functions: */
+
+template <typename ret_t>
+inline std::set<client_wp, std::owner_less<client_wp>>> &task_modifs(task<ret_t> t);
+
+template <typename ret_t>
+inline task<ret_t> add_modif(task<ret_t> t, modif_p mod); 
+
+template <typename ret_t>
+inline task<ret_t> creat_future(task<ret_t> t);
+
+inline pool_p  create_pool();
+inline sem_t   create_sem(pool_wp pool, int64_t val = 0);
+inline modif_p create_modif(const modif_t& modif_template);
+inline modif_p creat_timeo(const std::chrono::microseconds& timeo);
+inline modif_p creat_killer();
+inline error_e sig_killer(modif_p p);
+
+/* Debug stuff
+------------------------------------------------------------------------------------------------- */
+
+template <typename ret_t, typename ...Args>
+inline task<ret_t> dbg_register_name(task<ret_t> t, const char *fmt, task<ret_t>&&...) {
+    /* TODO: */
+    /* Probably remember names inside the pool */
+}
+
+inline modif_p creat_dbg_tracer() {
+    /* TODO: */
+}
+
+/* Obtains the name given to the respective task */
+template <typename ret_t>
+inline std::string dbg_name(task<ret_t> t) {
+    /* TODO: */
+}
+
+/* The end
+------------------------------------------------------------------------------------------------- */
 
 }
 
