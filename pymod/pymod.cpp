@@ -68,10 +68,12 @@ PyObject *pymod_await_new(PyObject *ctx) {
 }
 
 int pymod_await_trig(PyObject *future, PyObject *result, PyObject *err) {
-    DBG_SCOPE();
-
     // self.loop.call_soon_threadsafe(self.futures[k].set_result, v)
     PyObject *loop;
+    if (!future) {
+        DBG("Future was not initialized...");
+        return -1;
+    }
     if (!(loop = PyObject_CallMethod(future, "get_loop", "()"))) {
         DBG("Failed to get futre loop");
         return -1;

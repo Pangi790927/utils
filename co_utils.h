@@ -949,7 +949,7 @@ inline int fd_sched_t::handle_events(int num_evs) {
             }
             else {
                 /* If you get this you will want to make sure to treat the respective event */
-                DBG("UNSOLICITED EVENT: %s", epoll_ev2str(ret_evs[i].events).c_str());
+                // DBG("UNSOLICITED EVENT: %s", epoll_ev2str(ret_evs[i].events).c_str());
             }
         }
     }
