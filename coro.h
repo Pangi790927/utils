@@ -222,6 +222,7 @@ inline yield_awaiter_t yield();
 
 /* Modifications
 ------------------------------------------------------------------------------------------------  */
+
 inline modif_p create_modif(const modif_t& modif_template);
 
 /* This returns the internal set that holds the different modifications of the task. */
@@ -231,6 +232,10 @@ inline std::set<client_wp, std::owner_less<client_wp>>> &task_modifs(task<ret_t>
 /* This adds a modifier to the task and returns the task */
 template <typename ret_t>
 inline task<ret_t> add_modif(task<ret_t> t, modif_p mod);
+
+/* calls an awaitable inside a task_t, this is done to be able to use modifs on awaitables */
+template <typename Awaiter>
+inline task_t await(Awaiter&& awaiter);
 
 /* Timing
 ------------------------------------------------------------------------------------------------  */
@@ -291,10 +296,6 @@ inline task<ret_t> creat_future(task<ret_t> t);
 one kills all (sig_killer installed in all). The inheritance is the same as with 'call'. */
 template <typename ...ret_v>
 inline task_t wait_all(task_t<ret_v>... tasks);
-
-/* calls an awaitable inside a task_t, this is done to be able to use modifs on awaitables */
-template <typename Awaiter>
-inline task_t await(Awaiter& awaiter);
 
 /* causes the running pool::run to stop, the function will stop at this point, can be resumed with
 another run */
