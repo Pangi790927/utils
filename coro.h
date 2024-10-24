@@ -200,8 +200,8 @@ struct modif_t {
     std::function<error_e(state_t *, modif_p)> enter_cbk;
 
     /* awaiting a file descriptor */
-    std::function<error_e(state_t *, int fd, int wait_cond, modif_t *)> waitfd_cbk;
-    std::function<error_e(state_t *, int fd, int res, int err_no, modif_t *)> unwaitfd_cbk;
+    std::function<error_e(state_t *, int fd, int wait_cond, modif_p)> waitfd_cbk;
+    std::function<error_e(state_t *, int fd, int res, int err_no, modif_p)> unwaitfd_cbk;
 
     /* awaiting on a semaphore */
     std::function<error_e(state_t *, sem_t *, modif_p)> waitsem_cbk;
@@ -215,18 +215,10 @@ struct modif_t {
     std::function<modif_p(modif_p)> inherit_call_cbk = [](modif_p p){ return p; };
     std::function<modif_p(modif_p)> inherit_sched_cbk = [](modif_p p){ return nullptr; };
 
-    /* those are called by the contructor/deconstructor. */
-    std::function<void(modif_t *)> uninit_cbk;
-
-    /* called when adding a duplicate modification */
-    std::function<void(modif_p *)> duplicate_cbk;
-
-    ~modif_t() { if (uninit_cbk) uninit_cbk(this); };
-
     /* do whatever you want with this */
     std::shared_ptr<void> ctx;
 
-    /* don't ever touch this */
+    /* don't touch this */
     std::shared_ptr<void> internal;
 };
 
@@ -251,10 +243,10 @@ inline yield_awaiter_t yield();
 
 inline modif_p create_modif(const modif_t& modif_template);
 
-/* This returns the internal set that holds the different modifications of the task. Changing them
+/* This returns the internal vec that holds the different modifications of the task. Changing them
 here is ill-defined */
 template <typename T>
-inline std::vector<modif_p> &task_modifs(task<T> t);
+inline std::unordered_set<modif_p> &task_modifs(task<T> t);
 
 /* This adds a modifier to the task and returns the task. Duplicates will be ignored */
 template <typename T>
@@ -392,6 +384,16 @@ inline std::function<int(const std::string&)> log_str;
 template <typename P>
 using handle = std::coroutine_handle<P>;
 
+/* Modif Definitions
+------------------------------------------------------------------------------------------------- */
+
+template <typename T>
+inline error_e do_sched_modifs(task<T> &task, const std::vector<modif_p>& to_add);
+
+template <typename T>
+inline error_e do_call_modifs(task<T> &task, const std::vector<modif_p>& to_add);
+
+
 /* The Task
 ------------------------------------------------------------------------------------------------- */
 
@@ -434,7 +436,20 @@ struct state_t {
     pool_wp _pool;
 
     handle<void> caller;
-    std::vector<modif_p> modifs;
+    std::unordered_set<modif_p> modifs;
+
+    std::unordered_set<modif_p> call_mods;
+    std::unordered_set<modif_p> sche_mods;
+    std::unordered_set<modif_p> exit_mods;
+
+    std::unordered_set<modif_p> leave_mods;
+    std::unordered_set<modif_p> enter_mods;
+
+    std::unordered_set<modif_p> wfd_mods;
+    std::unordered_set<modif_p> uwfd_mods;
+
+    std::unordered_set<modif_p> wsem_mods;
+    std::unordered_set<modif_p> uwsem_mods;
 };
 
 template <typename T>
@@ -502,20 +517,8 @@ struct pool_internal_t {
     template <typename T>
     void sched(task<T> task, const std::vector<modif_p>& v) {
         /* First we add all the pmods over the task's pmods (if they pass the inheritance) */
-        for (auto &mp : v) {
-            modif_p m;
-            if (modif.inherit_sched_cbk)
-                m = modif.inherit_sched_cbk(mp); 
-            if (m)
-                task.h.promise()._state.modifs.push_back(m);
-        }
-        for (auto &mp : v) {
-            if (mp.sched_cbk) {
-                if (mp.sched_cbk(&task.h.promise()._state, mp) != ERROR_OK) {
-                    /* TODO: Failed to schedule the corutine, awake all futures */
-                    return ;
-                }
-            }
+        if (do_sched_modifs(task, v) < 0) {
+            return ;
         }
         /* TODO: finaly add it to some sort of queue here */
     }
@@ -681,6 +684,34 @@ inline sem_t::unlocker_t    sem_t::await_resume() { return unlocker_t(*this); }
 template <typename P>
 inline handle<void>         sem_t::await_suspend(handle<P> t) { return internal->await_suspend(t); }
 
+/* Modif Declarations
+------------------------------------------------------------------------------------------------- */
+
+template <typename T>
+inline error_e do_sched_modifs(task<T> &task, const std::vector<modif_p>& to_add) {
+    for (auto &mp : to_add) {
+        modif_p m;
+        if (mp->inherit_sched_cbk)
+            m = mp->inherit_sched_cbk(mp); 
+        if (m)
+            task.h.promise()._state.modifs.insert(m);
+        /* TODO: more on insertion, like move them  */
+    }
+    for (auto &mp : task.h.promise()._state.modifs) {
+        if (mp.sched_cbk) {
+            if (mp.sched_cbk(&task.h.promise()._state, mp) != ERROR_OK) {
+                /* TODO: Failed to schedule the corutine, awake all futures */
+                return ;
+            }
+        }
+    }
+    return ERROR_GENERIC;
+}
+
+template <typename T>
+inline error_e do_call_modifs(task<T> &task, const std::vector<modif_p>& to_add) {
+    return ERROR_GENERIC;
+}
 
 /* Functions
 ------------------------------------------------------------------------------------------------  */
@@ -733,7 +764,7 @@ inline task_t write_sz(int fd, const void *buff, size_t len);
 /* non awaitable functions: */
 
 template <typename T>
-inline std::vector<modif_p> &task_modifs(task<T> t);
+inline std::unordered_set<modif_p> &task_modifs(task<T> t);
 
 template <typename T>
 inline task<T> add_modif(task<T> t, modif_p mod); 
