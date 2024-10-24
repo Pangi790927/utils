@@ -183,40 +183,40 @@ private:
     std::unique_ptr<sem_internal_t> internal;
 };
 
-/* The modifiers list is what the user sees, further, the corutine holds an internal structure to
-speed up the calling of modifications */
+/* A modif is a callback for a specifi stage in the corutine's flow */
 struct modif_t {
-    /* called when a new corutine is called (co_await on it) */
-    std::function<error_e(state_t *, modif_p)> call_cbk;
+    enum modif_e : int32_t {
+        /* Call callback is called on  */
+        CO_MODIF_CALL_CBK = 0,
+        CO_MODIF_SCHED_CBK,
+        CO_MODIF_EXIT_CBK,
+        CO_MODIF_LEAVE_CBK,
+        CO_MODIF_ENTER_CBK,
+        CO_MODIF_WAIT_FD_CBK,
+        CO_MODIF_UNWAIT_FD_CBK,
+        CO_MODIF_WAIT_SEM_CBK,
+        CO_MODIF_UNWAIT_SEM_CBK,
 
-    /* called when a new corutine that is newly scheduled (co::sched on it) */
-    std::function<error_e(state_t *, modif_p)> sched_cbk;
+        CO_MODIF_COUNT,
+    };
+    enum modif_flags_e : int32_t {
+        CO_MODIF_INHERIT_ON_CALL = 0x1,
+        CO_MODIF_INHERIT_ON_SCHED = 0x2,
+    };
+    std::variant<
+        std::function<error_e(state_t *)>,                             /* call_cbk */
+        std::function<error_e(state_t *)>,                             /* sched_cbk */
+        std::function<error_e(state_t *)>,                             /* exit_cbk */
+        std::function<error_e(state_t *)>,                             /* leave_cbk */
+        std::function<error_e(state_t *)>,                             /* enter_cbk */
+        std::function<error_e(state_t *, int fd, int wait_cond)>,      /* wait_fd_cbk */
+        std::function<error_e(state_t *, int fd, int res, int err_no)>,/* unwait_fd_cbk */
+        std::function<error_e(state_t *, sem_t *)>,                    /* wait_sem_cbk */
+        std::function<error_e(state_t *, sem_t *)>,                    /* unwait_sem_cbk */
+    > cbks;
 
-    /* called when the return is valid (co_return) */
-    std::function<error_e(state_t *, modif_p)> exit_cbk;
-
-    /* called on a coroutine before it starts/stops execution (co_await, ?co_yield? something else)*/
-    std::function<error_e(state_t *, modif_p)> leave_cbk;
-    std::function<error_e(state_t *, modif_p)> enter_cbk;
-
-    /* awaiting a file descriptor */
-    std::function<error_e(state_t *, int fd, int wait_cond, modif_p)> waitfd_cbk;
-    std::function<error_e(state_t *, int fd, int res, int err_no, modif_p)> unwaitfd_cbk;
-
-    /* awaiting on a semaphore */
-    std::function<error_e(state_t *, sem_t *, modif_p)> waitsem_cbk;
-    std::function<error_e(state_t *, sem_t *, modif_p)> unwaitsem_cbk;
-
-    /* the following callbacks specify how this modifier is inherited on diverse calls, if the
-    function does not exist, the mod is not inherited, if it exists, it is called with itself and
-    the result is used further on. You can at those points decide to create a new modifier for the
-    call or keep the old one.
-    When called, all the caller's modifs are inherited and it's modifs(if any) are kept.  */
-    std::function<modif_p(modif_p)> inherit_call_cbk = [](modif_p p){ return p; };
-    std::function<modif_p(modif_p)> inherit_sched_cbk = [](modif_p p){ return nullptr; };
-
-    /* do whatever you want with this */
-    std::shared_ptr<void> ctx;
+    modif_e type = CO_MODIF_COUNT;
+    modif_flags_e flags = CO_MODIF_INHERIT_ON_CALL;
 
     /* don't touch this */
     std::shared_ptr<void> internal;
@@ -246,7 +246,7 @@ inline modif_p create_modif(const modif_t& modif_template);
 /* This returns the internal vec that holds the different modifications of the task. Changing them
 here is ill-defined */
 template <typename T>
-inline std::unordered_set<modif_p> &task_modifs(task<T> t);
+inline std::vector<modif_p> &task_modifs(task<T> t);
 
 /* This adds a modifier to the task and returns the task. Duplicates will be ignored */
 template <typename T>
@@ -387,6 +387,18 @@ using handle = std::coroutine_handle<P>;
 /* Modif Definitions
 ------------------------------------------------------------------------------------------------- */
 
+struct modif_table_t {
+    std::vector<modif_p> call_cbks;
+    std::vector<modif_p> sched_cbks;
+    std::vector<modif_p> exit_cbks;
+    std::vector<modif_p> leav_cbks;
+    std::vector<modif_p> enter_cbks;
+    std::vector<modif_p> wait_fd_cbks;
+    std::vector<modif_p> unwait_fd_cbks;
+    std::vector<modif_p> wait_sem_cbks;
+    std::vector<modif_p> unwait_sem_cbks;
+};
+
 template <typename T>
 inline error_e do_sched_modifs(task<T> &task, const std::vector<modif_p>& to_add);
 
@@ -436,20 +448,7 @@ struct state_t {
     pool_wp _pool;
 
     handle<void> caller;
-    std::unordered_set<modif_p> modifs;
-
-    std::unordered_set<modif_p> call_mods;
-    std::unordered_set<modif_p> sche_mods;
-    std::unordered_set<modif_p> exit_mods;
-
-    std::unordered_set<modif_p> leave_mods;
-    std::unordered_set<modif_p> enter_mods;
-
-    std::unordered_set<modif_p> wfd_mods;
-    std::unordered_set<modif_p> uwfd_mods;
-
-    std::unordered_set<modif_p> wsem_mods;
-    std::unordered_set<modif_p> uwsem_mods;
+    std::unique_ptr<modif_table_t> pmod_table;
 };
 
 template <typename T>
@@ -477,12 +476,12 @@ struct task_state_t {
 
     initial_awaiter_t initial_suspend() noexcept { return {}; }
     final_awaiter_t   final_suspend() noexcept   { return final_awaiter_t{ ._pool = state._pool }; }
-    void              return_value(T&& ret)      { this->pret = std::make_unique<T>(std::move(ret)); }
-    void              return_value(T&  ret)      { this->pret = std::make_unique<T>(ret); }
+    void              return_value(T&& ret)      { ret.emplace(std::move(ret)); }
+    void              return_value(T&  ret)      { ret.emplace(ret); }
     void              unhandled_exception()      { /* TODO: something with exceptions */ }
 
     state_t state;
-    std::unique_ptr<T> pret;
+    std::variant<std::monostate, T> ret;
 };
 
 template <typename T>
@@ -764,7 +763,7 @@ inline task_t write_sz(int fd, const void *buff, size_t len);
 /* non awaitable functions: */
 
 template <typename T>
-inline std::unordered_set<modif_p> &task_modifs(task<T> t);
+inline std::vector<modif_p> &task_modifs(task<T> t);
 
 template <typename T>
 inline task<T> add_modif(task<T> t, modif_p mod); 
