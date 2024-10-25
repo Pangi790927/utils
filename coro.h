@@ -7,10 +7,20 @@
     - consider implementing co_yield
     - consider implementing exception handling
     - write the tutorial at the start of this file
+    - speed optimizations
     - add the licence
     - check the comments
     - check the review again
 */
+
+/* TODO:
+    valgrind --tool=callgrind ./a.out
+    kcachegrind callgrind.out.1955178
+
+    - take into consideration keeping a cache of allocations because it seems that this hurts
+    the library, the idea is to have some objects, like shared pointers, allocated from the start,
+    such that the library won't spend so much time on allocating things that are re-allocated
+    constantly. one such example is _awake_one in sem_internal_t */
 
 /* rewrite of co_utils.h ->
     - CPP library over the CPP corutines
@@ -722,6 +732,12 @@ struct task {
     handle_t h;
 };
 
+/* has to know about pool, will be implemented bellow the pool, but it is required here and to be
+accesible to others that need to clean the corutine (for example in modifs, if the tasks need
+killing) */
+inline handle<void> final_awaiter_cleanup(pool_wp _pool, state_t *ending_task_state,
+        handle<void> ending_task_handle);
+
 template <typename T>
 struct task_state_t {
     struct final_awaiter_t {
@@ -729,11 +745,8 @@ struct task_state_t {
         void         await_resume() noexcept                  { /* TODO: here some exceptions? */ }
         
         handle<void> await_suspend(handle<task_state_t<T>> ending_task) noexcept {
-            return final_awaiter_cleanup(_pool, ending_task);
+            return final_awaiter_cleanup(_pool, &ending_task.promise().state, ending_task);
         }
-
-        /* has to know about pool, will be implemented bellow the pool */
-        inline handle<void> final_awaiter_cleanup(pool_wp _pool, handle<task_state_t<T>> ending_task);
 
         pool_wp _pool;
     };
@@ -754,7 +767,6 @@ struct task_state_t {
         return value of the state.err? (or maybe better -> think more about that error thing) */
         _ret.template emplace<T>(std::forward<R>(ret));
     }
-
 
     state_t state;
     std::variant<std::monostate, T> _ret;
@@ -847,24 +859,23 @@ private:
     std::deque<handle<void>> ready_tasks;
 };
 
-template <typename T>
-inline handle<void> task_state_t<T>::final_awaiter_t::final_awaiter_cleanup(
-        pool_wp _pool, handle<task_state_t<T>> ending_task)
+inline handle<void> final_awaiter_cleanup(pool_wp _pool, state_t *ending_task_state,
+        handle<void> ending_task_handle)
 {
     /* not sure if I should do something with the return value ... */
-    state_t *caller_state = ending_task.promise().state.caller_state;
-    do_exit_modifs(&ending_task.promise().state);
+    state_t *caller_state = ending_task_state->caller_state;
+    do_exit_modifs(ending_task_state);
 
     if (caller_state) {
         do_entry_modifs(caller_state);
         return caller_state->self;
     }
-    else if (auto pool = ending_task.promise().state._pool.lock()) {
+    else if (auto pool = ending_task_state->_pool.lock()) {
         /* If the task that we are final_awaiting has no caller, then it is the moment to destroy it,
         no one needs it's return value(futures?). Else it will be destroyed by the caller. */
         /* TODO: maybe the future can just simply create a task and set it's coro as the continuation
         here? Such that the future continues in the caller_state branch? */
-        ending_task.destroy();
+        ending_task_handle.destroy();
         return pool->internal->next_task();
     }
     else {
