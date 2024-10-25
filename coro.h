@@ -1,5 +1,9 @@
 #ifndef CORO_H
 #define CORO_H
+/* TODO:
+    - write the fd stuff
+    - add debug modifs, things are already breaking and I don't know why
+ */
 /* rewrite of co_utils.h ->
     - CPP library over the CPP corutines
     - Built around epoll (ie, epoll is the only blocking function)
@@ -14,68 +18,81 @@
 #include <coroutine>
 #include <functional>
 #include <variant>
+#include <unordered_set>
+#include <map>
+#include <deque>
+#include <set>
 #include <source_location>
 #include <cinttypes>
-#include <unordered_set>
 
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
 
 /* The maximum amount of concurent timers that can be awaited */
-#ifndef CO_MAX_TIMER_POOL_SIZE
-# define CO_MAX_TIMER_POOL_SIZE 64
+#ifndef CORO_MAX_TIMER_POOL_SIZE
+# define CORO_MAX_TIMER_POOL_SIZE 64
 #endif
 
 /* Set if a pool can be available in more than one thread, necesary if you want to transfer the pool
 to a callback that will be called from another thread */
-#ifndef CO_ENABLE_MULTITHREADS
-# define CO_ENABLE_MULTITHREADS false
+#ifndef CORO_ENABLE_MULTITHREADS
+# define CORO_ENABLE_MULTITHREADS false
+#endif
+
+/* Enable the corutines to catch and throw exceptions */
+#ifndef CORO_ENABLE_EXCEPTIONS
+# define CORO_ENABLE_EXCEPTIONS false
 #endif
 
 /* If set to true, will enable the debug callbacks */
-#ifndef CO_ENABLE_CALLBACKS
-# define CO_ENABLE_CALLBACKS false
+#ifndef CORO_ENABLE_CALLBACKS
+# define CORO_ENABLE_CALLBACKS false
 #endif
 
 /* If set to true, will enable the logging callback */
-#ifndef CO_ENABLE_LOGGING
-# define CO_ENABLE_LOGGING true
+#ifndef CORO_ENABLE_LOGGING
+# define CORO_ENABLE_LOGGING true
 #endif
 
 /* If set to true, makes names for corutines */
-#ifndef CO_ENABLE_DEBUG_NAMES
-# define CO_ENABLE_DEBUG_NAMES false
+#ifndef CORO_ENABLE_DEBUG_NAMES
+# define CORO_ENABLE_DEBUG_NAMES false
 #endif
 
 /* If set, will create a debug tracer and it will add it to all coroutines */
-#ifndef CO_ENABLE_DEBUG_TRACE_ALL
-# define CO_ENABLE_DEBUG_TRACE_ALL false
+#ifndef CORO_ENABLE_DEBUG_TRACE_ALL
+# define CORO_ENABLE_DEBUG_TRACE_ALL false
 #endif
 
-#if !defined(CO_KILL_DEFAULT_CONSTRUCT) && !defined(CO_KILL_DEFAULT_CONSTRUCT)
+#if !defined(CO_KILL_DEFAULT_CONSTRUCT) && !defined(CO_KILL_RAISE_EXCEPTION)
 # define CO_KILL_DEFAULT_CONSTRUCT true
 # define CO_KILL_RAISE_EXCEPTION false
 #endif
 
-#if defined(CO_KILL_DEFAULT_CONSTRUCT) && defined(CO_KILL_DEFAULT_CONSTRUCT)
+#if defined(CO_KILL_DEFAULT_CONSTRUCT) && defined(CO_KILL_RAISE_EXCEPTION)
 # if CO_KILL_DEFAULT_CONSTRUCT && CO_KILL_RAISE_EXCEPTION
 #  error "Don't choose both"
 # endif
 #endif
 
-/* If CO_ENABLE_DEBUG_NAMES you can also define CORO_REG and use it to register a corutine's name */
-#if CO_ENABLE_DEBUG_NAMES
+#if CO_KILL_RAISE_EXCEPTION && !CORO_ENABLE_EXCEPTIONS
+# error "Can't have CO_KILL_RAISE_EXCEPTION without CORO_ENABLE_EXCEPTIONS"
+#endif
+
+/* If CORO_ENABLE_DEBUG_NAMES you can also define CORO_REGNAME and use it to register a
+corutine's name */
+#if CORO_ENABLE_DEBUG_NAMES
 # ifndef CORO_REGNAME
 #  define CORO_REGNAME(t)   coro::dbg_register_name((t), "%20s:%5d:%s", __FILE__, __LINE__, #t)
 # endif
 #else
 # define CORO_REGNAME(t)    t
-#endif
+#endif /*CORO_ENABLE_DEBUG_NAMES*/
 
 namespace coro {
 
-constexpr int MAX_TIMER_POOL_SIZE = CO_MAX_TIMER_POOL_SIZE;
+constexpr int MAX_TIMER_POOL_SIZE = CORO_MAX_TIMER_POOL_SIZE;
 
 /* corutine return type, this is the result of creating a corutine, you can await it and also pass
 it around (practically holds a std::coroutine_handle and can be awaited call the coro and to get the
@@ -106,12 +123,14 @@ struct sem_t;
 struct state_t;
 
 /* used pointers, so _p marks a shared_pointer and a _wp marks a weak pointer. */
-/* TODO: move unneeded bellow */
+using sem_p = std::shared_ptr<sem_t>;
+using sem_wp = std::weak_ptr<sem_t>;
 using pool_p = std::shared_ptr<pool_t>;
 using pool_wp = std::weak_ptr<pool_t>;
 using modif_p = std::shared_ptr<modif_t>;
 using modif_wp = std::weak_ptr<modif_t>;
 using modif_table_p = std::shared_ptr<modif_table_t>;
+using modif_table_wp = std::weak_ptr<modif_table_t>;
 
 /* Tasks errors */
 enum error_e : int32_t {
@@ -126,9 +145,9 @@ enum error_e : int32_t {
 
 /* Event loop running errors */
 enum run_e : int32_t {
-    RUN_OK,
-    RUN_DONE,
-    RUN_ERRORED,
+    RUN_OK,      /* when the pool stopped because it ran out of things to do */
+    RUN_ERRORED, /* comes from epoll errors */
+    RUN_ABORTED, /* if a corutine is resumed without a pool */
     RUN_STOPPED, /* can be re-run (comes from force_stop) */
 };
 
@@ -152,11 +171,13 @@ enum modif_flags_e : int32_t {
     CO_MODIF_INHERIT_ON_SCHED = 0x2,
 };
 
-/* all the internal tasks return this, namely error_e */
-using task_t = task<error_e>;
+/* all the internal tasks return this, namely error_e but casted to int (a lot of my old code depends
+on this and I also find it in theme, as all the linux functions that I use tend to return ints) */
+using task_t = task<int>;
 
 /* some internal structures */
 struct yield_awaiter_t;
+struct sem_awaiter_t;
 struct pool_internal_t;
 struct sem_internal_t;
 
@@ -174,7 +195,7 @@ struct state_t {
     pool_wp _pool;                      /* the pool of this coro */
 
     state_t *caller_state = nullptr;    /* this holds the caller's state, and with it the return path */ 
-    std::coroutine_handle<void> self;   /* for the user to have the coro handle, if it needs it */
+    std::coroutine_handle<void> self;   /* the caller's handle */
     modif_table_p modif_table;          /* we allocate a table only if there are mods */
 };
 
@@ -191,36 +212,35 @@ struct pool_t {
     std::unique_ptr<pool_internal_t> internal;
 
 protected:
-    friend pool_p create_pool();
+    friend inline pool_p create_pool();
     pool_t();
 };
 
 struct sem_t {
     struct unlocker_t{ /* compatibility with guard objects ex: std::lock_guard guard(co_await s); */
-        sem_t &sem;
-        unlocker_t(sem_t &sem) : sem(sem) {}
+        sem_wp _sem;
+        unlocker_t(sem_wp _sem) : _sem(_sem) {}
         void lock() {}
-        void unlock() { sem.inc(); }
+        void unlock() { if (auto sem = _sem.lock()) sem->signal(); }
     };
 
     /* can be created and moved, but not copied */
-    sem_t(pool_wp pool, int64_t val = 0);
     sem_t(sem_t& sem) = delete;
     sem_t(sem_t&& sem) { internal = std::move(sem.internal); }
     sem_t &operator = (sem_t& sem) = delete;
     sem_t &operator = (sem_t&& sem) { internal = std::move(sem.internal); return *this; }
 
-    void inc();
+    sem_awaiter_t wait(); /* if awaited -> unlocker_t */
+    error_e signal(); /* returns error if the pool disapeared */
     bool try_dec();
-    /* await instead of dec() */
 
-    template <typename P>
-    std::coroutine_handle<void> await_suspend(std::coroutine_handle<P> to_suspend);
-    bool                        await_ready();
-    unlocker_t                  await_resume();
+    /* again, don't touch, same as pool */
+    std::shared_ptr<sem_internal_t> internal;
 
-private:
-    std::unique_ptr<sem_internal_t> internal;
+protected:
+    friend inline sem_p create_sem(pool_wp, int64_t);
+    friend inline task<sem_p> create_sem(int64_t);
+    sem_t(pool_wp pool, int64_t val = 0);
 };
 
 /* A modif is a callback for a specifi stage in the corutine's flow */
@@ -232,9 +252,9 @@ struct modif_t {
         std::function<error_e(state_t *)>,                             /* leave_cbk */
         std::function<error_e(state_t *)>,                             /* enter_cbk */
         std::function<error_e(state_t *, int fd, int wait_cond)>,      /* wait_fd_cbk */
-        std::function<error_e(state_t *, int fd, int res, int err_no)>,/* unwait_fd_cbk */
-        std::function<error_e(state_t *, sem_t *)>,                    /* wait_sem_cbk */
-        std::function<error_e(state_t *, sem_t *)>                     /* unwait_sem_cbk */
+        std::function<error_e(state_t *, int fd)>,                     /* unwait_fd_cbk */
+        std::function<error_e(state_t *, sem_wp)>,                     /* wait_sem_cbk */
+        std::function<error_e(state_t *, sem_wp)>                      /* unwait_sem_cbk */
     > cbk;
 
     modif_e type = CO_MODIF_COUNT;
@@ -267,15 +287,20 @@ inline modif_p create_modif(modif_e type, Cbk&& cbk, modif_flags_e flags);
 /* This returns the internal vec that holds the different modifications of the task. Changing them
 here is ill-defined */
 template <typename T>
-inline std::vector<modif_p> &task_modifs(task<T> t);
+inline std::vector<modif_p> task_modifs(task<T> t);
 
 /* This adds a modifier to the task and returns the task. Duplicates will be ignored */
 template <typename T>
-inline task<T> add_modif(task<T> t, modif_p mod);
+inline task<T> add_modifs(task<T> t, std::set<modif_p> mods);
 
 /* Removes modifier from the vector */
 template <typename T>
-inline task<T> rm_modif(task<T> t, modif_p mod);
+inline task<T> rm_modifs(task<T> t, std::set<modif_p> mods);
+
+/* same as above, but adds them for the current task */
+inline task<std::vector<modif_p>> task_modifs();
+inline task_t add_modifs(std::set<modif_p> mods); 
+inline task_t rm_modifs(std::set<modif_p> mods);
 
 /* calls an awaitable inside a task_t, this is done to be able to use modifs on awaitables */
 template <typename Awaiter>
@@ -292,7 +317,7 @@ inline modif_p creat_timeo(const std::chrono::microseconds& timeo);
 inline task_t sleep_us(uint64_t timeo_us);
 inline task_t sleep_ms(uint64_t timeo_ms);
 inline task_t sleep_s(uint64_t timeo_s);
-inline task_t sleep(const std::chrono::milliseconds& us);
+inline task_t sleep(const std::chrono::microseconds& us);
 
 /* Flow Controll:
 ------------------------------------------------------------------------------------------------  */
@@ -310,8 +335,8 @@ type is error_e).
 */
 
 /* Creates semaphores, those need the pool to exist */
-inline sem_t create_sem(pool_wp pool, int64_t val = 0);
-inline task<sem_t> create_sem(int64_t val = 0);
+inline sem_p create_sem(pool_wp pool, int64_t val = 0);
+inline task<sem_p> create_sem(int64_t val = 0);
 
 /* a modification that depends on the pool, this is used in scheduled coroutines to end the current
 corutine if they die. This is not inherited by either calls or spawns, but it is inherited by other
@@ -378,16 +403,34 @@ inline void dbg(dbg_format_helper_t dfmt, Args&&... args);
 
 /* Registers a name for a given task */
 template <typename T, typename ...Args>
-inline task<T> dbg_register_name(task<T> t, const char *fmt, task<T>&&...);
+inline task<T> dbg_register_name(task<T> t, const char *fmt, Args&&...);
+
+template <typename P, typename ...Args>
+inline std::coroutine_handle<P> dbg_register_name(std::coroutine_handle<P> h,
+        const char *fmt, Args&&...);
+
+template <typename ...Args>
+inline void * dbg_register_name(void *addr, const char *fmt, Args&&...);
 
 /* creates a modifier that traces things from corutines, mostly a convenience function, it also
 uses the log_str function, or does nothing else if it isn't defined. If you don't like the
 verbosity, be free to null any callback you don't care about. */
 inline modif_p creat_dbg_tracer();
 
-/* Obtains the name given to the respective task */
+/* Obtains the name given to the respective task, handle or address */
 template <typename T>
 inline std::string dbg_name(task<T> t);
+
+template <typename P>
+inline std::string dbg_name(std::coroutine_handle<P> h);
+
+inline std::string dbg_name(void *v);
+
+
+/* formats a string using the C snprintf, similar in functionality to snprintf+std::format, in the
+version of g++ that I'm using std::format is not available  */
+template <typename... Args>
+inline std::string dbg_format(const char *fmt, Args&& ...args);
 
 /* corutine callbacks for diverse points in the code, if in a multithreaded environment, you must
 take all the locks before rewriting those. The pool locks are held when those callbacks are called
@@ -398,8 +441,9 @@ inline std::function<void(void)> on_call;
 #endif /* CO_ENABLE_CALLBACKS */
 
 /* calls log_str to save the log string */
-#if CO_ENABLE_LOGGING
-inline std::function<int(const std::string&)> log_str;
+#if CORO_ENABLE_LOGGING
+inline std::function<int(const std::string&)> log_str =
+        [](const std::string& msg){ return printf("%s", msg.c_str()); };
 #endif
 
 /* IMPLEMENTATION 
@@ -425,7 +469,7 @@ constexpr auto has(T&& data_struct, K&& key) {
     return std::forward<T>(data_struct).find(std::forward<K>(key)) != std::forward<T>(data_struct).end();
 }
 
-/* Modifs Part I (second part bellow)
+/* Modifs Part
 ------------------------------------------------------------------------------------------------- */
 
 struct modif_table_t {
@@ -455,337 +499,10 @@ inline modif_table_p create_modif_table(const std::vector<modif_p>& to_add) {
     return ret;
 }
 
-template <typename T>
-inline error_e do_sched_modifs(task<T> &task, modif_table_p parent_table);
-
-template <typename T>
-inline error_e do_call_modifs(task<T> &task, modif_table_p parent_table);
-
-inline error_e do_entry_modifs(state_t *state);
-inline error_e do_exit_modifs(state_t *state);
-
-/* The Task
-------------------------------------------------------------------------------------------------- */
-
-template <typename T>
-struct task_state_t;
-
-/* So, a corutine handle points to a corutine, so a task. A task should be able to be awaited,
-hence this task object can A. hold the corutine and B. be awaited to get the corutine return value*/
-template<typename T>
-struct task {
-    using promise_type = task_state_t<T>;
-    using handle_t = handle<task_state_t<T>>;
-
-    task() : h(std::noop_coroutine()) {}
-    task(handle_t h) : h(h) {}
-    task(handle<void> h) : h(handle_t::from_address(h.address())) {}
-
-    /* this is here because we would like to know if a corutine died without ever beeing called */
-    task(task &oth) : h(oth.h) { oth.ever_called = true; }
-    task(task &&oth) : h(std::move(oth.h)) { oth.ever_called = true; }
-    task& operator = (task &oth) { oth.ever_called = true; h = oth.h; return *this; }
-    task& operator = (task &&oth) { oth.ever_called = true; h = std::move(oth.h); return *this; }
-
-    bool await_ready() noexcept { return false; }
-
-    /* Those two need to be implemented bellow the task_state */
-    template <typename P>
-    handle<void> await_suspend(handle<P> caller) noexcept;
-    T            await_resume() noexcept;
-    pool_wp      get_pool();
-
-    error_e get_err() { return ERROR_OK; };
-
-    bool ever_called = false;
-    handle_t h;
-};
-
-/*  */
-
-template <typename T>
-struct task_state_t {
-    struct final_awaiter_t {
-        bool         await_ready() noexcept                   { return false; }
-        void         await_resume() noexcept                  { /* TODO: here some exceptions? */ }
-        
-        handle<void> await_suspend(handle<task_state_t<T>> ending_task) noexcept {
-            return final_awaiter_cleanup(_pool, ending_task);
-        }
-
-        /* has to know about pool, will be implemented bellow the pool */
-        static handle<void> final_awaiter_cleanup(pool_wp _pool, handle<task_state_t<T>> ending_task);
-
-        pool_wp _pool;
-    };
-
-    task<T> get_return_object() {
-        typename task<T>::handle_t h = task<T>::handle_t::from_promise(*this);
-        state.self = h;
-        return task<T>{h};
-    }
-
-    std::suspend_always initial_suspend() noexcept { return {}; }
-    final_awaiter_t     final_suspend() noexcept   { return final_awaiter_t{ ._pool = state._pool }; }
-    void                unhandled_exception()      { /* TODO: something with exceptions */ }
-
-    template <typename R>
-    void return_value(R&& ret) {
-        /* TODO: maybe if this coro is of our type it should also take into consideration the
-        return value of the state.err? */
-        _ret.template emplace<T>(std::forward<R>(ret));
-    }
-
-
-    state_t state;
-    std::variant<std::monostate, T> _ret;
-};
-
-template <typename T>
-template <typename P>
-inline handle<void> task<T>::await_suspend(handle<P> caller) noexcept {
-    ever_called = true;
-
-    h.promise().state.caller_state = &caller.promise().state;
-    h.promise().state._pool = caller.promise().state._pool;
-
-    if (do_call_modifs(*this, caller.promise().state.modif_table) != ERROR_OK) {
-        return caller;
-    }
-
-    return h;
-}
-
-template <typename T>
-inline T task<T>::await_resume() noexcept {
-    ever_called = true;
-    auto ret = std::get<T>(h.promise()._ret);
-    h.destroy();
-    return ret;
-}
-
-template <typename T>
-inline pool_wp task<T>::get_pool() {
-    return h.promise().state._pool;
-}
-
-/* The Pool & Epoll engine
-------------------------------------------------------------------------------------------------- */
-
-/* If this is not really needed here we move it bellow */
-struct pool_internal_t {
-    template <typename T>
-    void sched(task<T> task, modif_table_p parent_table) {
-        /* First we add all the pmods over the task's pmods (if they pass the inheritance) */
-        if (do_sched_modifs(task, parent_table) != ERROR_OK) {
-            return ;
-        }
-        /* TODO: finaly add it to some sort of queue here */
-    }
-
-    run_e run() {
-        /* TODO */
-        return RUN_OK;
-    }
-
-    void push_ready(handle<void> h) {
-        /*TODO*/
-    }
-
-    handle<void> next_task() {
-        /*TODO*/
-        return std::noop_coroutine();
-    }
-
-    void wait_fd(handle<void> h, int fd, int wait_cond) {
-        /* add the file descriptor inside epoll and schedule the corutine for waiting on it */
-    }
-};
-
-template <typename T>
-inline handle<void> task_state_t<T>::final_awaiter_t::final_awaiter_cleanup(
-        pool_wp _pool, handle<task_state_t<T>> ending_task)
-{
-    /* not sure if I should do something with the return value ... */
-    state_t *caller_state = ending_task.promise().state.caller_state;
-    if (do_exit_modifs(&ending_task.promise().state) != ERROR_OK) {
-        dbg("Modifs failed");
-        /* do nothing even if they have failed */
-    }
-    if (caller_state) {
-        do_entry_modifs(caller_state);
-        return caller_state->self;
-    }
-    else if (auto pool = ending_task.promise().state._pool.lock()) {
-        /* If the task that we are final_awaiting has no caller, then it is the moment to destroy it,
-        no one needs it's return value(futures?). Else it will be destroyed by the caller. */
-        /* TODO: maybe the future can just simply create a task and set it's coro as the continuation
-        here? Such that the future continues in the caller_state branch? */
-        ending_task.destroy();
-        return pool->internal->next_task();
-    }
-    else {
-        dbg("Failed to aquire the pool");
-        return std::noop_coroutine();
-    }
-}
-
-inline pool_t::pool_t() : internal(std::make_unique<pool_internal_t>()) {}
-
-template <typename T>
-inline void pool_t::sched(task<T> task, const std::vector<modif_p>& v) {
-    internal->sched(task, create_modif_table(v));
-}
-
-inline run_e pool_t::run() {
-    return internal->run();
-}
-
-/* Awaiters
-------------------------------------------------------------------------------------------------- */
-
-struct yield_awaiter_t {
-    bool await_ready() { return false; }
-
-    template <typename P>
-    inline handle<void> await_suspend(handle<P> h) {
-        if (auto pool = h.promise().state._pool.lock()) {
-            pool->internal->push_ready(h);
-            state = &h.promise().state;
-            /* TODO: handle modifs */
-            return pool->internal->next_task();
-        }
-        /* we don't have a pool anymore... */
-        // TODO: dbg("This should not happen");
-        return std::noop_coroutine();
-    }
-
-    void await_resume() {
-        /* TODO: handle modifs */
-    }
-
-    state_t *state;
-};
-
-template <typename T>
-struct sched_awaiter_t {
-    sched_awaiter_t(task<T> t, const std::vector<modif_p>& ref) : t(t), ref(ref) {}
-
-    bool await_ready() { return false;}
-    void await_resume() {}
-
-    template <typename P>
-    bool await_suspend(handle<P> h) {
-        if (auto pool = h.promise().state._pool.lock()) {
-            pool->sched(t, create_modif_table(ref));
-        }
-        else {
-            /* TODO: huh? */
-        }
-        return false;
-    }
-
-    task<T> t;
-    const std::vector<modif_p> &ref;
-};
-
-struct get_pool_awaiter {
-    template <typename P>
-    bool    await_suspend(handle<P> h) { _pool = h.promise().state._pool; return false; }
-
-    bool    await_ready()              { return false; };
-    pool_wp await_resume()             { return _pool; }
-
-    pool_wp _pool;
-};
-
-/* This is the object with which you wait for a file descriptor, you create it with a valid
-wait_cond and fd and co_await on it. The resulting integer must be positive to not be an error */
-template <typename T>
-struct fd_awaiter_t {
-    int wait_cond;  /* set with epoll wait condition */
-    int fd;         /* set with waited file descriptor */
-
-    bool await_ready() { return false; };
-
-    template <typename P>
-    handle<void> await_suspend(handle<P> h) {
-        if (auto pool = h.promise().state._pool.lock()) {
-            state = &h.promise().state;
-            /* TODO: handle modifs */
-            error_e err;
-            /* in case we can't schedule the fd we log the failure and return the same coro */
-            if ((err = pool->internal->wait_fd(h, fd, wait_cond)) < 0) {
-                /* TODO: log the fail */
-                state->err = err;
-                return h;
-            }
-            return pool->internal->next_task();
-        }
-        return std::noop_coroutine();
-    }
-
-    error_e await_resume() {
-        return state->err;
-    }
-
-private:
-    state_t *state; /* The state of the corutine that called us */
-};
-
-/* Semaphores
-------------------------------------------------------------------------------------------------- */
-
-struct sem_internal_t {
-    sem_internal_t(pool_wp pool, int64_t val) : _pool(pool), val(val) {}
-
-    template <typename P>
-    handle<void> await_suspend(handle<P> to_suspend) {
-        /* TODO; */
-        return std::noop_coroutine();
-    }
-
-    bool await_ready() {
-        if (val > 0) {
-            val--;
-            return true;
-        }
-        return false;
-    }
-
-    bool try_dec() {
-        /* TODO */
-        return false;
-    }
-
-    void inc() {
-        /* TODO */
-    }
-
-private:
-    uint64_t val;
-    pool_wp _pool;
-};
-
-inline sem_t::sem_t(pool_wp pool, int64_t val)
-: internal(std::make_unique<sem_internal_t>(pool, val)) {}
-
-inline void                 sem_t::inc() { internal->inc(); }
-inline bool                 sem_t::try_dec() { return internal->try_dec(); }
-inline bool                 sem_t::await_ready() { return internal->await_ready(); }
-inline sem_t::unlocker_t    sem_t::await_resume() { return unlocker_t(*this); }
-
-template <typename P>
-inline handle<void>         sem_t::await_suspend(handle<P> t) { return internal->await_suspend(t); }
-
-/* Modifs Part II - there are two parts because they need different parts of the lib to be defined
-------------------------------------------------------------------------------------------------- */
-
-template <typename T>
-inline void inherit_modifs(task<T> &task, modif_table_p parent_table, modif_flags_e inherit_place) {
+inline void inherit_modifs(state_t *state, modif_table_p parent_table, modif_flags_e inherit_place) {
     if (!parent_table)
         return ;
-    modif_table_p new_table = task.h.promise().state.modif_table;
+    modif_table_p new_table = state->modif_table;
     std::unordered_set<modif_p> existing;
     if (new_table) {
         /* should be rare */
@@ -800,20 +517,18 @@ inline void inherit_modifs(task<T> &task, modif_table_p parent_table, modif_flag
             if (modif && !has(existing, modif) && (modif->flags & inherit_place))
                 new_table->table[modif->type].push_back(modif);
     if (get_modif_table_sz(new_table) != 0)
-        task.h.promise().state.modif_table = new_table;   
+        state->modif_table = new_table;   
 }
 
-template <typename T>
-inline error_e do_sched_modifs(task<T> &task, modif_table_p parent_table) {
-    inherit_modifs(task, parent_table, CO_MODIF_INHERIT_ON_SCHED);
-
-    if (auto modif_table = task.h.promise().state.modif_table) {
-        for (auto& modif : modif_table->table[CO_MODIF_SCHED_CBK]) {
-            error_e ret = std::get<CO_MODIF_SCHED_CBK>(modif->cbk)(&task.h.promise().state);
+template <modif_e cbk_id, typename ...Args>
+inline error_e do_generic_modifs(state_t *state, Args&& ...args) {
+    if (auto modif_table = state->modif_table) {
+        for (auto &modif : modif_table->table[cbk_id]) {
+            error_e ret = std::get<cbk_id>(modif->cbk)(state, args...);
             if (ret != ERROR_OK) {
                 /* If any callback returned an error, we stop their execution and return the error.
                 We also set in the task that the respective error happened. */
-                task.h.promise().state.err = ret;
+                state->err = ret;
                 return ret;
             }
         }
@@ -821,113 +536,43 @@ inline error_e do_sched_modifs(task<T> &task, modif_table_p parent_table) {
     return ERROR_OK;
 }
 
-template <typename T>
-inline error_e do_call_modifs(task<T> &task, modif_table_p parent_table) {
-    /* same as above, but for call */
-    inherit_modifs(task, parent_table, CO_MODIF_INHERIT_ON_CALL);
+inline error_e do_sched_modifs(state_t *state, modif_table_p parent_table) {
+    inherit_modifs(state, parent_table, CO_MODIF_INHERIT_ON_SCHED);
+    return do_generic_modifs<CO_MODIF_SCHED_CBK>(state);
+}
 
-    if (auto modif_table = task.h.promise().state.modif_table) {
-        for (auto& modif : modif_table->table[CO_MODIF_CALL_CBK]) {
-            error_e ret = std::get<CO_MODIF_CALL_CBK>(modif->cbk)(&task.h.promise().state);
-            if (ret != ERROR_OK) {
-                task.h.promise().state.err = ret;
-                return ret;
-            }
-        }
-    }
-    return ERROR_OK;
+inline error_e do_call_modifs(state_t *state, modif_table_p parent_table) {
+    inherit_modifs(state, parent_table, CO_MODIF_INHERIT_ON_CALL);
+    return do_generic_modifs<CO_MODIF_CALL_CBK>(state);
+}
+
+inline error_e do_leave_modifs(state_t *state) {
+    return do_generic_modifs<CO_MODIF_LEAVE_CBK>(state);
 }
 
 inline error_e do_entry_modifs(state_t *state) {
-    if (auto modif_table = state->modif_table) {
-        for (auto& modif : modif_table->table[CO_MODIF_ENTER_CBK]) {
-            error_e ret = std::get<CO_MODIF_ENTER_CBK>(modif->cbk)(state);
-            if (ret != ERROR_OK) {
-                state->err = ret;
-                return ret;
-            }
-        }
-    }
-    return ERROR_OK;
+    return do_generic_modifs<CO_MODIF_ENTER_CBK>(state);
 }
 
 inline error_e do_exit_modifs(state_t *state) {
-    if (auto modif_table = state->modif_table) {
-        for (auto& modif : modif_table->table[CO_MODIF_EXIT_CBK]) {
-            error_e ret = std::get<CO_MODIF_EXIT_CBK>(modif->cbk)(state);
-            if (ret != ERROR_OK) {
-                state->err = ret;
-                return ret;
-            }
-        }
-    }
-    return ERROR_OK;
+    return do_generic_modifs<CO_MODIF_EXIT_CBK>(state);
 }
 
-/* Functions
-------------------------------------------------------------------------------------------------  */
-
-template <typename ...ret_v>
-inline task_t wait_all(task<ret_v>... tasks) {
-    /* TODO; */
-    return task_t{};
+inline error_e do_wait_fd_modifs(state_t *state, int fd, int wait_cond) {
+    return do_generic_modifs<CO_MODIF_WAIT_FD_CBK>(state, fd, wait_cond);
 }
 
-template <typename T>
-inline sched_awaiter_t<T> sched(task<T> to_sched, const std::vector<modif_p>& v) {
-    /* TODO */
-    return sched_awaiter_t(to_sched, v);
+inline error_e do_unwait_fd_modifs(state_t *state, int fd) {
+    return do_generic_modifs<CO_MODIF_UNWAIT_FD_CBK>(state, fd);
 }
 
-template <typename Awaiter>
-inline task_t await(Awaiter&& awaiter);
-
-inline yield_awaiter_t yield();
-
-inline task<pool_wp> get_pool() {
-    get_pool_awaiter awaiter;
-    co_return co_await awaiter;
+inline error_e do_wait_sem_modifs(state_t *state, sem_wp _sem) {
+    return do_generic_modifs<CO_MODIF_WAIT_SEM_CBK>(state, _sem);
 }
 
-inline task<sem_t> create_sem(int64_t val) {
-    auto pool = co_await get_pool();
-    co_return sem_t(pool, val);
+inline error_e do_unwait_sem_modifs(state_t *state, sem_wp _sem) {
+    return do_generic_modifs<CO_MODIF_UNWAIT_SEM_CBK>(state, _sem);
 }
-
-inline task<modif_p> creat_depend();
-
-inline task_t stopfd(int fd);
-inline task_t force_stop(int ret);
-
-inline task_t sleep(const std::chrono::milliseconds& us);
-inline task_t sleep_us(uint64_t timeo_us);
-inline task_t sleep_ms(uint64_t timeo_ms);
-inline task_t sleep_s(uint64_t timeo_s);
-
-inline task_t wait_event(int fd, int event);
-inline task_t connect(int fd, sockaddr *sa, socklen_t *len);
-inline task_t accept(int fd, sockaddr *sa, socklen_t *len);
-inline task_t read(int fd, void *buff, size_t len);
-inline task_t write(int fd, const void *buff, size_t len);
-inline task_t read_sz(int fd, void *buff, size_t len);
-inline task_t write_sz(int fd, const void *buff, size_t len);
-
-/* non awaitable functions: */
-
-template <typename T>
-inline std::vector<modif_p> &task_modifs(task<T> t);
-
-template <typename T>
-inline task<T> add_modif(task<T> t, modif_p mod); 
-
-template <typename T>
-inline task<T> rm_modif(task<T> t, modif_p mod);
-
-template <typename T>
-inline task<T> creat_future(task<T> t);
-
-inline pool_p  create_pool();
-inline sem_t   create_sem(pool_wp pool, int64_t val);
 
 /* considering you may want to create a modif at runtime this seems to be the best way */
 template <typename Cbk>
@@ -981,42 +626,693 @@ inline modif_p create_modif(modif_e type, Cbk&& cbk, modif_flags_e flags) {
     return ret;
 }
 
-inline modif_p creat_timeo(const std::chrono::microseconds& timeo);
-inline modif_p creat_killer();
-inline error_e sig_killer(modif_p p);
+/* The Task
+------------------------------------------------------------------------------------------------- */
+
+template <typename T>
+struct task_state_t;
+
+/* So, a corutine handle points to a corutine, so a task. A task should be able to be awaited,
+hence this task object can A. hold the corutine and B. be awaited to get the corutine return value*/
+template<typename T>
+struct task {
+    using promise_type = task_state_t<T>;
+    using handle_t = handle<task_state_t<T>>;
+
+    task() : h(std::noop_coroutine()) {}
+    task(handle_t h) : h(h) {}
+    task(handle<void> h) : h(handle_t::from_address(h.address())) {}
+
+    /* this is here because we would like to know if a corutine died without ever beeing called */
+    task(task &oth) : h(oth.h) { oth.ever_called = true; }
+    task(task &&oth) : h(std::move(oth.h)) { oth.ever_called = true; }
+    task& operator = (task &oth) { oth.ever_called = true; h = oth.h; return *this; }
+    task& operator = (task &&oth) { oth.ever_called = true; h = std::move(oth.h); return *this; }
+
+    bool await_ready() noexcept { return false; }
+
+    /* Those two need to be implemented bellow the task_state */
+    template <typename P>
+    handle<void> await_suspend(handle<P> caller) noexcept;
+    T            await_resume() noexcept;
+    pool_wp      get_pool();
+
+    error_e get_err() { return ERROR_OK; };
+
+    bool ever_called = false;
+    handle_t h;
+};
+
+template <typename T>
+struct task_state_t {
+    struct final_awaiter_t {
+        bool         await_ready() noexcept                   { return false; }
+        void         await_resume() noexcept                  { /* TODO: here some exceptions? */ }
+        
+        handle<void> await_suspend(handle<task_state_t<T>> ending_task) noexcept {
+            return final_awaiter_cleanup(_pool, ending_task);
+        }
+
+        /* has to know about pool, will be implemented bellow the pool */
+        inline handle<void> final_awaiter_cleanup(pool_wp _pool, handle<task_state_t<T>> ending_task);
+
+        pool_wp _pool;
+    };
+
+    task<T> get_return_object() {
+        typename task<T>::handle_t h = task<T>::handle_t::from_promise(*this);
+        state.self = h;
+        return task<T>{h};
+    }
+
+    std::suspend_always initial_suspend() noexcept { return {}; }
+    final_awaiter_t     final_suspend() noexcept   { return final_awaiter_t{ ._pool = state._pool }; }
+    void                unhandled_exception()      { /* TODO: something with exceptions */ }
+
+    template <typename R>
+    void return_value(R&& ret) {
+        /* TODO: maybe if this coro is of our type it should also take into consideration the
+        return value of the state.err? */
+        _ret.template emplace<T>(std::forward<R>(ret));
+    }
+
+
+    state_t state;
+    std::variant<std::monostate, T> _ret;
+};
+
+template <typename T>
+template <typename P>
+inline handle<void> task<T>::await_suspend(handle<P> caller) noexcept {
+    ever_called = true;
+
+    h.promise().state.caller_state = &caller.promise().state;
+    h.promise().state._pool = caller.promise().state._pool;
+
+    if (do_call_modifs(&this->h.promise().state, caller.promise().state.modif_table) != ERROR_OK) {
+        return caller;
+    }
+
+    return h;
+}
+
+template <typename T>
+inline T task<T>::await_resume() noexcept {
+    ever_called = true;
+    auto ret = std::get<T>(h.promise()._ret);
+    h.destroy();
+    return ret;
+}
+
+template <typename T>
+inline pool_wp task<T>::get_pool() {
+    return h.promise().state._pool;
+}
+
+/* The Pool & Epoll engine
+------------------------------------------------------------------------------------------------- */
+
+/* If this is not really needed here we move it bellow */
+struct pool_internal_t {
+    template <typename T>
+    void sched(task<T> task, modif_table_p parent_table) {
+        /* first we give our new task the pool */
+        task.h.promise().state._pool = _pool;
+
+        /* second we call our callbacks on it because it is now scheduled */
+        if (do_sched_modifs(&task.h.promise().state, parent_table) != ERROR_OK) {
+            return ;
+        }
+
+        /* third, we add the task to the pool */
+        ready_tasks.push_back(task.h);
+    }
+
+    run_e run() {
+        dbg_register_name(task_t{std::noop_coroutine()}, "std::noop_coroutine");
+
+        auto h = next_task();
+        if (h == std::noop_coroutine())
+            return RUN_OK;
+
+        ret_val = RUN_ABORTED;
+        h.resume();
+        return ret_val;
+    }
+
+    void push_ready(handle<void> h) {
+        ready_tasks.push_back(h);
+    }
+
+    handle<void> next_task() {
+        if (!ready_tasks.empty()) {
+            auto ret = ready_tasks.front();
+            ready_tasks.pop_front();
+            return ret;
+        }
+        /*TODO: else, try to ask the fd engine for a new coro */
+
+        /* we have nothing else to do, we resume the pool_t::run */
+        ret_val = RUN_OK;
+        return std::noop_coroutine();
+    }
+
+    void wait_fd(handle<void> h, int fd, int wait_cond) {
+        /* add the file descriptor inside epoll and schedule the corutine for waiting on it */
+    }
+
+    run_e ret_val;
+    pool_wp _pool; /* I know this is uggly, but I didn't find another solution to hide redundant
+                      functions from pool_t without this strange indirection; */
+private:
+    std::deque<handle<void>> ready_tasks;
+};
+
+template <typename T>
+inline handle<void> task_state_t<T>::final_awaiter_t::final_awaiter_cleanup(
+        pool_wp _pool, handle<task_state_t<T>> ending_task)
+{
+    /* not sure if I should do something with the return value ... */
+    state_t *caller_state = ending_task.promise().state.caller_state;
+    do_exit_modifs(&ending_task.promise().state);
+
+    if (caller_state) {
+        do_entry_modifs(caller_state);
+        return caller_state->self;
+    }
+    else if (auto pool = ending_task.promise().state._pool.lock()) {
+        /* If the task that we are final_awaiting has no caller, then it is the moment to destroy it,
+        no one needs it's return value(futures?). Else it will be destroyed by the caller. */
+        /* TODO: maybe the future can just simply create a task and set it's coro as the continuation
+        here? Such that the future continues in the caller_state branch? */
+        ending_task.destroy();
+        return pool->internal->next_task();
+    }
+    else {
+        dbg("Failed to aquire the pool");
+        return std::noop_coroutine();
+    }
+}
+
+inline pool_t::pool_t() : internal(std::make_unique<pool_internal_t>()) {}
+
+template <typename T>
+inline void pool_t::sched(task<T> task, const std::vector<modif_p>& v) {
+    internal->sched(task, create_modif_table(v));
+}
+
+inline run_e pool_t::run() {
+    return internal->run();
+}
+
+inline pool_p create_pool() {
+    auto ret = pool_p(new pool_t);
+    ret->internal->_pool = ret;
+    return ret;
+}
+
+/* Awaiters
+------------------------------------------------------------------------------------------------- */
+
+struct yield_awaiter_t {
+    yield_awaiter_t() {}
+    yield_awaiter_t(const yield_awaiter_t &oth) = delete;
+    yield_awaiter_t &operator = (const yield_awaiter_t &oth) = delete;
+    yield_awaiter_t(yield_awaiter_t &&oth) = delete;
+    yield_awaiter_t &operator = (yield_awaiter_t &&oth) = delete;
+
+    bool await_ready() { return false; }
+
+    template <typename P>
+    inline handle<void> await_suspend(handle<P> h) {
+        if (auto pool = h.promise().state._pool.lock()) {
+            pool->internal->push_ready(h);
+            state = &h.promise().state;
+            /* TODO: handle modifs */
+            do_leave_modifs(state);
+            return pool->internal->next_task();
+        }
+        /* we don't have a pool anymore... */
+        dbg("yield failed because we don't have a pool anymore");
+        return std::noop_coroutine();
+    }
+
+    void await_resume() {
+        do_entry_modifs(state);
+    }
+
+    state_t *state;
+};
+
+template <typename T>
+struct sched_awaiter_t {
+    sched_awaiter_t(task<T> t, modif_table_p table) : t(t), table(table) {}
+    sched_awaiter_t(const sched_awaiter_t &oth) = delete;
+    sched_awaiter_t &operator = (const sched_awaiter_t &oth) = delete;
+    sched_awaiter_t(sched_awaiter_t &&oth) = delete;
+    sched_awaiter_t &operator = (sched_awaiter_t &&oth) = delete;
+
+    bool await_ready() { return false;}
+    void await_resume() {}
+
+    template <typename P>
+    bool await_suspend(handle<P> h) {
+        if (auto pool = h.promise().state._pool.lock()) {
+            pool->internal->sched(t, table);
+        }
+        else {
+            /* TODO: huh? */
+        }
+        return false;
+    }
+
+    task<T> t;
+    modif_table_p table;
+};
+
+struct get_pool_awaiter_t {
+    get_pool_awaiter_t() {}
+    get_pool_awaiter_t(const get_pool_awaiter_t &oth) = delete;
+    get_pool_awaiter_t &operator = (const get_pool_awaiter_t &oth) = delete;
+    get_pool_awaiter_t(get_pool_awaiter_t &&oth) = delete;
+    get_pool_awaiter_t &operator = (get_pool_awaiter_t &&oth) = delete;
+
+    template <typename P>
+    bool await_suspend(handle<P> h) {
+        _pool = h.promise().state._pool;
+        return false;
+    }
+
+    bool    await_ready()              { return false; };
+    pool_wp await_resume()             { return _pool; }
+
+    pool_wp _pool;
+};
+
+/* This is the object with which you wait for a file descriptor, you create it with a valid
+wait_cond and fd and co_await on it. The resulting integer must be positive to not be an error */
+struct fd_awaiter_t {
+    int wait_cond;  /* set with epoll wait condition */
+    int fd;         /* set with waited file descriptor */
+
+    fd_awaiter_t(int fd, int wait_cond) : fd(fd), wait_cond(wait_cond) {}
+    fd_awaiter_t(const fd_awaiter_t &oth) = delete;
+    fd_awaiter_t &operator = (const fd_awaiter_t &oth) = delete;
+    fd_awaiter_t(fd_awaiter_t &&oth) = delete;
+    fd_awaiter_t &operator = (fd_awaiter_t &&oth) = delete;
+
+    bool await_ready() { return false; };
+
+    template <typename P>
+    handle<void> await_suspend(handle<P> h) {
+        if (auto pool = h.promise().state._pool.lock()) {
+            state = &h.promise().state;
+            /* in case we can't schedule the fd we log the failure and return the same coro */
+            if (do_wait_fd_modifs(state, fd, wait_cond) != ERROR_OK) {
+                return h;
+            }
+            error_e err;
+            if ((err = pool->internal->wait_fd(h, fd, wait_cond)) < 0) {
+                /* TODO: log the fail */
+                state->err = err;
+                return h;
+            }
+            return pool->internal->next_task();
+        }
+        return std::noop_coroutine();
+    }
+
+    error_e await_resume() {
+        do_unwait_fd_modifs(state, fd);
+        return state->err;
+    }
+
+private:
+    state_t *state; /* The state of the corutine that called us */
+};
+
+/* Semaphore
+------------------------------------------------------------------------------------------------- */
+
+struct sem_internal_t {
+    sem_internal_t(pool_wp pool, int64_t val) : _pool(pool), val(val) {}
+
+    template <typename P>
+    handle<void> await_suspend(handle<P> to_suspend) {
+        waiting_on_sem.push_front(to_suspend);
+
+        if (auto pool = to_suspend.promise().state._pool.lock()) {
+            return pool->internal->next_task();
+        }
+        dbg("semaphore couldn't be awaited because the pool is gone!");
+        return std::noop_coroutine();
+    }
+
+    bool await_ready() {
+        if (val > 0) {
+            val--;
+            return true;
+        }
+        return false;
+    }
+
+    bool try_dec() {
+        return await_ready();
+    }
+
+    error_e signal() {
+        if (val == 0 && waiting_on_sem.size())
+            return _awake_one();
+        
+        val++;
+        if (val == 0)
+            return _awake_one();
+
+        /* we awake when val is 0, do nothing on negative, only increment and on positive we
+        don't have awaiters */
+        return ERROR_OK;
+    }
+
+    sem_wp _sem;
+
+private:
+    error_e _awake_one() {
+        auto to_awake = waiting_on_sem.back();
+        waiting_on_sem.pop_back();
+        if (auto pool = _pool.lock()) {
+            pool->internal->push_ready(to_awake);
+            return ERROR_OK;
+        }
+        else {
+            dbg("could't get the pool");
+            return ERROR_GENERIC;
+        }
+    }
+
+    std::deque<handle<void>> waiting_on_sem;
+    int64_t val;
+    pool_wp _pool;
+};
+
+struct sem_awaiter_t {
+    sem_awaiter_t(sem_wp _sem) : _sem(_sem) {}
+    sem_awaiter_t(const sem_awaiter_t &oth) = delete;
+    sem_awaiter_t &operator = (const sem_awaiter_t &oth) = delete;
+    sem_awaiter_t(sem_awaiter_t &&oth) = delete;
+    sem_awaiter_t &operator = (sem_awaiter_t &&oth) = delete;
+
+    template <typename P>
+    handle<void> await_suspend(handle<P> to_suspend) {
+        state = &to_suspend.promise().state;
+        if (do_wait_sem_modifs(state, _sem) != ERROR_OK)
+            return to_suspend;
+
+        if (auto sem = _sem.lock()) {
+            triggered = true;
+            return sem->internal->await_suspend(to_suspend);
+        }
+        else {
+            /* TODO: error out if else */
+            return std::noop_coroutine();
+        }
+    }
+
+    sem_t::unlocker_t await_resume() {
+        if (triggered)
+            do_unwait_sem_modifs(state, _sem);
+        triggered = false;
+        return sem_t::unlocker_t(_sem);
+    }
+
+    bool await_ready() {
+        if (auto sem = _sem.lock())
+            return sem->internal->await_ready();
+        return false;
+    }
+
+    state_t *state = nullptr;
+    sem_wp _sem;
+    bool triggered = false;
+};
+
+inline sem_t::sem_t(pool_wp pool, int64_t val)
+: internal(std::make_shared<sem_internal_t>(pool, val)) {}
+
+inline sem_awaiter_t sem_t::wait() { return sem_awaiter_t(internal->_sem); }
+inline error_e       sem_t::signal() { return internal->signal(); }
+inline bool          sem_t::try_dec() { return internal->try_dec(); }
+
+inline sem_p create_sem(pool_wp pool, int64_t val) {
+    auto ret = sem_p(new sem_t{pool, val}); 
+    ret->internal->_sem = ret;
+    return ret;
+}
+
+inline task<sem_p> create_sem(int64_t val) {
+    auto ret = sem_p(new sem_t{co_await get_pool(), val});
+    ret->internal->_sem = ret;
+    co_return ret;
+}
+
+/* Functions
+------------------------------------------------------------------------------------------------  */
+
+template <typename ...Args>
+inline task_t wait_all(task<Args>... tasks) {
+    /* TODO: this should return once all the tasks have been executed (use futures here?) */
+    co_return ERROR_OK;
+}
+
+template <typename T>
+inline sched_awaiter_t<T> sched(task<T> to_sched, const std::vector<modif_p>& v) {
+    return sched_awaiter_t(to_sched, create_modif_table(v));
+}
+
+template <typename Awaiter>
+inline task_t await(Awaiter&& awaiter) {
+    co_await std::forward<Awaiter>(awaiter);
+    co_return ERROR_OK;
+}
+
+inline yield_awaiter_t yield() {
+    return yield_awaiter_t{};
+}
+
+inline task<pool_wp> get_pool() {
+    get_pool_awaiter_t awaiter;
+    co_return co_await awaiter;
+}
+
+inline task<modif_p> creat_depend() {
+    /* TODO: create a killer, that will kill this corutine and the ones spawned from it? if the
+    depended task fails, this is kinda stupid, I may ignore it */
+    co_return nullptr;
+}
+
+inline task_t stopfd(int fd) {
+    /* TOSO: get the fd out of the poll, awakening all it's waiters */
+    co_return ERROR_OK;
+}
+
+inline task_t force_stop(run_e ret) {
+    /* TODO: simply interrupt the pool, if you continue it, it will continue from this place */
+    co_return ERROR_OK;
+}
+
+inline task_t sleep(const std::chrono::microseconds& timeo) {
+    /* TODO: create sleeper and sleep */
+    co_return ERROR_OK;
+}
+
+inline task_t sleep_us(uint64_t timeo_us) {
+    co_return co_await sleep(std::chrono::microseconds(timeo_us));
+}
+
+inline task_t sleep_ms(uint64_t timeo_ms) {
+    co_return co_await sleep(std::chrono::milliseconds(timeo_ms));
+}
+
+inline task_t sleep_s(uint64_t timeo_s) {
+    co_return co_await sleep(std::chrono::seconds(timeo_s));
+}
+
+inline task_t wait_event(int fd, int event) {
+    /* TODO */
+    co_return ERROR_OK;
+}
+
+inline task_t connect(int fd, sockaddr *sa, socklen_t *len) {
+    /* TODO */
+    co_return ERROR_OK;
+}
+
+inline task_t accept(int fd, sockaddr *sa, socklen_t *len) {
+    /* TODO */
+    co_return ERROR_OK;
+}
+
+inline task_t read(int fd, void *buff, size_t len) {
+    /* TODO */
+    co_return ERROR_OK;
+}
+
+inline task_t write(int fd, const void *buff, size_t len) {
+    /* TODO */
+    co_return ERROR_OK;
+}
+
+inline task_t read_sz(int fd, void *buff, size_t len) {
+    /* TODO */
+    co_return ERROR_OK;
+}
+
+inline task_t write_sz(int fd, const void *buff, size_t len) {
+    /* TODO */
+    co_return ERROR_OK;
+}
+
+struct task_modifs_getter_t {
+    modif_table_p table;
+
+    bool          await_ready() noexcept { return false; }
+    modif_table_p await_resume() noexcept { return table; }
+
+    template <typename P>
+    bool await_suspend(handle<P> h) noexcept {
+        table = h.promise().state.modif_table;
+        return false;
+    }
+};
+
+inline std::vector<modif_p> get_task_modifs(modif_table_p table) {
+    std::vector<modif_p> ret;
+    if (!table)
+        return ret;
+    for (auto &cbk_table : table->table) {
+        for (auto &modif : cbk_table)
+            ret.push_back(modif);
+    }
+    return ret;
+}
+
+template <typename T>
+inline std::vector<modif_p> task_modifs(task<T> t) {
+    auto mt = t.h.promise().state.modif_table;
+    return get_task_modifs(mt);
+}
+
+inline task<std::vector<modif_p>> task_modifs() {
+    auto table = co_await task_modifs_getter_t{};
+    co_return get_task_modifs(table);
+}
+
+inline void add_modifs_to_table(modif_table_p table, std::set<modif_p> mods) {
+    if (!table)
+        return;
+    for (auto &cbk_table : table->table)
+        for (auto &modif : cbk_table)
+            if (has(mods, modif))
+                mods.erase(modif);
+    for (auto &mod : mods)
+        if (mod)
+            table->table[mod->type].push_back(mod);
+}
+
+inline void rm_modifs_from_table(modif_table_p table, const std::set<modif_p>& mods) {
+    if (!table)
+        return;
+    for (auto &cbk_table : table->table) {
+        cbk_table.erase(std::remove_if(cbk_table.begin(), cbk_table.end(),
+                [&mods](modif_p m) { return has(mods, m); }), cbk_table.end());
+    }
+}
+
+template <typename T>
+inline task<T> add_modifs(task<T> t, const std::set<modif_p>& mods) {
+    add_modifs_to_table(t.h.promise().state.modif_table, mods);
+    return t;
+}
+
+template <typename T>
+inline task<T> rm_modifs(task<T> t, const std::set<modif_p>& mods) {
+    rm_modifs_from_table(t.h.promise().state.modif_table, mods);
+    return t;
+}
+
+inline task_t add_modifs(const std::set<modif_p>& mods) {
+    auto table = co_await task_modifs_getter_t{};
+    add_modifs_to_table(table, mods);
+}
+
+inline task_t rm_modifs(const std::set<modif_p>& mods) {
+    auto table = co_await task_modifs_getter_t{};
+    rm_modifs_from_table(table, mods);
+}
+
+/* non awaitable functions: */
+
+template <typename T>
+inline task<T> creat_future(task<T> t) {
+    /* TODO: create a function that will return the return value of t once awaited. */
+    return t;
+}
+
+/* TODO: depends on the pool_t to create the timer */
+inline modif_p creat_timeo(const std::chrono::microseconds& timeo) {
+    /* TODO: create the 'modif packet' that will kill the corutines in the call-path when the
+    timer expires */
+    return nullptr;
+}
+
+inline modif_p creat_killer() {
+    /* TODO: create the 'modif packet' that can stop the corutines in the call-path when triggered */
+    return nullptr;
+}
+inline error_e sig_killer(modif_p p) {
+    /* TODO: this signals the coro_killer that it should kill the coro */
+    /* TODO: change the return type, make it such that it makes sense ('modif packet') */
+    return ERROR_OK;
+}
+
 
 /* Debug stuff
 ------------------------------------------------------------------------------------------------- */
 
 template <typename T, typename ...Args>
-inline task<T> dbg_register_name(task<T> t, const char *fmt, task<T>&&...) {
-    /* TODO: */
-    /* Probably remember names inside the pool */
+inline task<T> dbg_register_name(task<T> t, const char *fmt, Args&&... args) {
+    dbg_register_name(t.h.address(), fmt, std::forward<Args>(args)...);
     return t;
 }
 
+template <typename P, typename ...Args>
+inline handle<P> dbg_register_name(handle<P> h, const char *fmt, Args&&... args) {
+    dbg_register_name(h.address(), fmt, std::forward<Args>(args)...);
+    return h;
+}
+
+template <typename T>
+inline std::string dbg_name(task<T> t) {
+    return dbg_name(t.h.address());
+}
+
+template <typename P>
+inline std::string dbg_name(handle<P> h) {
+    return dbg_name(h.address());
+}
+
 inline modif_p creat_dbg_tracer() {
-    /* TODO: */
+    /* TODO: create a 'modif packet' that can be used to trace all the corutine's actions */
     return nullptr;
 }
 
-/* Obtains the name given to the respective task */
-template <typename T>
-inline std::string dbg_name(task<T> t) {
-    /* TODO: */
-    return "";
-}
-
-#if CO_ENABLE_LOGGING
-
 template <typename... Args>
-inline std::string _format(const char *fmt, Args&& ...args) {
+inline std::string dbg_format(const char *fmt, Args&& ...args) {
     std::vector<char> buff;
     int cnt = snprintf(NULL, 0, fmt, std::forward<Args>(args)...);
     if (cnt <= 0)
         return "[failed snprintf1]";
-    buff.resize(cnt);
-    if (snprintf(buff.data(), cnt, fmt, std::forward<Args>(args)...) < 0)
+    buff.resize(cnt + 1);
+    if (snprintf(buff.data(), cnt + 1, fmt, std::forward<Args>(args)...) < 0)
         return "[failed snprintf2]";
     return buff.data();
 }
@@ -1026,26 +1322,62 @@ inline uint64_t dbg_get_time() {
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
+
+
+#if CORO_ENABLE_DEBUG_NAMES
+
+/* TODO: mutex it if needed by multi-threads */
+inline std::map<void *, std::pair<std::string, int>> dbg_names;
+
+template <typename ...Args>
+inline void *dbg_register_name(void *addr, const char *fmt, Args&&... args) {
+    if (!has(dbg_names, addr))
+        dbg_names[addr] = {dbg_format(fmt, std::forward<Args>(args)...), 1};
+    else
+        dbg_names[addr].second++;
+    return addr;
+}
+
+inline std::string dbg_name(void *v) {
+    if (!has(dbg_names, v))
+        dbg_register_name(v, "%p", v);
+    return dbg_format("%s[%" PRIu64 "]", dbg_names[v].first.c_str(), dbg_names[v].second);
+}
+
+#else /*CORO_ENABLE_DEBUG_NAMES*/
+
+template <typename ...Args>
+inline void *dbg_register_name(void *addr, const char *fmt, Args&&... args) { return addr; }
+
+inline std::string dbg_name(void *v) { return ""; };
+
+#endif /*CORO_ENABLE_DEBUG_NAMES*/
+
+
+
+#if CORO_ENABLE_LOGGING
+
 inline void dbg_raw(const std::string& msg,
         std::source_location const& sloc = std::source_location::current())
 {
     if (log_str) {
-        log_str(_format("[" PRIu64 "] %s:%4d %s() :> %s\n", dbg_get_time(),
-                sloc.file_name(), (int)sloc.line(), sloc.function_name(), msg.c_str()));
+        /* TODO: function_name: this is bullshit, replace it with something else */
+        log_str(dbg_format("[%" PRIu64 "] %s:%4d %s() :> %s\n", dbg_get_time(),
+                sloc.file_name(), (int)sloc.line(), "sloc.function_name()", msg.c_str()));
     }
 }
 
 template <typename... Args>
 inline void dbg(dbg_format_helper_t dfmt, Args&&... args) {
-    dbg_raw(_format(dfmt.fmt.c_str(), std::forward<Args>(args)...), dfmt.loc);
+    dbg_raw(dbg_format(dfmt.fmt.c_str(), std::forward<Args>(args)...), dfmt.loc);
 }
 
-#else /*CO_ENABLE_LOGGING*/
+#else /*CORO_ENABLE_LOGGING*/
 
 template <typename... Args> /* no logging -> do nothing */
 inline void dbg(dbg_format_helper_t, Args&&...) {}
 
-#endif /*CO_ENABLE_LOGGING*/
+#endif /*CORO_ENABLE_LOGGING*/
 
 /* The end
 ------------------------------------------------------------------------------------------------- */
