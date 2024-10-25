@@ -651,7 +651,7 @@ struct task {
 
     bool await_ready() noexcept { return false; }
 
-    /* Those two need to be implemented bellow the task_state */
+    /* Those need to be implemented bellow the task_state */
     template <typename P>
     handle<void> await_suspend(handle<P> caller) noexcept;
     T            await_resume() noexcept;
