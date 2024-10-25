@@ -1,9 +1,17 @@
 #ifndef CORO_H
 #define CORO_H
+
 /* TODO:
     - write the fd stuff
     - add debug modifs, things are already breaking and I don't know why
- */
+    - consider implementing co_yield
+    - consider implementing exception handling
+    - write the tutorial at the start of this file
+    - add the licence
+    - check the comments
+    - check the review again
+*/
+
 /* rewrite of co_utils.h ->
     - CPP library over the CPP corutines
     - Built around epoll (ie, epoll is the only blocking function)
@@ -24,6 +32,7 @@
 #include <set>
 #include <source_location>
 #include <cinttypes>
+#include <list>
 
 #include <unistd.h>
 #include <sys/socket.h>
@@ -65,29 +74,46 @@ to a callback that will be called from another thread */
 # define CORO_ENABLE_DEBUG_TRACE_ALL false
 #endif
 
-#if !defined(CO_KILL_DEFAULT_CONSTRUCT) && !defined(CO_KILL_RAISE_EXCEPTION)
-# define CO_KILL_DEFAULT_CONSTRUCT true
-# define CO_KILL_RAISE_EXCEPTION false
+/* TODO: make this a thing */
+/* If set, will throw exceptions wherever only a warning would be logged. This would throw if the
+pool no longer exists, if a semaphore is signaled after it was uninitialized, if a semaphore was
+unitialized but others are still waiting on it, if an awaitable was created but never awaited, etc. */
+#ifndef CORO_ENABLE_WARNING_EXCEPTIONS
+# define CORO_ENABLE_WARNING_EXCEPTIONS false
 #endif
 
-#if defined(CO_KILL_DEFAULT_CONSTRUCT) && defined(CO_KILL_RAISE_EXCEPTION)
-# if CO_KILL_DEFAULT_CONSTRUCT && CO_KILL_RAISE_EXCEPTION
-#  error "Don't choose both"
-# endif
+/* TODO: on default construct, make sure the return value can be default constructed */
+#if !defined(CORO_KILL_DEFAULT_CONSTRUCT) && !defined(CORO_KILL_RAISE_EXCEPTION)
+# define CORO_KILL_DEFAULT_CONSTRUCT true
+# define CORO_KILL_RAISE_EXCEPTION false
+#endif
+#if defined(CORO_KILL_RAISE_EXCEPTION) && !defined(CORO_KILL_DEFAULT_CONSTRUCT)
+#define CORO_KILL_DEFAULT_CONSTRUCT false
+#endif
+#if defined(CORO_KILL_DEFAULT_CONSTRUCT) && !defined(CORO_KILL_RAISE_EXCEPTION)
+#define CORO_KILL_RAISE_EXCEPTION false
+#endif
+
+#if CORO_KILL_DEFAULT_CONSTRUCT && CORO_KILL_RAISE_EXCEPTION
+# error "Don't choose both"
 #endif
 
 #if CO_KILL_RAISE_EXCEPTION && !CORO_ENABLE_EXCEPTIONS
 # error "Can't have CO_KILL_RAISE_EXCEPTION without CORO_ENABLE_EXCEPTIONS"
 #endif
 
+#if CORO_ENABLE_WARNING_EXCEPTIONS && !CORO_ENABLE_EXCEPTIONS
+# error "Can't have CORO_ENABLE_WARNING_EXCEPTIONS without CORO_ENABLE_EXCEPTIONS"
+#endif
+
 /* If CORO_ENABLE_DEBUG_NAMES you can also define CORO_REGNAME and use it to register a
-corutine's name */
+corutine's name (a coro::task<T>, std::coroutine_handle or void *) */
 #if CORO_ENABLE_DEBUG_NAMES
 # ifndef CORO_REGNAME
-#  define CORO_REGNAME(t)   coro::dbg_register_name((t), "%20s:%5d:%s", __FILE__, __LINE__, #t)
+#  define CORO_REGNAME(thv)   coro::dbg_register_name((thv), "%20s:%5d:%s", __FILE__, __LINE__, #thv)
 # endif
 #else
-# define CORO_REGNAME(t)    t
+# define CORO_REGNAME(thv)    thv
 #endif /*CORO_ENABLE_DEBUG_NAMES*/
 
 namespace coro {
@@ -152,7 +178,6 @@ enum run_e : int32_t {
 };
 
 enum modif_e : int32_t {
-    /* Call callback is called on  */
     CO_MODIF_CALL_CBK = 0,
     CO_MODIF_SCHED_CBK,
     CO_MODIF_EXIT_CBK,
@@ -193,13 +218,22 @@ struct sched_awaiter_t;
 struct state_t {
     error_e err = ERROR_OK;             /* holds the error return in diverse cases */
     pool_wp _pool;                      /* the pool of this coro */
+    modif_table_p modif_table;          /* we allocate a table only if there are mods */
 
     state_t *caller_state = nullptr;    /* this holds the caller's state, and with it the return path */ 
-    std::coroutine_handle<void> self;   /* the caller's handle */
-    modif_table_p modif_table;          /* we allocate a table only if there are mods */
+    std::coroutine_handle<void> self;   /* the coro's self handle */
+
+    std::shared_ptr<void> user_ptr;     /* this is a pointer that the user can use for whatever
+                                        he feels like. This library will not touch this pointer */
 };
 
 struct pool_t {
+    /* you use the pointer made by create_pool */
+    pool_t(pool_t& sem) = delete;
+    pool_t(pool_t&& sem) = delete;
+    pool_t &operator = (pool_t& sem) = delete;
+    pool_t &operator = (pool_t&& sem) = delete;
+
     /* Same as coro::sched, but used outside of a corutine, based on the pool */
     template <typename T>
     void sched(task<T> task, const std::vector<modif_p>& v = {}); /* ignores return type */
@@ -216,6 +250,8 @@ protected:
     pool_t();
 };
 
+/* TODO: if the semaphore dies, the things waiting on it will still wait, that doesn't seem ok,
+maybe wake them up? give a warning? */
 struct sem_t {
     struct unlocker_t{ /* compatibility with guard objects ex: std::lock_guard guard(co_await s); */
         sem_wp _sem;
@@ -224,13 +260,13 @@ struct sem_t {
         void unlock() { if (auto sem = _sem.lock()) sem->signal(); }
     };
 
-    /* can be created and moved, but not copied */
+    /* you use the pointer made by create_sem */
     sem_t(sem_t& sem) = delete;
-    sem_t(sem_t&& sem) { internal = std::move(sem.internal); }
+    sem_t(sem_t&& sem) = delete;
     sem_t &operator = (sem_t& sem) = delete;
-    sem_t &operator = (sem_t&& sem) { internal = std::move(sem.internal); return *this; }
+    sem_t &operator = (sem_t&& sem) = delete;
 
-    sem_awaiter_t wait(); /* if awaited -> unlocker_t */
+    sem_awaiter_t wait(); /* if awaited returns unlocker_t{} */
     error_e signal(); /* returns error if the pool disapeared */
     bool try_dec();
 
@@ -243,18 +279,35 @@ protected:
     sem_t(pool_wp pool, int64_t val = 0);
 };
 
+/* This is mostly internal, but you can also use it to be able to check if someone is still waiting
+on a semaphore */
+using sem_waiter_handle_wp =
+        std::weak_ptr<                          /* if this pointer is not available, the waiter was
+                                                   evicted from the waiters list */
+            std::list<                          /* List with the semaphore waiters */
+                std::pair<
+                    std::coroutine_handle<void>,/* The corutine handle */
+                    std::shared_ptr<void>       /* Where the shared_ptr is actually stored */
+                >
+            >::iterator                         /* iterator in the respective list */
+        >;
+
 /* A modif is a callback for a specifi stage in the corutine's flow */
 struct modif_t {
     std::variant<
-        std::function<error_e(state_t *)>,                             /* call_cbk */
-        std::function<error_e(state_t *)>,                             /* sched_cbk */
-        std::function<error_e(state_t *)>,                             /* exit_cbk */
-        std::function<error_e(state_t *)>,                             /* leave_cbk */
-        std::function<error_e(state_t *)>,                             /* enter_cbk */
-        std::function<error_e(state_t *, int fd, int wait_cond)>,      /* wait_fd_cbk */
-        std::function<error_e(state_t *, int fd)>,                     /* unwait_fd_cbk */
-        std::function<error_e(state_t *, sem_wp)>,                     /* wait_sem_cbk */
-        std::function<error_e(state_t *, sem_wp)>                      /* unwait_sem_cbk */
+        std::function<error_e(state_t *)>,                        /* call_cbk */
+        std::function<error_e(state_t *)>,                        /* sched_cbk */
+        std::function<error_e(state_t *)>,                        /* exit_cbk */
+        std::function<error_e(state_t *)>,                        /* leave_cbk */
+        std::function<error_e(state_t *)>,                        /* enter_cbk */
+        std::function<error_e(state_t *, int fd, int wait_cond)>, /* wait_fd_cbk */
+        std::function<error_e(state_t *, int fd)>,                /* unwait_fd_cbk */
+
+         /* wait_sem_cbk - OBS: the std::shared_ptr<void> part can be ignored, it's internal */
+        std::function<error_e(state_t *, sem_wp, sem_waiter_handle_wp)>,
+
+         /* unwait_sem_cbk */
+        std::function<error_e(state_t *, sem_wp, sem_waiter_handle_wp)>
     > cbk;
 
     modif_e type = CO_MODIF_COUNT;
@@ -291,11 +344,11 @@ inline std::vector<modif_p> task_modifs(task<T> t);
 
 /* This adds a modifier to the task and returns the task. Duplicates will be ignored */
 template <typename T>
-inline task<T> add_modifs(task<T> t, std::set<modif_p> mods);
+inline task<T> add_modifs(task<T> t, std::set<modif_p> mods); /* not awaitable */
 
 /* Removes modifier from the vector */
 template <typename T>
-inline task<T> rm_modifs(task<T> t, std::set<modif_p> mods);
+inline task<T> rm_modifs(task<T> t, std::set<modif_p> mods); /* not awaitable */
 
 /* same as above, but adds them for the current task */
 inline task<std::vector<modif_p>> task_modifs();
@@ -324,13 +377,13 @@ inline task_t sleep(const std::chrono::microseconds& us);
 
 /* Observation: killed corutines, timed, result of functions that depend on others, futures, all
 of those will not be able to construct their return type if they are killed so those
-need to be handled, so you must choose that by defining one of the two: CO_KILL_DEFAULT_CONSTRUCT,
-CO_KILL_RAISE_EXCEPTION ?TODO:CHECK?
+need to be handled, so you must choose that by defining one of the two: CORO_KILL_DEFAULT_CONSTRUCT,
+CORO_KILL_RAISE_EXCEPTION ?TODO:CHECK?
 
 Those that return error_e will return their apropiate error in this case, the rest will either
 have the error returned in the exception or set in the task/awaiter object.
 
-If CO_KILL_DEFAULT_CONSTRUCT, then the return value will be the default constructed type.(except if
+If CORO_KILL_DEFAULT_CONSTRUCT, then the return value will be the default constructed type.(except if
 type is error_e).
 */
 
@@ -352,13 +405,13 @@ inline error_e sig_killer(modif_p p);
 /* takes a task and adds the requred modifications to it such that the returned object will be
 returned once the return value of the task is available so:
     auto t = co_task();
-    auto fut = co::create_future(t)
-    co_await co::sched(t);
+    auto fut = coro::create_future(t)
+    co_await coro::sched(t);
     ...
     co_await fut; // returns the value of co_task once it has finished executing 
 */
 template <typename T>
-inline task<T> creat_future(task<T> t);
+inline task<T> creat_future(task<T> t); /* not awaitable */
 
 /* wait for all the tasks to finish, the return value can be found in the respective task, killing
 one kills all (sig_killer installed in all). The inheritance is the same as with 'call'. */
@@ -372,7 +425,7 @@ inline task_t force_stop(int ret);
 /* EPOLL & Linux Specific:
 ------------------------------------------------------------------------------------------------  */
 
-/* convenience functions provided: */
+/* TODO: describe their usage */
 inline task_t connect(int fd, sockaddr *sa, socklen_t *len);
 inline task_t accept(int fd, sockaddr *sa, socklen_t *len);
 inline task_t read(int fd, void *buff, size_t len);
@@ -388,7 +441,7 @@ inline task_t wait_event(int fd, int event);
 so you must use stopfd on the file descriptor before you close it. This makes sure the fd is
 awakened and ejected from the system before closing it. For example:
 
-    co_await co::stopfd(fd);
+    co_await coro::stopfd(fd);
     close(fd);
 */
 inline task_t stopfd(int fd);
@@ -451,6 +504,9 @@ inline std::function<int(const std::string&)> log_str =
 =================================================================================================
 ================================================================================================= */
 
+/* Helpers
+------------------------------------------------------------------------------------------------- */
+
 template <typename P>
 using handle = std::coroutine_handle<P>;
 
@@ -468,6 +524,9 @@ template <typename T, typename K>
 constexpr auto has(T&& data_struct, K&& key) {
     return std::forward<T>(data_struct).find(std::forward<K>(key)) != std::forward<T>(data_struct).end();
 }
+
+using sem_wait_list_t = std::list<std::pair<handle<void>, std::shared_ptr<void>>>;
+using sem_wait_list_it = sem_wait_list_t::iterator;
 
 /* Modifs Part
 ------------------------------------------------------------------------------------------------- */
@@ -566,12 +625,12 @@ inline error_e do_unwait_fd_modifs(state_t *state, int fd) {
     return do_generic_modifs<CO_MODIF_UNWAIT_FD_CBK>(state, fd);
 }
 
-inline error_e do_wait_sem_modifs(state_t *state, sem_wp _sem) {
-    return do_generic_modifs<CO_MODIF_WAIT_SEM_CBK>(state, _sem);
+inline error_e do_wait_sem_modifs(state_t *state, sem_wp _sem, sem_waiter_handle_wp _it) {
+    return do_generic_modifs<CO_MODIF_WAIT_SEM_CBK>(state, _sem, _it);
 }
 
-inline error_e do_unwait_sem_modifs(state_t *state, sem_wp _sem) {
-    return do_generic_modifs<CO_MODIF_UNWAIT_SEM_CBK>(state, _sem);
+inline error_e do_unwait_sem_modifs(state_t *state, sem_wp _sem, sem_waiter_handle_wp _it) {
+    return do_generic_modifs<CO_MODIF_UNWAIT_SEM_CBK>(state, _sem, _it);
 }
 
 /* considering you may want to create a modif at runtime this seems to be the best way */
@@ -692,7 +751,7 @@ struct task_state_t {
     template <typename R>
     void return_value(R&& ret) {
         /* TODO: maybe if this coro is of our type it should also take into consideration the
-        return value of the state.err? */
+        return value of the state.err? (or maybe better -> think more about that error thing) */
         _ret.template emplace<T>(std::forward<R>(ret));
     }
 
@@ -848,7 +907,6 @@ struct yield_awaiter_t {
         if (auto pool = h.promise().state._pool.lock()) {
             pool->internal->push_ready(h);
             state = &h.promise().state;
-            /* TODO: handle modifs */
             do_leave_modifs(state);
             return pool->internal->next_task();
         }
@@ -932,7 +990,7 @@ struct fd_awaiter_t {
                 return h;
             }
             error_e err;
-            if ((err = pool->internal->wait_fd(h, fd, wait_cond)) < 0) {
+            if ((err = pool->internal->wait_fd(h, fd, wait_cond)) != ERROR_OK) {
                 /* TODO: log the fail */
                 state->err = err;
                 return h;
@@ -948,7 +1006,9 @@ struct fd_awaiter_t {
     }
 
 private:
-    state_t *state; /* The state of the corutine that called us */
+    /* The state of the corutine that called us. We know it will exist at least as much as the
+    suspension */
+    state_t *state;
 };
 
 /* Semaphore
@@ -956,17 +1016,6 @@ private:
 
 struct sem_internal_t {
     sem_internal_t(pool_wp pool, int64_t val) : _pool(pool), val(val) {}
-
-    template <typename P>
-    handle<void> await_suspend(handle<P> to_suspend) {
-        waiting_on_sem.push_front(to_suspend);
-
-        if (auto pool = to_suspend.promise().state._pool.lock()) {
-            return pool->internal->next_task();
-        }
-        dbg("semaphore couldn't be awaited because the pool is gone!");
-        return std::noop_coroutine();
-    }
 
     bool await_ready() {
         if (val > 0) {
@@ -993,14 +1042,40 @@ struct sem_internal_t {
         return ERROR_OK;
     }
 
+protected:
+    friend sem_awaiter_t;
+    friend sem_t;
+    friend inline sem_p create_sem(pool_wp pool, int64_t val);
+
     sem_wp _sem;
+
+    sem_waiter_handle_wp push_waiter(handle<void> to_suspend) {
+        /* Don't know another way to fix this mess, so, yeah... The problem is that the awaiter
+        bellow needs a way to register the waiter on this list so it may potentialy awake it (via the
+        modif callbacks). Now the problem is that this semaphore may also want to awake the waiter,
+        wich would invalidate the iterator inside the callback. So we give both the callback and
+        the awaiter bellow a weak pointer to a pointer held at the same place with the corutine,
+        so that if the corutine awakes, the pointer dies and the weak_pointer locks to null. */
+        auto p = std::make_shared<sem_wait_list_it>();
+        waiting_on_sem.push_front({to_suspend, p});
+        *p = waiting_on_sem.begin();
+        return p;
+    }
+
+    void erase_waiter(sem_wait_list_it it) {
+        waiting_on_sem.erase(it);
+    }
+
+    pool_wp get_pool() {
+        return _pool;
+    }
 
 private:
     error_e _awake_one() {
         auto to_awake = waiting_on_sem.back();
-        waiting_on_sem.pop_back();
         if (auto pool = _pool.lock()) {
-            pool->internal->push_ready(to_awake);
+            pool->internal->push_ready(to_awake.first);
+            waiting_on_sem.pop_back();
             return ERROR_OK;
         }
         else {
@@ -1009,7 +1084,7 @@ private:
         }
     }
 
-    std::deque<handle<void>> waiting_on_sem;
+    sem_wait_list_t waiting_on_sem;
     int64_t val;
     pool_wp _pool;
 };
@@ -1024,22 +1099,32 @@ struct sem_awaiter_t {
     template <typename P>
     handle<void> await_suspend(handle<P> to_suspend) {
         state = &to_suspend.promise().state;
-        if (do_wait_sem_modifs(state, _sem) != ERROR_OK)
-            return to_suspend;
 
-        if (auto sem = _sem.lock()) {
-            triggered = true;
-            return sem->internal->await_suspend(to_suspend);
-        }
-        else {
-            /* TODO: error out if else */
+        auto sem = _sem.lock();
+        if (!sem) {
+            /* TODO: stop the pool, or return to caller? or except? */
+            dbg("Invalid sem");
             return std::noop_coroutine();
         }
+        auto pool = sem->internal->get_pool().lock();
+        if (!pool) {
+            /* TODO: as above? error handling, what to do? */
+            dbg("Invalid pool");
+            return std::noop_coroutine();
+        }
+        _sem_it = sem->internal->push_waiter(to_suspend);
+        if (do_wait_sem_modifs(state, _sem, _sem_it) != ERROR_OK) {
+            sem->internal->erase_waiter(*(_sem_it.lock()));
+            return to_suspend;
+        }
+
+        triggered = true;
+        return pool->internal->next_task();
     }
 
     sem_t::unlocker_t await_resume() {
         if (triggered)
-            do_unwait_sem_modifs(state, _sem);
+            do_unwait_sem_modifs(state, _sem, _sem_it);
         triggered = false;
         return sem_t::unlocker_t(_sem);
     }
@@ -1052,6 +1137,7 @@ struct sem_awaiter_t {
 
     state_t *state = nullptr;
     sem_wp _sem;
+    sem_waiter_handle_wp _sem_it;
     bool triggered = false;
 };
 
@@ -1069,9 +1155,7 @@ inline sem_p create_sem(pool_wp pool, int64_t val) {
 }
 
 inline task<sem_p> create_sem(int64_t val) {
-    auto ret = sem_p(new sem_t{co_await get_pool(), val});
-    ret->internal->_sem = ret;
-    co_return ret;
+    co_return create_sem(co_await get_pool(), val);
 }
 
 /* Functions
@@ -1105,7 +1189,8 @@ inline task<pool_wp> get_pool() {
 
 inline task<modif_p> creat_depend() {
     /* TODO: create a killer, that will kill this corutine and the ones spawned from it? if the
-    depended task fails, this is kinda stupid, I may ignore it */
+    depended task fails, this is kinda stupid, I may ignore it, (or maybe it is necesary to be able
+    to do something like wait_any?) */
     co_return nullptr;
 }
 
@@ -1249,8 +1334,6 @@ inline task_t rm_modifs(const std::set<modif_p>& mods) {
     rm_modifs_from_table(table, mods);
 }
 
-/* non awaitable functions: */
-
 template <typename T>
 inline task<T> creat_future(task<T> t) {
     /* TODO: create a function that will return the return value of t once awaited. */
@@ -1273,7 +1356,6 @@ inline error_e sig_killer(modif_p p) {
     /* TODO: change the return type, make it such that it makes sense ('modif packet') */
     return ERROR_OK;
 }
-
 
 /* Debug stuff
 ------------------------------------------------------------------------------------------------- */
@@ -1322,8 +1404,6 @@ inline uint64_t dbg_get_time() {
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
-
-
 #if CORO_ENABLE_DEBUG_NAMES
 
 /* TODO: mutex it if needed by multi-threads */
@@ -1353,8 +1433,6 @@ inline std::string dbg_name(void *v) { return ""; };
 
 #endif /*CORO_ENABLE_DEBUG_NAMES*/
 
-
-
 #if CORO_ENABLE_LOGGING
 
 inline void dbg_raw(const std::string& msg,
@@ -1383,8 +1461,5 @@ inline void dbg(dbg_format_helper_t, Args&&...) {}
 ------------------------------------------------------------------------------------------------- */
 
 }
-
-// comment this if you don't like it
-namespace co = coro;
 
 #endif
