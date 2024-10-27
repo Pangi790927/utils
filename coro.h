@@ -7,20 +7,11 @@
     - consider implementing co_yield
     - consider implementing exception handling
     - write the tutorial at the start of this file
-    - speed optimizations
+    + speed optimizations [added allocator]
     - add the licence
-    - check the comments
+    - check own comments
     - check the review again
 */
-
-/* TODO:
-    valgrind --tool=callgrind ./a.out
-    kcachegrind callgrind.out.1955178
-
-    - take into consideration keeping a cache of allocations because it seems that this hurts
-    the library, the idea is to have some objects, like shared pointers, allocated from the start,
-    such that the library won't spend so much time on allocating things that are re-allocated
-    constantly. one such example is _awake_one in sem_internal_t */
 
 /* rewrite of co_utils.h ->
     - CPP library over the CPP corutines
@@ -43,6 +34,7 @@
 #include <source_location>
 #include <cinttypes>
 #include <list>
+#include <utility>
 
 #include <unistd.h>
 #include <sys/socket.h>
@@ -82,6 +74,24 @@ to a callback that will be called from another thread */
 /* If set, will create a debug tracer and it will add it to all coroutines */
 #ifndef CORO_ENABLE_DEBUG_TRACE_ALL
 # define CORO_ENABLE_DEBUG_TRACE_ALL false
+#endif
+
+/* TODO: this */
+/* If you don't like the allocator and you would rather not have it use up memory */
+#ifndef CORO_DISABLE_ALLOCATOR
+# define CORO_DISABLE_ALLOCATOR false
+#endif
+
+/* used inside the allocator to scale the ammount of memory it uses per pool */
+#ifndef CORO_ALLOCATOR_SCALE
+# define CORO_ALLOCATOR_SCALE 16
+#endif
+
+/* TODO: */
+/* if defined, the library will expect you to implement an allocator and the definitions for this
+one will be removed */
+#ifndef CORO_ALLOCATOR_REPLACE
+#define CORO_ALLOCATOR_REPLACE false
 #endif
 
 /* TODO: make this a thing */
@@ -126,6 +136,57 @@ corutine's name (a coro::task<T>, std::coroutine_handle or void *) */
 # define CORO_REGNAME(thv)    thv
 #endif /*CORO_ENABLE_DEBUG_NAMES*/
 
+
+// // no inline, required by [replacement.functions]/3
+// void* operator new(std::size_t sz)
+// {
+//     std::printf("1) new(size_t), size = %zu\n", sz);
+//     if (sz == 0)
+//         ++sz; // avoid std::malloc(0) which may return nullptr on success
+ 
+//     if (void *ptr = std::malloc(sz))
+//         return ptr;
+ 
+//     throw std::bad_alloc{}; // required by [new.delete.single]/3
+// }
+ 
+// // no inline, required by [replacement.functions]/3
+// void* operator new[](std::size_t sz)
+// {
+//     std::printf("2) new[](size_t), size = %zu\n", sz);
+//     if (sz == 0)
+//         ++sz; // avoid std::malloc(0) which may return nullptr on success
+ 
+//     if (void *ptr = std::malloc(sz))
+//         return ptr;
+ 
+//     throw std::bad_alloc{}; // required by [new.delete.single]/3
+// }
+ 
+// void operator delete(void* ptr) noexcept
+// {
+//     std::puts("3) delete(void*)");
+//     std::free(ptr);
+// }
+ 
+// void operator delete(void* ptr, std::size_t size) noexcept
+// {
+//     std::printf("4) delete(void*, size_t), size = %zu\n", size);
+//     std::free(ptr);
+// }
+ 
+// void operator delete[](void* ptr) noexcept
+// {
+//     std::puts("5) delete[](void* ptr)");
+//     std::free(ptr);
+// }
+ 
+// void operator delete[](void* ptr, std::size_t size) noexcept
+// {
+//     std::printf("6) delete[](void*, size_t), size = %zu\n", size);
+//     std::free(ptr);
+// }
+
 namespace coro {
 
 constexpr int MAX_TIMER_POOL_SIZE = CORO_MAX_TIMER_POOL_SIZE;
@@ -160,13 +221,9 @@ struct state_t;
 
 /* used pointers, so _p marks a shared_pointer and a _wp marks a weak pointer. */
 using sem_p = std::shared_ptr<sem_t>;
-using sem_wp = std::weak_ptr<sem_t>;
 using pool_p = std::shared_ptr<pool_t>;
-using pool_wp = std::weak_ptr<pool_t>;
 using modif_p = std::shared_ptr<modif_t>;
-using modif_wp = std::weak_ptr<modif_t>;
 using modif_table_p = std::shared_ptr<modif_table_t>;
-using modif_table_wp = std::weak_ptr<modif_table_t>;
 
 /* Tasks errors */
 enum error_e : int32_t {
@@ -210,32 +267,94 @@ enum modif_flags_e : int32_t {
 on this and I also find it in theme, as all the linux functions that I use tend to return ints) */
 using task_t = task<int>;
 
-/* some internal structures */
+/* some forward declarations of internal structures */
 struct yield_awaiter_t;
 struct sem_awaiter_t;
 struct pool_internal_t;
 struct sem_internal_t;
+struct allocator_memory_t;
 
 template <typename T>
 struct sched_awaiter_t;
+
+/*
+There are two things that don't need custom allocating: lowspeed stuff and the corutine promise.
+It makes no sense to allocate the corutine promise because:
+    1. It is a user defined type so the promise is not going to fit well in our allocator
+    2. I expect it be allocated rarelly
+    3. It would be a pain to allocate them
+    4. a malloc now and then is not such a big deal
+
+For the rest of the code those 4 are not generaly true.
+
+The idea of this allocator is that allocated objects are actually small in size and get allocated/
+deallocated fast. The assumption is that there is a direct corellation with the number
+num_fds+call_depth, and most of the time there aren't that many file descriptors or depth to
+calls (at least from my experience).
+
+So what it does is this: it has 5 bucket levels: 32, 64, 128, 512, 2048 (bytes), with a number of
+maximum allocations 16384, 8192, 4096, 1024 and 256 of each and a stack coresponding to each of
+them, that is initiated at the start to contain every index from 0 to the max amount of slots in
+each bucket. When an allocation occours, an index is poped from the lowest fitting bucket, and
+that slot is returned. On a free, if the memory is from a bucket, the index is calculated and pushed
+back in that bucket's stack else the normal free is used.
+
+Those bucket levels can be configured, by changing the array bellow (Obs: The buckets must be in
+ascending size order).
+
+The improvement from malloc, as a guess, (I used a profiler to see if it does something) is that
+    a. the memory is already there, no need to fetch it if not available and no need to check if it
+    is available
+    b. there are no locks. since we already assume that the code that does the allocations is
+    protected either by the absence of multithreading or by the pool's lock
+    c. there is no fragmentation, at least until the memory runs out, the pool's memory is localized
+*/
+/* No shared pointers if not needed: around 80% time spent decrease */
+/* Own allocator: around 10%-30% further time decrease (not sure if it was worth the time, but at
+least my test go smoother now) */
+/* array of {element size, bucket size} */
+constexpr std::pair<int, int> allocator_bucket_sizes[] = {
+    {32,    CORO_ALLOCATOR_SCALE * 1024},
+    {64,    CORO_ALLOCATOR_SCALE * 512},
+    {128,   CORO_ALLOCATOR_SCALE * 256},
+    {512,   CORO_ALLOCATOR_SCALE * 64},
+    {2048,  CORO_ALLOCATOR_SCALE * 16}
+};
+template <typename T>
+struct allocator_t {
+    constexpr static int common_alignment = 16;
+    static_assert(common_alignment % alignof(T) == 0,
+            "ERROR: The allocator assumption is that internal data is aligned to at most 16 bytes");
+
+    using value_type = T;
+    allocator_t(pool_t *pool) : pool(pool) {}
+
+    template<typename U>
+    allocator_t(const allocator_t <U>& o) noexcept : pool(o.pool) {}
+
+    template<typename U>
+    allocator_t &operator = (const allocator_t <U>& o) noexcept { this->pool = o.pool; return *this; }
+
+    T* allocate(size_t n);
+    void deallocate(T* _p, std::size_t n) noexcept;
+
+protected:
+    template <typename U>
+    friend struct allocator_t; /* lonely class */
+
+    pool_t *pool = nullptr; /* this allocator is allways called on a valid pool */
+};
+template <typename T> 
+struct deallocator_t { /* This class is part of the allocator implementation and is here only
+                          because a definition needs it as a full type */
+    pool_t *pool;
+    void operator ()(T *p) { p->~T(); allocator_t<T>{pool}.deallocate(p, 1); }
+};
 
 /* exception error if the lib is configured to throw exception on modif termination */
 #if CO_EXCEPT_ON_KILL
 /* TODO: the exception that will be thrown by the killing of a courutine */
 #endif
-
-/* This is the state struct that each corutine has */
-struct state_t {
-    error_e err = ERROR_OK;             /* holds the error return in diverse cases */
-    pool_wp _pool;                      /* the pool of this coro */
-    modif_table_p modif_table;          /* we allocate a table only if there are mods */
-
-    state_t *caller_state = nullptr;    /* this holds the caller's state, and with it the return path */ 
-    std::coroutine_handle<void> self;   /* the coro's self handle */
-
-    std::shared_ptr<void> user_ptr;     /* this is a pointer that the user can use for whatever
-                                        he feels like. This library will not touch this pointer */
-};
 
 struct pool_t {
     /* you use the pointer made by create_pool */
@@ -251,23 +370,30 @@ struct pool_t {
     /* runs the event loop */
     run_e run();
 
-    /* Not private, but don't touch it, not yours, leave it alone, I don't want to befriend the
-    whole lib for it */
-    std::unique_ptr<pool_internal_t> internal;
+    /* Better to not touch this function */
+    pool_internal_t *get_internal();
 
 protected:
-    friend inline pool_p create_pool();
+    template <typename T>
+    friend struct allocator_t;
+
+    std::unique_ptr<allocator_memory_t> allocator_memory;
+
+    friend inline std::shared_ptr<pool_t> create_pool();
     pool_t();
+
+private:
+    std::unique_ptr<pool_internal_t> internal;
 };
 
 /* TODO: if the semaphore dies, the things waiting on it will still wait, that doesn't seem ok,
 maybe wake them up? give a warning? */
 struct sem_t {
     struct unlocker_t{ /* compatibility with guard objects ex: std::lock_guard guard(co_await s); */
-        sem_wp _sem;
-        unlocker_t(sem_wp _sem) : _sem(_sem) {}
+        sem_t *sem;
+        unlocker_t(sem_t *sem) : sem(sem) {}
         void lock() {}
-        void unlock() { if (auto sem = _sem.lock()) sem->signal(); }
+        void unlock() { sem->signal(); }
     };
 
     /* you use the pointer made by create_sem */
@@ -280,25 +406,49 @@ struct sem_t {
     error_e signal(); /* returns error if the pool disapeared */
     bool try_dec();
 
-    /* again, don't touch, same as pool */
-    std::shared_ptr<sem_internal_t> internal;
+    /* again, beeter don't touch, same as pool */
+    sem_internal_t *get_internal();
 
 protected:
-    friend inline sem_p create_sem(pool_wp, int64_t);
-    friend inline task<sem_p> create_sem(int64_t);
-    sem_t(pool_wp pool, int64_t val = 0);
+    template <typename T, typename ...Args>
+    friend inline T *alloc(pool_t *, Args&&...);
+
+    sem_t(pool_t *pool, int64_t val = 0);
+
+private:
+    std::unique_ptr<sem_internal_t, deallocator_t<sem_internal_t>> internal;
+};
+
+/* This is the state struct that each corutine has */
+struct state_t {
+    error_e err = ERROR_OK;             /* holds the error return in diverse cases */
+    pool_t *pool;                       /* the pool of this coro */
+    modif_table_p modif_table;          /* we allocate a table only if there are mods */
+
+    state_t *caller_state = nullptr;    /* this holds the caller's state, and with it the return path */ 
+    std::coroutine_handle<void> self;   /* the coro's self handle */
+
+    std::shared_ptr<void> user_ptr;     /* this is a pointer that the user can use for whatever
+                                        he feels like. This library will not touch this pointer */
 };
 
 /* This is mostly internal, but you can also use it to be able to check if someone is still waiting
-on a semaphore */
-using sem_waiter_handle_wp =
-        std::weak_ptr<                          /* if this pointer is not available, the waiter was
+on a semaphore (TODO) */
+/* TODO: will no longer use weak_ptr's on the important path, I think it allways breaks performance */
+using sem_waiter_handle_p =
+        std::shared_ptr<                        /* if this pointer is not available, the waiter was
                                                    evicted from the waiters list */
             std::list<                          /* List with the semaphore waiters */
                 std::pair<
                     std::coroutine_handle<void>,/* The corutine handle */
                     std::shared_ptr<void>       /* Where the shared_ptr is actually stored */
-                >
+                >,
+                allocator_t<std::
+                    pair<
+                        std::coroutine_handle<void>,
+                        std::shared_ptr<void>
+                    >
+                >                               /* profiling shows the default is slow */
             >::iterator                         /* iterator in the respective list */
         >;
 
@@ -314,10 +464,10 @@ struct modif_t {
         std::function<error_e(state_t *, int fd)>,                /* unwait_fd_cbk */
 
          /* wait_sem_cbk - OBS: the std::shared_ptr<void> part can be ignored, it's internal */
-        std::function<error_e(state_t *, sem_wp, sem_waiter_handle_wp)>,
+        std::function<error_e(state_t *, sem_t *, sem_waiter_handle_p)>,
 
          /* unwait_sem_cbk */
-        std::function<error_e(state_t *, sem_wp, sem_waiter_handle_wp)>
+        std::function<error_e(state_t *, sem_t *, sem_waiter_handle_p)>
     > cbk;
 
     modif_e type = CO_MODIF_COUNT;
@@ -327,11 +477,11 @@ struct modif_t {
 /* Pool & Sched functions:
 ------------------------------------------------------------------------------------------------  */
 
-inline pool_p create_pool();
+inline std::shared_ptr<pool_t> create_pool();
 
 /* gets the pool of the current corutine, necesary if you want to sched corutines from callbacks.
 Don't forget you need multithreading enabled if you want to schedule from another thread. */
-inline task<pool_wp> get_pool();
+inline task<pool_t *> get_pool();
 
 /* This does not stop the curent corutine, it only schedules the task, but does not yet run it.
 Modifs duplicates are eliminated. */
@@ -345,7 +495,10 @@ inline yield_awaiter_t yield();
 ------------------------------------------------------------------------------------------------  */
 
 template <typename Cbk>
-inline modif_p create_modif(modif_e type, Cbk&& cbk, modif_flags_e flags);
+inline modif_p create_modif(pool_t *pool, modif_e type, Cbk&& cbk, modif_flags_e flags);
+
+template <typename Cbk>
+inline modif_p create_modif(pool_p pool, modif_e type, Cbk&& cbk, modif_flags_e flags);
 
 /* This returns the internal vec that holds the different modifications of the task. Changing them
 here is ill-defined */
@@ -398,7 +551,8 @@ type is error_e).
 */
 
 /* Creates semaphores, those need the pool to exist */
-inline sem_p create_sem(pool_wp pool, int64_t val = 0);
+inline sem_p create_sem(pool_t *pool, int64_t val = 0);
+inline sem_p create_sem(pool_p  pool, int64_t val = 0);
 inline task<sem_p> create_sem(int64_t val = 0);
 
 /* a modification that depends on the pool, this is used in scheduled coroutines to end the current
@@ -461,6 +615,11 @@ inline task_t stopfd(int fd);
 
 struct dbg_format_helper_t;
 
+/* why would I replace the old string with the new one based on the allocator? because I need to
+know that the library allocates only through the allocator, so debugging would interfere with
+that. */
+using dbg_string_t = std::basic_string<char, std::char_traits<char>, allocator_t<char>>;
+
 template <typename... Args>
 inline void dbg(dbg_format_helper_t dfmt, Args&&... args);
 
@@ -482,18 +641,18 @@ inline modif_p creat_dbg_tracer();
 
 /* Obtains the name given to the respective task, handle or address */
 template <typename T>
-inline std::string dbg_name(task<T> t);
+inline dbg_string_t dbg_name(task<T> t);
 
 template <typename P>
-inline std::string dbg_name(std::coroutine_handle<P> h);
+inline dbg_string_t dbg_name(std::coroutine_handle<P> h);
 
-inline std::string dbg_name(void *v);
+inline dbg_string_t dbg_name(void *v);
 
 
 /* formats a string using the C snprintf, similar in functionality to snprintf+std::format, in the
 version of g++ that I'm using std::format is not available  */
 template <typename... Args>
-inline std::string dbg_format(const char *fmt, Args&& ...args);
+inline dbg_string_t dbg_format(const char *fmt, Args&& ...args);
 
 /* corutine callbacks for diverse points in the code, if in a multithreaded environment, you must
 take all the locks before rewriting those. The pool locks are held when those callbacks are called
@@ -505,8 +664,8 @@ inline std::function<void(void)> on_call;
 
 /* calls log_str to save the log string */
 #if CORO_ENABLE_LOGGING
-inline std::function<int(const std::string&)> log_str =
-        [](const std::string& msg){ return printf("%s", msg.c_str()); };
+inline std::function<int(const dbg_string_t&)> log_str =
+        [](const dbg_string_t& msg){ return printf("%s", msg.c_str()); };
 #endif
 
 /* IMPLEMENTATION 
@@ -521,13 +680,13 @@ template <typename P>
 using handle = std::coroutine_handle<P>;
 
 struct dbg_format_helper_t {
-    std::string fmt;
+    dbg_string_t fmt;
     std::source_location loc;
 
     template <typename Arg>
     dbg_format_helper_t(Arg&& arg,
             std::source_location const& loc = std::source_location::current())
-    : fmt{std::forward<Arg>(arg)}, loc{loc} {}
+    : fmt{std::forward<Arg>(arg), allocator_t<char>{nullptr}}, loc{loc} {}
 };
 
 template <typename T, typename K>
@@ -535,14 +694,130 @@ constexpr auto has(T&& data_struct, K&& key) {
     return std::forward<T>(data_struct).find(std::forward<K>(key)) != std::forward<T>(data_struct).end();
 }
 
-using sem_wait_list_t = std::list<std::pair<handle<void>, std::shared_ptr<void>>>;
+using sem_wait_list_t = std::list<std::pair<handle<void>, std::shared_ptr<void>>,
+        allocator_t<std::pair<std::coroutine_handle<void>,std::shared_ptr<void>>>>;
 using sem_wait_list_it = sem_wait_list_t::iterator;
+
+/* Allocator
+------------------------------------------------------------------------------------------------- */
+
+struct allocator_memory_t {
+    constexpr static int buckets_cnt =
+            sizeof(allocator_bucket_sizes)/sizeof(allocator_bucket_sizes[0]);
+
+    template <size_t obj_sz, size_t cnt>
+    struct bucket_t {
+        static_assert(obj_sz);
+        using bucket_object_t = char[obj_sz];
+
+        alignas(allocator_t<int>::common_alignment) bucket_object_t objects[cnt];
+        int free_stack[cnt];
+        int stack_head;
+
+        static constexpr int floorlog2(int x) {
+            return x == 1 ? 0 : 1 + floorlog2(x >> 1);
+        }
+
+        void init() {
+            stack_head = cnt - 1;
+            for (int i = 0; i < cnt; i++)
+                free_stack[i] = cnt - i - 1;
+        }
+
+        void *alloc(size_t bytes, bool &invalidated) {
+            if (bytes > obj_sz)
+                return NULL;
+            else
+                invalidated = true; /* shouldn't check the other buckets if the size was good, but
+                                       the allocation failed for other reasons */
+            if (!stack_head)
+                return NULL;
+
+            void *ret = &objects[free_stack[stack_head]];
+            stack_head--;
+            return ret;
+        }
+
+        void free(void *ptr) {
+            auto p = (char *)ptr;
+            auto start = (char *)&objects;
+            auto stop = start + sizeof(objects);
+
+            if (p < start || p >= stop)
+                return ;
+
+            int index = ((p - start) >> floorlog2(obj_sz));
+            stack_head++;
+            free_stack[stack_head] = index;
+        }
+    };
+
+    template <size_t ...I>
+    struct buckets_type_helper {
+        using type = std::tuple<bucket_t<
+                allocator_bucket_sizes[I].first, allocator_bucket_sizes[I].second>...>;
+
+        buckets_type_helper(std::index_sequence<I...>) {}
+    };
+
+    template <size_t N>
+    using buckets_type = decltype(buckets_type_helper(std::make_index_sequence<N>{}))::type;
+
+    /* There are some objectives for this buckets array:
+        1. The buckets must all stay togheter (localized in memory)
+        2. The buckets must all be constructed automatically from allocator_bucket_sizes
+    */
+    buckets_type<buckets_cnt> buckets;
+
+    allocator_memory_t() {
+        std::apply([](auto&&... args) { ((args.init()), ...); }, buckets);
+    }
+
+    void *alloc(size_t bytes) {
+        void *ret = NULL;
+        bool invalidated = false;
+        std::apply([&](auto&&... args) {
+            ((ret = (ret || invalidated) ? ret : args.alloc(bytes, invalidated)), ...);
+        }, buckets);
+        return ret;
+    }
+
+    void free(void *ptr) {
+        std::apply([&](auto&&... args) { ((args.free(ptr)), ...); }, buckets);
+    }
+};
+
+/* allocator_t<T>::allocate/deallocate are declared under pool_internal_t */
+
+template <typename T, typename ...Args>
+inline T *alloc(pool_t *pool, Args&&... args) {
+    return new(allocator_t<T>{pool}.allocate(1)) T(std::forward<Args>(args)...);
+}
+
+template <typename T>
+inline auto dealloc_create(pool_t *pool) {
+    return deallocator_t<T>{ .pool = pool };
+}
 
 /* Modifs Part
 ------------------------------------------------------------------------------------------------- */
 
 struct modif_table_t {
-    std::array<std::vector<modif_p>, CO_MODIF_COUNT> table;
+    modif_table_t(pool_t *pool)
+    : table{
+            /* :( */
+            std::vector<modif_p, allocator_t<modif_p>>{allocator_t<modif_p>{pool}},
+            std::vector<modif_p, allocator_t<modif_p>>{allocator_t<modif_p>{pool}},
+            std::vector<modif_p, allocator_t<modif_p>>{allocator_t<modif_p>{pool}},
+            std::vector<modif_p, allocator_t<modif_p>>{allocator_t<modif_p>{pool}},
+            std::vector<modif_p, allocator_t<modif_p>>{allocator_t<modif_p>{pool}},
+            std::vector<modif_p, allocator_t<modif_p>>{allocator_t<modif_p>{pool}},
+            std::vector<modif_p, allocator_t<modif_p>>{allocator_t<modif_p>{pool}},
+            std::vector<modif_p, allocator_t<modif_p>>{allocator_t<modif_p>{pool}},
+            std::vector<modif_p, allocator_t<modif_p>>{allocator_t<modif_p>{pool}}
+    } {}
+
+    std::array<std::vector<modif_p, allocator_t<modif_p>>, CO_MODIF_COUNT> table;
 };
 
 inline size_t get_modif_table_sz(modif_table_p ptable) {
@@ -554,9 +829,13 @@ inline size_t get_modif_table_sz(modif_table_p ptable) {
     return ret;
 }
 
-inline modif_table_p create_modif_table(const std::vector<modif_p>& to_add) {
-    modif_table_p ret = std::make_shared<modif_table_t>();
-    std::unordered_set<modif_p> existing;
+inline modif_table_p create_modif_table(pool_t *pool, const std::vector<modif_p>& to_add) {
+    modif_table_p ret = std::shared_ptr<modif_table_t>(alloc<modif_table_t>(pool, pool),
+            dealloc_create<modif_table_t>(pool), allocator_t<int>{pool});
+
+    std::unordered_set<modif_p, std::hash<modif_p>, std::equal_to<modif_p>,
+            allocator_t<modif_p>> existing(allocator_t<modif_p>{pool});
+
     for (auto &m : to_add) {
         if (m && !has(existing, m)) {
             existing.insert(m); /* we silently eliminate duplicates, as per description */
@@ -569,18 +848,22 @@ inline modif_table_p create_modif_table(const std::vector<modif_p>& to_add) {
 }
 
 inline void inherit_modifs(state_t *state, modif_table_p parent_table, modif_flags_e inherit_place) {
+    auto pool = state->pool;
     if (!parent_table)
         return ;
     modif_table_p new_table = state->modif_table;
-    std::unordered_set<modif_p> existing;
+    std::unordered_set<modif_p, std::hash<modif_p>, std::equal_to<modif_p>,
+            allocator_t<modif_p>> existing(allocator_t<modif_p>{pool});
     if (new_table) {
         /* should be rare */
         for (auto &cbk_table : new_table->table)
             for (auto &modif : cbk_table)
                 existing.insert(modif);
     }
-    if (!new_table)
-        new_table = std::make_shared<modif_table_t>();
+    if (!new_table) {
+        new_table = std::shared_ptr<modif_table_t>(alloc<modif_table_t>(pool, pool),
+                dealloc_create<modif_table_t>(pool), allocator_t<int>{pool});
+    }
     for (auto& cbk_table : parent_table->table)
         for (auto& modif : cbk_table)
             if (modif && !has(existing, modif) && (modif->flags & inherit_place))
@@ -635,21 +918,21 @@ inline error_e do_unwait_fd_modifs(state_t *state, int fd) {
     return do_generic_modifs<CO_MODIF_UNWAIT_FD_CBK>(state, fd);
 }
 
-inline error_e do_wait_sem_modifs(state_t *state, sem_wp _sem, sem_waiter_handle_wp _it) {
-    return do_generic_modifs<CO_MODIF_WAIT_SEM_CBK>(state, _sem, _it);
+inline error_e do_wait_sem_modifs(state_t *state, sem_t *sem, sem_waiter_handle_p _it) {
+    return do_generic_modifs<CO_MODIF_WAIT_SEM_CBK>(state, sem, _it);
 }
 
-inline error_e do_unwait_sem_modifs(state_t *state, sem_wp _sem, sem_waiter_handle_wp _it) {
-    return do_generic_modifs<CO_MODIF_UNWAIT_SEM_CBK>(state, _sem, _it);
+inline error_e do_unwait_sem_modifs(state_t *state, sem_t *sem, sem_waiter_handle_p _it) {
+    return do_generic_modifs<CO_MODIF_UNWAIT_SEM_CBK>(state, sem, _it);
 }
 
 /* considering you may want to create a modif at runtime this seems to be the best way */
 template <typename Cbk>
-inline modif_p create_modif(modif_e type, Cbk&& cbk, modif_flags_e flags) {
-    modif_p ret = modif_p(new modif_t{
+inline modif_p create_modif(pool_t *pool, modif_e type, Cbk&& cbk, modif_flags_e flags) {
+    modif_p ret = modif_p(alloc<modif_t>(pool, modif_t{
         .type = type,
         .flags = flags,
-    });
+    }), dealloc_create<modif_t>(pool), allocator_t<int>{pool});
 
     switch (type) {
         case CO_MODIF_CALL_CBK:
@@ -695,6 +978,10 @@ inline modif_p create_modif(modif_e type, Cbk&& cbk, modif_flags_e flags) {
     return ret;
 }
 
+template <typename Cbk>
+inline modif_p create_modif(pool_p pool, modif_e type, Cbk&& cbk, modif_flags_e flags) {
+    return create_modif(pool.get(), type, std::forward<Cbk>(cbk), flags);
+}
 /* The Task
 ------------------------------------------------------------------------------------------------- */
 
@@ -724,7 +1011,7 @@ struct task {
     template <typename P>
     handle<void> await_suspend(handle<P> caller) noexcept;
     T            await_resume() noexcept;
-    pool_wp      get_pool();
+    pool_t       *get_pool();
 
     error_e get_err() { return ERROR_OK; };
 
@@ -735,20 +1022,20 @@ struct task {
 /* has to know about pool, will be implemented bellow the pool, but it is required here and to be
 accesible to others that need to clean the corutine (for example in modifs, if the tasks need
 killing) */
-inline handle<void> final_awaiter_cleanup(pool_wp _pool, state_t *ending_task_state,
+inline handle<void> final_awaiter_cleanup(state_t *ending_task_state,
         handle<void> ending_task_handle);
 
 template <typename T>
 struct task_state_t {
     struct final_awaiter_t {
-        bool         await_ready() noexcept                   { return false; }
-        void         await_resume() noexcept                  { /* TODO: here some exceptions? */ }
+        bool await_ready() noexcept  { return false; }
+        void await_resume() noexcept { /* TODO: here some exceptions? */ }
         
         handle<void> await_suspend(handle<task_state_t<T>> ending_task) noexcept {
-            return final_awaiter_cleanup(_pool, &ending_task.promise().state, ending_task);
+            return final_awaiter_cleanup(&ending_task.promise().state, ending_task);
         }
 
-        pool_wp _pool;
+        pool_t *pool;
     };
 
     task<T> get_return_object() {
@@ -758,7 +1045,7 @@ struct task_state_t {
     }
 
     std::suspend_always initial_suspend() noexcept { return {}; }
-    final_awaiter_t     final_suspend() noexcept   { return final_awaiter_t{ ._pool = state._pool }; }
+    final_awaiter_t     final_suspend() noexcept   { return final_awaiter_t{ .pool = state.pool }; }
     void                unhandled_exception()      { /* TODO: something with exceptions */ }
 
     template <typename R>
@@ -778,7 +1065,7 @@ inline handle<void> task<T>::await_suspend(handle<P> caller) noexcept {
     ever_called = true;
 
     h.promise().state.caller_state = &caller.promise().state;
-    h.promise().state._pool = caller.promise().state._pool;
+    h.promise().state.pool = caller.promise().state.pool;
 
     if (do_call_modifs(&this->h.promise().state, caller.promise().state.modif_table) != ERROR_OK) {
         return caller;
@@ -796,8 +1083,8 @@ inline T task<T>::await_resume() noexcept {
 }
 
 template <typename T>
-inline pool_wp task<T>::get_pool() {
-    return h.promise().state._pool;
+inline pool_t *task<T>::get_pool() {
+    return h.promise().state.pool;
 }
 
 /* The Pool & Epoll engine
@@ -805,10 +1092,12 @@ inline pool_wp task<T>::get_pool() {
 
 /* If this is not really needed here we move it bellow */
 struct pool_internal_t {
+    pool_internal_t(pool_t *_pool) : pool(_pool), ready_tasks{allocator_t<handle<void>>(_pool)} {}
+
     template <typename T>
     void sched(task<T> task, modif_table_p parent_table) {
         /* first we give our new task the pool */
-        task.h.promise().state._pool = _pool;
+        task.h.promise().state.pool = pool;
 
         /* second we call our callbacks on it because it is now scheduled */
         if (do_sched_modifs(&task.h.promise().state, parent_table) != ERROR_OK) {
@@ -853,13 +1142,43 @@ struct pool_internal_t {
     }
 
     run_e ret_val;
-    pool_wp _pool; /* I know this is uggly, but I didn't find another solution to hide redundant
-                      functions from pool_t without this strange indirection; */
+
 private:
-    std::deque<handle<void>> ready_tasks;
+    pool_t *pool;
+    std::deque<handle<void>, allocator_t<handle<void>>> ready_tasks;
 };
 
-inline handle<void> final_awaiter_cleanup(pool_wp _pool, state_t *ending_task_state,
+/* Allocate/deallocate need the definition of pool_internal_t */
+template <typename T>
+inline T* allocator_t<T>::allocate(size_t n) {
+    T *ret = nullptr;
+    if (!CORO_DISABLE_ALLOCATOR && pool && !std::is_same_v<char, T>)
+        ret = static_cast<T*>(pool->allocator_memory->alloc(n * sizeof(T)));
+    if (!ret)
+        ret = static_cast<T*>(std::malloc(n * sizeof(T)));
+    return ret;
+}
+template <typename T>
+inline void allocator_t<T>::deallocate(T* _p, std::size_t) noexcept {
+    if (!pool) {
+        std::free(_p);
+        return ;
+    }
+
+    char *p = (char *)_p;
+    char *start = (char *)pool->allocator_memory.get();
+    char *stop = start + sizeof(*pool->allocator_memory);
+
+    if (p < start || p >= stop) {
+        std::free(p);
+        return ;
+    }
+
+    pool->allocator_memory->free(p);
+}
+
+
+inline handle<void> final_awaiter_cleanup(state_t *ending_task_state,
         handle<void> ending_task_handle)
 {
     /* not sure if I should do something with the return value ... */
@@ -870,35 +1189,35 @@ inline handle<void> final_awaiter_cleanup(pool_wp _pool, state_t *ending_task_st
         do_entry_modifs(caller_state);
         return caller_state->self;
     }
-    else if (auto pool = ending_task_state->_pool.lock()) {
-        /* If the task that we are final_awaiting has no caller, then it is the moment to destroy it,
-        no one needs it's return value(futures?). Else it will be destroyed by the caller. */
-        /* TODO: maybe the future can just simply create a task and set it's coro as the continuation
-        here? Such that the future continues in the caller_state branch? */
-        ending_task_handle.destroy();
-        return pool->internal->next_task();
-    }
-    else {
-        dbg("Failed to aquire the pool");
-        return std::noop_coroutine();
-    }
+    auto pool = ending_task_state->pool;
+    /* If the task that we are final_awaiting has no caller, then it is the moment to destroy it,
+    no one needs it's return value(futures?). Else it will be destroyed by the caller. */
+    /* TODO: maybe the future can just simply create a task and set it's coro as the continuation
+    here? Such that the future continues in the caller_state branch? */
+    ending_task_handle.destroy();
+    return pool->get_internal()->next_task();
 }
 
-inline pool_t::pool_t() : internal(std::make_unique<pool_internal_t>()) {}
+inline pool_t::pool_t() {
+    allocator_memory = std::make_unique<allocator_memory_t>();
+    internal = std::make_unique<pool_internal_t>(this);
+}
 
 template <typename T>
 inline void pool_t::sched(task<T> task, const std::vector<modif_p>& v) {
-    internal->sched(task, create_modif_table(v));
+    internal->sched(task, create_modif_table(this, v));
 }
 
 inline run_e pool_t::run() {
     return internal->run();
 }
 
-inline pool_p create_pool() {
-    auto ret = pool_p(new pool_t);
-    ret->internal->_pool = ret;
-    return ret;
+inline pool_internal_t *pool_t::get_internal() {
+    return internal.get();
+}
+
+inline std::shared_ptr<pool_t> create_pool() {
+    return std::shared_ptr<pool_t>(new pool_t{});
 }
 
 /* Awaiters
@@ -915,15 +1234,11 @@ struct yield_awaiter_t {
 
     template <typename P>
     inline handle<void> await_suspend(handle<P> h) {
-        if (auto pool = h.promise().state._pool.lock()) {
-            pool->internal->push_ready(h);
-            state = &h.promise().state;
-            do_leave_modifs(state);
-            return pool->internal->next_task();
-        }
-        /* we don't have a pool anymore... */
-        dbg("yield failed because we don't have a pool anymore");
-        return std::noop_coroutine();
+        auto pool = h.promise().state.pool;
+        pool->get_internal()->push_ready(h);
+        state = &h.promise().state;
+        do_leave_modifs(state);
+        return pool->get_internal()->next_task();
     }
 
     void await_resume() {
@@ -946,12 +1261,8 @@ struct sched_awaiter_t {
 
     template <typename P>
     bool await_suspend(handle<P> h) {
-        if (auto pool = h.promise().state._pool.lock()) {
-            pool->internal->sched(t, table);
-        }
-        else {
-            /* TODO: huh? */
-        }
+        auto pool = h.promise().state.pool;
+        pool->get_internal()->sched(t, table);
         return false;
     }
 
@@ -968,14 +1279,14 @@ struct get_pool_awaiter_t {
 
     template <typename P>
     bool await_suspend(handle<P> h) {
-        _pool = h.promise().state._pool;
+        pool = h.promise().state.pool;
         return false;
     }
 
     bool    await_ready()              { return false; };
-    pool_wp await_resume()             { return _pool; }
+    pool_t *await_resume()             { return pool; }
 
-    pool_wp _pool;
+    pool_t *pool;
 };
 
 /* This is the object with which you wait for a file descriptor, you create it with a valid
@@ -994,21 +1305,19 @@ struct fd_awaiter_t {
 
     template <typename P>
     handle<void> await_suspend(handle<P> h) {
-        if (auto pool = h.promise().state._pool.lock()) {
-            state = &h.promise().state;
-            /* in case we can't schedule the fd we log the failure and return the same coro */
-            if (do_wait_fd_modifs(state, fd, wait_cond) != ERROR_OK) {
-                return h;
-            }
-            error_e err;
-            if ((err = pool->internal->wait_fd(h, fd, wait_cond)) != ERROR_OK) {
-                /* TODO: log the fail */
-                state->err = err;
-                return h;
-            }
-            return pool->internal->next_task();
+        auto pool = h.promise().state.pool;
+        state = &h.promise().state;
+        /* in case we can't schedule the fd we log the failure and return the same coro */
+        if (do_wait_fd_modifs(state, fd, wait_cond) != ERROR_OK) {
+            return h;
         }
-        return std::noop_coroutine();
+        error_e err;
+        if ((err = pool->get_internal()->wait_fd(h, fd, wait_cond)) != ERROR_OK) {
+            /* TODO: log the fail */
+            state->err = err;
+            return h;
+        }
+        return pool->get_internal()->next_task();
     }
 
     error_e await_resume() {
@@ -1026,7 +1335,10 @@ private:
 ------------------------------------------------------------------------------------------------- */
 
 struct sem_internal_t {
-    sem_internal_t(pool_wp pool, int64_t val) : _pool(pool), val(val) {}
+    using sem_aloc = allocator_t<std::pair<std::coroutine_handle<void>, std::shared_ptr<void>>>;
+
+    sem_internal_t(pool_t *pool, int64_t val) : pool(pool), val(val),
+            waiting_on_sem(sem_aloc{pool}) {}
 
     bool await_ready() {
         if (val > 0) {
@@ -1056,18 +1368,19 @@ struct sem_internal_t {
 protected:
     friend sem_awaiter_t;
     friend sem_t;
-    friend inline sem_p create_sem(pool_wp pool, int64_t val);
+    friend inline sem_p create_sem(pool_t *pool, int64_t val);
 
-    sem_wp _sem;
-
-    sem_waiter_handle_wp push_waiter(handle<void> to_suspend) {
+    sem_waiter_handle_p push_waiter(handle<void> to_suspend) {
+        /* TODO: explanation no longer true, search other solution */
         /* Don't know another way to fix this mess, so, yeah... The problem is that the awaiter
         bellow needs a way to register the waiter on this list so it may potentialy awake it (via the
         modif callbacks). Now the problem is that this semaphore may also want to awake the waiter,
         wich would invalidate the iterator inside the callback. So we give both the callback and
         the awaiter bellow a weak pointer to a pointer held at the same place with the corutine,
         so that if the corutine awakes, the pointer dies and the weak_pointer locks to null. */
-        auto p = std::make_shared<sem_wait_list_it>();
+        auto p = std::shared_ptr<sem_wait_list_it>(
+                alloc<sem_wait_list_it>(pool), dealloc_create<sem_wait_list_it>(pool),
+                allocator_t<int>{pool});
         waiting_on_sem.push_front({to_suspend, p});
         *p = waiting_on_sem.begin();
         return p;
@@ -1077,31 +1390,26 @@ protected:
         waiting_on_sem.erase(it);
     }
 
-    pool_wp get_pool() {
-        return _pool;
+    pool_t *get_pool() {
+        return pool;
     }
 
 private:
     error_e _awake_one() {
         auto to_awake = waiting_on_sem.back();
-        if (auto pool = _pool.lock()) {
-            pool->internal->push_ready(to_awake.first);
-            waiting_on_sem.pop_back();
-            return ERROR_OK;
-        }
-        else {
-            dbg("could't get the pool");
-            return ERROR_GENERIC;
-        }
+        pool->get_internal()->push_ready(to_awake.first);
+        waiting_on_sem.pop_back();
+        return ERROR_OK;
     }
+
 
     sem_wait_list_t waiting_on_sem;
     int64_t val;
-    pool_wp _pool;
+    pool_t *pool;
 };
 
 struct sem_awaiter_t {
-    sem_awaiter_t(sem_wp _sem) : _sem(_sem) {}
+    sem_awaiter_t(sem_t *sem) : sem(sem) {}
     sem_awaiter_t(const sem_awaiter_t &oth) = delete;
     sem_awaiter_t &operator = (const sem_awaiter_t &oth) = delete;
     sem_awaiter_t(sem_awaiter_t &&oth) = delete;
@@ -1111,58 +1419,53 @@ struct sem_awaiter_t {
     handle<void> await_suspend(handle<P> to_suspend) {
         state = &to_suspend.promise().state;
 
-        auto sem = _sem.lock();
-        if (!sem) {
-            /* TODO: stop the pool, or return to caller? or except? */
-            dbg("Invalid sem");
-            return std::noop_coroutine();
-        }
-        auto pool = sem->internal->get_pool().lock();
-        if (!pool) {
-            /* TODO: as above? error handling, what to do? */
-            dbg("Invalid pool");
-            return std::noop_coroutine();
-        }
-        _sem_it = sem->internal->push_waiter(to_suspend);
-        if (do_wait_sem_modifs(state, _sem, _sem_it) != ERROR_OK) {
-            sem->internal->erase_waiter(*(_sem_it.lock()));
+        auto pool = sem->get_internal()->get_pool();
+        _sem_it = sem->get_internal()->push_waiter(to_suspend);
+        if (do_wait_sem_modifs(state, sem, _sem_it) != ERROR_OK) {
+            sem->get_internal()->erase_waiter(*_sem_it);
             return to_suspend;
         }
 
         triggered = true;
-        return pool->internal->next_task();
+        return pool->get_internal()->next_task();
     }
 
     sem_t::unlocker_t await_resume() {
         if (triggered)
-            do_unwait_sem_modifs(state, _sem, _sem_it);
+            do_unwait_sem_modifs(state, sem, _sem_it);
         triggered = false;
-        return sem_t::unlocker_t(_sem);
+        return sem_t::unlocker_t(sem);
     }
 
     bool await_ready() {
-        if (auto sem = _sem.lock())
-            return sem->internal->await_ready();
-        return false;
+        return sem->get_internal()->await_ready();
     }
 
     state_t *state = nullptr;
-    sem_wp _sem;
-    sem_waiter_handle_wp _sem_it;
+    sem_t *sem;
+    sem_waiter_handle_p _sem_it;
     bool triggered = false;
 };
 
-inline sem_t::sem_t(pool_wp pool, int64_t val)
-: internal(std::make_shared<sem_internal_t>(pool, val)) {}
+inline sem_t::sem_t(pool_t *pool, int64_t val)
+: internal(std::unique_ptr<sem_internal_t, deallocator_t<sem_internal_t>>(
+        alloc<sem_internal_t>(pool, pool, val), dealloc_create<sem_internal_t>(pool))) {}
 
-inline sem_awaiter_t sem_t::wait() { return sem_awaiter_t(internal->_sem); }
+inline sem_awaiter_t sem_t::wait() { return sem_awaiter_t(this); }
 inline error_e       sem_t::signal() { return internal->signal(); }
 inline bool          sem_t::try_dec() { return internal->try_dec(); }
 
-inline sem_p create_sem(pool_wp pool, int64_t val) {
-    auto ret = sem_p(new sem_t{pool, val}); 
-    ret->internal->_sem = ret;
+inline sem_internal_t *sem_t::get_internal() {
+    return internal.get();
+}
+
+inline sem_p create_sem(pool_t *pool, int64_t val) {
+    auto ret = std::shared_ptr<sem_t>(
+            alloc<sem_t>(pool, pool, val), dealloc_create<sem_t>(pool), allocator_t<int>{pool}); 
     return ret;
+}
+inline sem_p create_sem(pool_p pool, int64_t val) {
+    return create_sem(pool.get(), val);
 }
 
 inline task<sem_p> create_sem(int64_t val) {
@@ -1180,7 +1483,7 @@ inline task_t wait_all(task<Args>... tasks) {
 
 template <typename T>
 inline sched_awaiter_t<T> sched(task<T> to_sched, const std::vector<modif_p>& v) {
-    return sched_awaiter_t(to_sched, create_modif_table(v));
+    return sched_awaiter_t(to_sched, create_modif_table(to_sched.h.promise().state.pool, v));
 }
 
 template <typename Awaiter>
@@ -1193,7 +1496,7 @@ inline yield_awaiter_t yield() {
     return yield_awaiter_t{};
 }
 
-inline task<pool_wp> get_pool() {
+inline task<pool_t *> get_pool() {
     get_pool_awaiter_t awaiter;
     co_return co_await awaiter;
 }
@@ -1384,12 +1687,12 @@ inline handle<P> dbg_register_name(handle<P> h, const char *fmt, Args&&... args)
 }
 
 template <typename T>
-inline std::string dbg_name(task<T> t) {
+inline dbg_string_t dbg_name(task<T> t) {
     return dbg_name(t.h.address());
 }
 
 template <typename P>
-inline std::string dbg_name(handle<P> h) {
+inline dbg_string_t dbg_name(handle<P> h) {
     return dbg_name(h.address());
 }
 
@@ -1399,15 +1702,18 @@ inline modif_p creat_dbg_tracer() {
 }
 
 template <typename... Args>
-inline std::string dbg_format(const char *fmt, Args&& ...args) {
-    std::vector<char> buff;
+inline dbg_string_t dbg_format(const char *fmt, Args&& ...args) {
+    std::vector<char, allocator_t<char>> buff(allocator_t<char>{nullptr});
+
     int cnt = snprintf(NULL, 0, fmt, std::forward<Args>(args)...);
     if (cnt <= 0)
-        return "[failed snprintf1]";
+        return dbg_string_t{"[failed snprintf1]", allocator_t<char>{nullptr}};
+
     buff.resize(cnt + 1);
     if (snprintf(buff.data(), cnt + 1, fmt, std::forward<Args>(args)...) < 0)
-        return "[failed snprintf2]";
-    return buff.data();
+        return dbg_string_t{"[failed snprintf2]", allocator_t<char>{nullptr}};
+
+    return dbg_string_t{buff.data(), allocator_t<char>{nullptr}};
 }
 
 inline uint64_t dbg_get_time() {
@@ -1418,7 +1724,9 @@ inline uint64_t dbg_get_time() {
 #if CORO_ENABLE_DEBUG_NAMES
 
 /* TODO: mutex it if needed by multi-threads */
-inline std::map<void *, std::pair<std::string, int>> dbg_names;
+inline std::map<void *, std::pair<dbg_string_t, int>, std::less<void *>,
+        allocator_t<std::pair<const void *, std::pair<dbg_string_t, int>>>> dbg_names(
+        allocator_t<std::pair<const void *, std::pair<dbg_string_t, int>>>> {nullptr});
 
 template <typename ...Args>
 inline void *dbg_register_name(void *addr, const char *fmt, Args&&... args) {
@@ -1429,7 +1737,7 @@ inline void *dbg_register_name(void *addr, const char *fmt, Args&&... args) {
     return addr;
 }
 
-inline std::string dbg_name(void *v) {
+inline dbg_string_t dbg_name(void *v) {
     if (!has(dbg_names, v))
         dbg_register_name(v, "%p", v);
     return dbg_format("%s[%" PRIu64 "]", dbg_names[v].first.c_str(), dbg_names[v].second);
@@ -1440,13 +1748,13 @@ inline std::string dbg_name(void *v) {
 template <typename ...Args>
 inline void *dbg_register_name(void *addr, const char *fmt, Args&&... args) { return addr; }
 
-inline std::string dbg_name(void *v) { return ""; };
+inline dbg_string_t dbg_name(void *v) { return dbg_string_t{"", allocator_t<char>{nullptr}}; };
 
 #endif /*CORO_ENABLE_DEBUG_NAMES*/
 
 #if CORO_ENABLE_LOGGING
 
-inline void dbg_raw(const std::string& msg,
+inline void dbg_raw(const dbg_string_t& msg,
         std::source_location const& sloc = std::source_location::current())
 {
     if (log_str) {
