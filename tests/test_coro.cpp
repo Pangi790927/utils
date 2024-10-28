@@ -253,8 +253,7 @@ int test4_semaphore() {
 /* Main:
 ================================================================================================= */
 
-int main(int argc, char const *argv[])
-{
+int main(int argc, char const *argv[]) {
     std::pair<std::function<int(void)>, std::string> tests[] = {
         { test1_semaphore, "test1_semaphore" },
         { test2_semaphore, "test2_semaphore" },
