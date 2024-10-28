@@ -844,8 +844,10 @@ inline void inherit_modifs(state_t *state, modif_table_p parent_table, modif_fla
     if (!parent_table)
         return ;
     modif_table_p new_table = state->modif_table;
+
     std::unordered_set<modif_p, std::hash<modif_p>, std::equal_to<modif_p>,
             allocator_t<modif_p>> existing(allocator_t<modif_p>{pool});
+
     if (new_table) {
         /* should be rare */
         for (auto &cbk_table : new_table->table)

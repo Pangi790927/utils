@@ -33,7 +33,7 @@ inline std::string path_get_module_path() {
         mod_path = "";
     }
     mod_path = info.dli_fname;
-    if (mod_path.size() && mod_path[0] == '/') {
+    if (mod_path.size() && mod_path.ends_with(".so")) {
         return mod_path;
     }
     else {
@@ -49,8 +49,15 @@ inline std::string path_get_module_dir() {
 
 inline std::string path_get_abs(std::string path) {
     char path_buff[PATH_MAX] = {0};
-    if (!realpath(path.c_str(), path_buff))
-        return ""; /* it's clear that a path can't be empty, hence error */
+    if (path.size() && path[0] == '/')
+        return path;
+    if (!realpath(path.c_str(), path_buff)) {
+        /* path probably doesn't yet exist, so we imagine it is relative to cwd */
+        char cwd[PATH_MAX];
+        if (getcwd(cwd, sizeof(cwd)) != NULL)
+            return cwd + ("/" + path);
+        return ""; /* it's clear that a path can't be empty, hence "" is for error */
+    }
     return path_buff;
 }
 
