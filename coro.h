@@ -65,7 +65,11 @@ to a callback that will be called from another thread */
 #ifndef CORO_ENABLE_LOGGING
 # define CORO_ENABLE_LOGGING true
 #endif
-
+#if CORO_ENABLE_LOGGING
+# define CORO_DEBUG(fmt, ...) dbg(__FILE__, __func__, __LINE__, ##__VA_ARGS__)
+#else
+# define CORO_DEBUG(fmt, ...) do {} while (0)
+#endif
 /* If set to true, makes names for corutines */
 #ifndef CORO_ENABLE_DEBUG_NAMES
 # define CORO_ENABLE_DEBUG_NAMES false
@@ -238,10 +242,10 @@ enum error_e : int32_t {
 
 /* Event loop running errors */
 enum run_e : int32_t {
-    RUN_OK,      /* when the pool stopped because it ran out of things to do */
-    RUN_ERRORED, /* comes from epoll errors */
-    RUN_ABORTED, /* if a corutine is resumed without a pool */
-    RUN_STOPPED, /* can be re-run (comes from force_stop) */
+    RUN_OK = 0,       /* when the pool stopped because it ran out of things to do */
+    RUN_ERRORED = -1, /* comes from epoll errors */
+    RUN_ABORTED = -2, /* if a corutine is resumed without a pool */
+    RUN_STOPPED = -3, /* can be re-run (comes from force_stop) */
 };
 
 enum modif_e : int32_t {
@@ -613,15 +617,13 @@ inline task_t stopfd(int fd);
 /* Debug Interfaces:
 ------------------------------------------------------------------------------------------------  */
 
-struct dbg_format_helper_t;
-
 /* why would I replace the old string with the new one based on the allocator? because I need to
 know that the library allocates only through the allocator, so debugging would interfere with
 that. */
 using dbg_string_t = std::basic_string<char, std::char_traits<char>, allocator_t<char>>;
 
 template <typename... Args>
-inline void dbg(dbg_format_helper_t dfmt, Args&&... args);
+inline void dbg(const char *file, const char *func, int line, const char *fmt, Args&&... args);
 
 /* Registers a name for a given task */
 template <typename T, typename ...Args>
@@ -678,16 +680,6 @@ inline std::function<int(const dbg_string_t&)> log_str =
 
 template <typename P>
 using handle = std::coroutine_handle<P>;
-
-struct dbg_format_helper_t {
-    dbg_string_t fmt;
-    std::source_location loc;
-
-    template <typename Arg>
-    dbg_format_helper_t(Arg&& arg,
-            std::source_location const& loc = std::source_location::current())
-    : fmt{std::forward<Arg>(arg), allocator_t<char>{nullptr}}, loc{loc} {}
-};
 
 template <typename T, typename K>
 constexpr auto has(T&& data_struct, K&& key) {
@@ -1754,25 +1746,23 @@ inline dbg_string_t dbg_name(void *v) { return dbg_string_t{"", allocator_t<char
 
 #if CORO_ENABLE_LOGGING
 
-inline void dbg_raw(const dbg_string_t& msg,
-        std::source_location const& sloc = std::source_location::current())
-{
+inline void dbg_raw(const dbg_string_t& msg, const char *file, const char *func, int line) {
     if (log_str) {
         /* TODO: function_name: this is bullshit, replace it with something else */
         log_str(dbg_format("[%" PRIu64 "] %s:%4d %s() :> %s\n", dbg_get_time(),
-                sloc.file_name(), (int)sloc.line(), "sloc.function_name()", msg.c_str()));
+                file, line, func, msg.c_str()));
     }
 }
 
 template <typename... Args>
-inline void dbg(dbg_format_helper_t dfmt, Args&&... args) {
-    dbg_raw(dbg_format(dfmt.fmt.c_str(), std::forward<Args>(args)...), dfmt.loc);
+inline void dbg(const char *file, const char *func, int line, const char *fmt, Args&&... args) {
+    dbg_raw(dbg_format(fmt, std::forward<Args>(args)...), file, func, line);
 }
 
 #else /*CORO_ENABLE_LOGGING*/
 
 template <typename... Args> /* no logging -> do nothing */
-inline void dbg(dbg_format_helper_t, Args&&...) {}
+inline void dbg(const char *, const char *, int, const char *fmt, Args&&...) {}
 
 #endif /*CORO_ENABLE_LOGGING*/
 
