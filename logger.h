@@ -86,7 +86,7 @@ inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
 		_logger_data.old_file = std::string(logfile_relpath) + ".old.log";
 		_logger_data.maxsz = maxsz / 2; /* half for active and half for old */
 
-		int flags = O_CREAT | O_RDWR | O_CLOEXEC | O_TRUNCATE;
+		int flags = O_CREAT | O_RDWR | O_CLOEXEC | O_TRUNC;
 		_logger_data.active_fd = open(_logger_data.active_file.c_str(), flags, perm);
 		if (_logger_data.active_fd < 0) {
 			printf("Couldn't open logfile[%s], strerror[errno]: %s[%d]\n",
