@@ -61,10 +61,15 @@ inline std::string path_get_abs(std::string path) {
     return path_buff;
 }
 
-inline std::string path_get_module_name() {
-    std::string str = path_get_module_path();
+inline std::string path_get_name(const std::string& name) {
+    std::string str = name;
     std::size_t found = str.find_last_of("/\\");
     return str.substr(found + 1);
+}
+
+
+inline std::string path_get_module_name() {
+    return path_get_name(path_get_module_path());
 }
 
 inline std::string path_get_relative(std::string filename) {
