@@ -140,57 +140,6 @@ corutine's name (a coro::task<T>, std::coroutine_handle or void *) */
 # define CORO_REGNAME(thv)    thv
 #endif /*CORO_ENABLE_DEBUG_NAMES*/
 
-
-// // no inline, required by [replacement.functions]/3
-// void* operator new(std::size_t sz)
-// {
-//     std::printf("1) new(size_t), size = %zu\n", sz);
-//     if (sz == 0)
-//         ++sz; // avoid std::malloc(0) which may return nullptr on success
- 
-//     if (void *ptr = std::malloc(sz))
-//         return ptr;
- 
-//     throw std::bad_alloc{}; // required by [new.delete.single]/3
-// }
- 
-// // no inline, required by [replacement.functions]/3
-// void* operator new[](std::size_t sz)
-// {
-//     std::printf("2) new[](size_t), size = %zu\n", sz);
-//     if (sz == 0)
-//         ++sz; // avoid std::malloc(0) which may return nullptr on success
- 
-//     if (void *ptr = std::malloc(sz))
-//         return ptr;
- 
-//     throw std::bad_alloc{}; // required by [new.delete.single]/3
-// }
- 
-// void operator delete(void* ptr) noexcept
-// {
-//     std::puts("3) delete(void*)");
-//     std::free(ptr);
-// }
- 
-// void operator delete(void* ptr, std::size_t size) noexcept
-// {
-//     std::printf("4) delete(void*, size_t), size = %zu\n", size);
-//     std::free(ptr);
-// }
- 
-// void operator delete[](void* ptr) noexcept
-// {
-//     std::puts("5) delete[](void* ptr)");
-//     std::free(ptr);
-// }
- 
-// void operator delete[](void* ptr, std::size_t size) noexcept
-// {
-//     std::printf("6) delete[](void*, size_t), size = %zu\n", size);
-//     std::free(ptr);
-// }
-
 namespace coro {
 
 constexpr int MAX_TIMER_POOL_SIZE = CORO_MAX_TIMER_POOL_SIZE;
@@ -579,7 +528,7 @@ returned once the return value of the task is available so:
     co_await fut; // returns the value of co_task once it has finished executing 
 */
 template <typename T>
-inline task<T> creat_future(task<T> t); /* not awaitable */
+inline task<T> create_future(task<T> t); /* not awaitable */
 
 /* wait for all the tasks to finish, the return value can be found in the respective task, killing
 one kills all (sig_killer installed in all). The inheritance is the same as with 'call'. */
@@ -1643,7 +1592,7 @@ inline task_t rm_modifs(const std::set<modif_p>& mods) {
 }
 
 template <typename T>
-inline task<T> creat_future(task<T> t) {
+inline task<T> create_future(task<T> t) {
     /* TODO: create a function that will return the return value of t once awaited. */
     return t;
 }
