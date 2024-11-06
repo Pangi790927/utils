@@ -203,8 +203,8 @@ enum modif_e : int32_t {
     CO_MODIF_EXIT_CBK,
     CO_MODIF_LEAVE_CBK,
     CO_MODIF_ENTER_CBK,
-    CO_MODIF_WAIT_FD_CBK,
-    CO_MODIF_UNWAIT_FD_CBK,
+    CO_MODIF_WAIT_IO_CBK,
+    CO_MODIF_UNWAIT_IO_CBK,
     CO_MODIF_WAIT_SEM_CBK,
     CO_MODIF_UNWAIT_SEM_CBK,
 
@@ -372,6 +372,13 @@ private:
     std::unique_ptr<sem_internal_t, deallocator_t<sem_internal_t>> internal;
 };
 
+/* This describes the async io op. It may be redefined if this lib will be ported to windows or
+other systems. */
+struct io_desc_t {
+    int fd = -1;         /* file descriptor */
+    int events = -1;     /* epoll events to be waited on the file descriptor */
+};
+
 /* This is the state struct that each corutine has */
 struct state_t {
     error_e err = ERROR_OK;             /* holds the error return in diverse cases */
@@ -408,13 +415,13 @@ using sem_waiter_handle_p =
 /* A modif is a callback for a specifi stage in the corutine's flow */
 struct modif_t {
     std::variant<
-        std::function<error_e(state_t *)>,                        /* call_cbk */
-        std::function<error_e(state_t *)>,                        /* sched_cbk */
-        std::function<error_e(state_t *)>,                        /* exit_cbk */
-        std::function<error_e(state_t *)>,                        /* leave_cbk */
-        std::function<error_e(state_t *)>,                        /* enter_cbk */
-        std::function<error_e(state_t *, int fd, int wait_cond)>, /* wait_fd_cbk */
-        std::function<error_e(state_t *, int fd)>,                /* unwait_fd_cbk */
+        std::function<error_e(state_t *)>,              /* call_cbk */
+        std::function<error_e(state_t *)>,              /* sched_cbk */
+        std::function<error_e(state_t *)>,              /* exit_cbk */
+        std::function<error_e(state_t *)>,              /* leave_cbk */
+        std::function<error_e(state_t *)>,              /* enter_cbk */
+        std::function<error_e(state_t *, io_desc_t)>,   /* wait_io_cbk */
+        std::function<error_e(state_t *, io_desc_t)>,   /* unwait_io_cbk */
 
          /* wait_sem_cbk - OBS: the std::shared_ptr<void> part can be ignored, it's internal */
         std::function<error_e(state_t *, sem_t *, sem_waiter_handle_p)>,
@@ -539,20 +546,12 @@ inline task_t wait_all(task<ret_v>... tasks);
 another run */
 inline task_t force_stop(int ret);
 
-/* EPOLL & Linux Specific:
+/* EPOLL:
 ------------------------------------------------------------------------------------------------  */
-
-/* TODO: describe their usage */
-inline task_t connect(int fd, sockaddr *sa, socklen_t *len);
-inline task_t accept(int fd, sockaddr *sa, socklen_t *len);
-inline task_t read(int fd, void *buff, size_t len);
-inline task_t write(int fd, const void *buff, size_t len);
-inline task_t read_sz(int fd, void *buff, size_t len);
-inline task_t write_sz(int fd, const void *buff, size_t len);
 
 /* event can be EPOLLIN or EPOLLOUT (maybe some others work too?) This can be used to be notified
 when those are ready without doing a read or a write. */
-inline task_t wait_event(int fd, int event);
+inline task_t wait_event(io_desc_t io_desc);
 
 /* closing a file descriptor while it is managed by the coroutine pool will break the entire system
 so you must use stopfd on the file descriptor before you close it. This makes sure the fd is
@@ -561,7 +560,20 @@ awakened and ejected from the system before closing it. For example:
     co_await coro::stopfd(fd);
     close(fd);
 */
+inline task_t stop_io(io_desc_t io_desc);
+
+/* Linux Specific:
+------------------------------------------------------------------------------------------------  */
+
 inline task_t stopfd(int fd);
+
+/* TODO: describe their usage */
+inline task_t connect(int fd, sockaddr *sa, socklen_t *len);
+inline task_t accept(int fd, sockaddr *sa, socklen_t *len);
+inline task_t read(int fd, void *buff, size_t len);
+inline task_t write(int fd, const void *buff, size_t len);
+inline task_t read_sz(int fd, void *buff, size_t len);
+inline task_t write_sz(int fd, const void *buff, size_t len);
 
 /* Debug Interfaces:
 ------------------------------------------------------------------------------------------------  */
@@ -853,12 +865,12 @@ inline error_e do_exit_modifs(state_t *state) {
     return do_generic_modifs<CO_MODIF_EXIT_CBK>(state);
 }
 
-inline error_e do_wait_fd_modifs(state_t *state, int fd, int wait_cond) {
-    return do_generic_modifs<CO_MODIF_WAIT_FD_CBK>(state, fd, wait_cond);
+inline error_e do_wait_io_modifs(state_t *state, io_desc_t io_desc) {
+    return do_generic_modifs<CO_MODIF_WAIT_IO_CBK>(state, io_desc);
 }
 
-inline error_e do_unwait_fd_modifs(state_t *state, int fd) {
-    return do_generic_modifs<CO_MODIF_UNWAIT_FD_CBK>(state, fd);
+inline error_e do_unwait_io_modifs(state_t *state, io_desc_t io_desc) {
+    return do_generic_modifs<CO_MODIF_UNWAIT_IO_CBK>(state, io_desc);
 }
 
 inline error_e do_wait_sem_modifs(state_t *state, sem_t *sem, sem_waiter_handle_p _it) {
@@ -898,12 +910,12 @@ inline modif_p create_modif(pool_t *pool, modif_e type, Cbk&& cbk, modif_flags_e
             ret->cbk.emplace<CO_MODIF_ENTER_CBK>(std::forward<Cbk>(cbk));
             break;
 
-        case CO_MODIF_WAIT_FD_CBK:
-            ret->cbk.emplace<CO_MODIF_WAIT_FD_CBK>(std::forward<Cbk>(cbk));
+        case CO_MODIF_WAIT_IO_CBK:
+            ret->cbk.emplace<CO_MODIF_WAIT_IO_CBK>(std::forward<Cbk>(cbk));
             break;
 
-        case CO_MODIF_UNWAIT_FD_CBK:
-            ret->cbk.emplace<CO_MODIF_UNWAIT_FD_CBK>(std::forward<Cbk>(cbk));
+        case CO_MODIF_UNWAIT_IO_CBK:
+            ret->cbk.emplace<CO_MODIF_UNWAIT_IO_CBK>(std::forward<Cbk>(cbk));
             break;
 
         case CO_MODIF_WAIT_SEM_CBK:
@@ -1033,9 +1045,243 @@ inline pool_t *task<T>::get_pool() {
 /* The Pool & Epoll engine
 ------------------------------------------------------------------------------------------------- */
 
+/* This is a component of the pool_internal that is somehow prepared to be replaced in case this lib
+will be ported to other systems. In theory, to change the waiting mechanism you want to change this
+struct and io_desc_t and otherwise this whole library should be ignorant to the system async
+mechanisms until the endpoint functions like accept, connect, write, etc. */
+struct io_pool_t {
+    struct fd_data_t {
+        struct waiter_t {
+            int mask = 0; /* individual waiter mask */
+            state_t *state;
+        };
+        int fd;
+        int mask = 0; /* all the masks in one */
+        std::vector<waiter_t, allocator_t<waiter_t>> waiters;
+    };
+
+    constexpr int max_fast_fd = 1024;
+
+    io_pool_t(pool_t *pool, std::deque<handle<void>, allocator_t<handle<void>>> &ready_tasks)
+    : fd_alloc{pool}, fd_data_fast(allocator_t<int>{pool}), ret_evs(allocator_t<int>{pool}),
+    ready_tasks(ready_tasks)
+    {
+        epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+        if (epoll_fd < 0) {
+            dbg("FAILED epoll_create1 %s[%d] -> %d", strerror(errno), errno, epoll_fd);
+            /* TODO: we can except on this warning if enabled */
+        }
+    }
+
+    bool is_ok() {
+        return epoll_fd >= 0;
+    }
+
+    error_e handle_ready() {
+        if (ready_tasks.size() > 0) {
+            /* we don't do anything if there are tasks ready, we only start interogating the system
+            about ready io events if we don't have corutines to serve */
+            return ERROR_OK;
+        }
+
+        /* Now that we know we have no corutines ready we know we have to wait for some sort of io
+        event to happen(timers, file io, network io, etc.). */
+        int num_evs;
+        do {
+            num_evs = epoll_wait(epoll_fd, ret_evs.data(), ret_evs.size(), -1);
+        }
+        while (num_evs < 0 && errno == EINTR);
+        if (num_evs < 0) {
+            dbg("FAILED epoll_wait: %s[%d] -> %d", strerror(errno), errno, num_evs);
+            return ERROR_GENERIC;
+        }
+
+        /* New events arrived, it means that we can take those and push them into the ready_tasks */
+        for (int i = 0; i < num_evs; i++) {
+            int fd = ret_evs[i].data.fd;
+            fd_data_t *data = get_data(fd);
+            if (!data) {
+                dbg("FATAL: fd[%d] doesn't have associated data", fd);
+                return ERROR_GENERIC;
+            }
+
+            int events = ret_evs[i].events;
+            if (~data->mask & events) {
+                dbg("WARNING: unexpected events[%x] on fd[%d] with mask[%x]",
+                        events, fd, data->mask);
+                /* TODO: figure it out */
+            }
+
+            int remove_mask = 0;
+            for (auto &w : data->waiters) {
+                if (w.mask & events) {
+                    w.state->err = ERROR_OK;
+                    ready_tasks.push_back(w.state->self);
+                    remove_mask |= w.mask;
+                }
+            }
+            error_e ret;
+            if ((ret = remove_waiter(io_desc_t{ .fd = fd, .events = remove_mask })) != ERROR_OK) {
+                dbg("Failed to remove awaiter");
+                return ret;
+            }
+        }
+
+        return ERROR_OK;
+    }
+
+    error_e add_waiter(state_t *state, io_desc_t io_desc) {
+        if (!io_desc.events) {
+            dbg("can't await zero events");
+            return ERROR_GENERIC;
+        }
+        if (fd_data_t *data = get_data(io_desc.fd)) {
+            if (data->mask & io_desc.events) {
+                dbg("Can't wait on same events twice");
+                return ERROR_GENERIC;
+            }
+            struct epoll_event ev = {};
+            ev.events = io_desc.events | data->mask;
+            ev.data.fd = io_desc.fd;
+            int ret = 0;
+            if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, io_desc.fd, &ev)) < 0) {
+                dbg("FAILED epoll_ctl EPOLL_CTL_MOD %s[%d] -> %d", strerror(errno), ret);
+                return ERROR_GENERIC;
+            }
+            data->mask = ev.events;
+            data->waiters.push_back(waiter_t{
+                .mask = io_desc.events,
+                .state = state,
+            });
+            state->err = ERROR_GENERIC;
+            return ERROR_OK;
+        }
+        else {
+            struct epoll_event ev = {};
+            ev.events = io_desc.events;
+            ev.data.fd = io_desc.fd;
+            int ret;
+            if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, io_desc.fd, &ev)) < 0) {
+                dbg("FAILED epoll_ctl EPOLL_CTL_ADD %s[%d] -> %d", strerror(errno), ret);
+                return ERROR_GENERIC;
+            }
+            fd_data_t *data = fd_alloc.allocate(fd_data_t{
+                .fd = io_desc.fd,
+                .mask = ev.events,
+            });
+            set_data(io_desc.fd, data);
+            data->waiters.push_back(waiter_t{
+                .mask = io_desc.events,
+                .state = state,
+            });
+            ret_evs.push_back(epoll_event{});
+            state->err = ERROR_GENERIC;
+            return ERROR_OK;
+        }
+    }
+
+    error_e remove_waiter(io_desc_t io_desc) {
+        auto data = get_data(io_desc.fd);
+        if (!data) {
+            dbg("attempted to remove an inexisting waiter")
+            return ERROR_GENERIC;
+        }
+        if ((data->mask & ~io_desc.events) != 0) {
+            struct epoll_event ev;
+            ev.events = data->mask & ~io_desc.events;
+            ev.data.fd = fd;
+            data->mask = ev.events;
+            int ret;
+            if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, io_desc.fd, &ev)) < 0) {
+                dbg("FAILED epoll_ctl EPOLL_CTL_MOD %s[%d] -> %d", strerror(errno), ret);
+                return ERROR_GENERIC;
+            }
+            data->waiters.erase(
+                std::remove_if(
+                    data->waiters.begin(),
+                    data->waiters.end(),
+                    [events = io_desc.events](const fd_data_t::waiter_t& m) {
+                        return events & m.mask;
+                    }
+                ),
+                data->waiters.end()
+            );
+        }
+        else {
+            set_data(io_desc.fd, nullptr);
+            int ret;
+            if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, io_desc.fd, NULL)) < 0) {
+                dbg("FAILED epoll_ctl EPOLL_CTL_DEL %s[%d] -> %d", strerror(errno), ret);
+                return ERROR_GENERIC;
+            }
+            ret_evs.pop_back();
+        }
+        return ERROR_OK;
+    }
+
+    error_e force_awake(io_desc_t io_desc) {
+        auto data = get_data(io_desc.fd);
+        if (!data || !(data->mask & io_desc.events)) {
+            return ERROR_OK;
+        }
+
+        int remove_mask = 0;
+        for (auto &w : data->waiters) {
+            if ((w.mask & io_desc.events)) {
+                remove_mask |= w.mask;
+                w.state->err = ERROR_WAKEUP;
+                ready_tasks.push_back(w.state->self);
+            }
+        }
+        error_e ret;
+        if ((ret = remove_waiter(io_desc_t{ .fd = io_desc.fd, .events = remove_mask })) != ERROR_OK) {
+            dbg("Failed remove_waiter in force_awake");
+            return ret;
+        }
+        return ERROR_OK;
+    }
+
+private:
+    fd_data_t *get_data(int fd) {
+        if (fd < 0) /* TODO: maybe remove this check */
+            return nullptr;
+        if (fd >= max_fast_fd)
+            return has(fd_data_slow, fd) ? fd_data_slow[fd] : nullptr;
+        else
+            return fd_data_fast[fd];
+    }
+
+    void set_data(int fd, fd_data_t *data) {
+        if (auto p = get_data(fd))
+            fd_alloc.deallocate(p);
+        if (fd < 0) /* TODO: maybe remove this check */
+            return ;
+        if (fd >= max_fast_fd) {
+            if (!data)
+                fd_data_slow.erase(fd);
+            else
+                fd_data_slow[fd] = data;
+        }
+        else {
+            fd_data_fast[fd] = data;
+        }
+    }
+    /* usually fds are at most 1024, so an array of ints is 4kb and will be way faster to access
+    than a map */
+    allocator_t<fd_data_t> fd_alloc;
+    fd_data_t *fd_data_fast[max_fast_fd] = {nullptr,};
+    std::map<int, fd_data_t *, std::less<int>, allocator_t<std::pair<int, fd_data_t *>>> fd_data_slow;
+
+    std::vector<struct epoll_event, allocator_t<struct epoll_event>> ret_evs;
+
+    std::deque<handle<void>, allocator_t<handle<void>>> &ready_tasks;
+    int epoll_fd = -1;
+};
+
 /* If this is not really needed here we move it bellow */
 struct pool_internal_t {
-    pool_internal_t(pool_t *_pool) : pool(_pool), ready_tasks{allocator_t<handle<void>>(_pool)} {}
+    pool_internal_t(pool_t *_pool)
+    : pool(_pool), ready_tasks{allocator_t<handle<void>>(_pool)}, io_pool{_pool, ready_tasks} {}
 
     template <typename T>
     void sched(task<T> task, modif_table_p parent_table) {
@@ -1052,6 +1298,11 @@ struct pool_internal_t {
     }
 
     run_e run() {
+        if (!io_pool.is_ok()) {
+            dbg("the io pool is not working, check previous logs");
+            return RUN_ERRORED;
+        }
+
         dbg_register_name(task_t{std::noop_coroutine()}, "std::noop_coroutine");
 
         auto h = next_task();
@@ -1068,20 +1319,27 @@ struct pool_internal_t {
     }
 
     handle<void> next_task() {
+        if (io_pool.handle_ready(ready_tasks) != ERROR_OK) {
+            dbg("Failed io pool");
+            ret_val = RUN_ERRORED;
+            return std::noop_coroutine();
+        }
+
         if (!ready_tasks.empty()) {
             auto ret = ready_tasks.front();
             ready_tasks.pop_front();
             return ret;
         }
-        /*TODO: else, try to ask the fd engine for a new coro */
 
         /* we have nothing else to do, we resume the pool_t::run */
         ret_val = RUN_OK;
         return std::noop_coroutine();
     }
 
-    void wait_fd(handle<void> h, int fd, int wait_cond) {
+    template <typename P>
+    error_e wait_io(handle<P> h, io_desc_t io_desc) {
         /* add the file descriptor inside epoll and schedule the corutine for waiting on it */
+        return io_pool.add_waiter(&h.promise().state, io_desc);
     }
 
     run_e ret_val;
@@ -1089,6 +1347,7 @@ struct pool_internal_t {
 private:
     pool_t *pool;
     std::deque<handle<void>, allocator_t<handle<void>>> ready_tasks;
+    io_pool_t io_pool;
 };
 
 /* Allocate/deallocate need the definition of pool_internal_t */
@@ -1234,15 +1493,14 @@ struct get_pool_awaiter_t {
 
 /* This is the object with which you wait for a file descriptor, you create it with a valid
 wait_cond and fd and co_await on it. The resulting integer must be positive to not be an error */
-struct fd_awaiter_t {
-    int wait_cond;  /* set with epoll wait condition */
-    int fd;         /* set with waited file descriptor */
+struct io_awaiter_t {
+    io_desc_t io_desc;
 
-    fd_awaiter_t(int fd, int wait_cond) : fd(fd), wait_cond(wait_cond) {}
-    fd_awaiter_t(const fd_awaiter_t &oth) = delete;
-    fd_awaiter_t &operator = (const fd_awaiter_t &oth) = delete;
-    fd_awaiter_t(fd_awaiter_t &&oth) = delete;
-    fd_awaiter_t &operator = (fd_awaiter_t &&oth) = delete;
+    io_awaiter_t(io_desc_t io_desc) : io_desc(io_desc) {}
+    io_awaiter_t(const io_awaiter_t &oth) = delete;
+    io_awaiter_t &operator = (const io_awaiter_t &oth) = delete;
+    io_awaiter_t(io_awaiter_t &&oth) = delete;
+    io_awaiter_t &operator = (io_awaiter_t &&oth) = delete;
 
     bool await_ready() { return false; };
 
@@ -1251,11 +1509,11 @@ struct fd_awaiter_t {
         auto pool = h.promise().state.pool;
         state = &h.promise().state;
         /* in case we can't schedule the fd we log the failure and return the same coro */
-        if (do_wait_fd_modifs(state, fd, wait_cond) != ERROR_OK) {
+        if (do_wait_io_modifs(state, io_desc) != ERROR_OK) {
             return h;
         }
         error_e err;
-        if ((err = pool->get_internal()->wait_fd(h, fd, wait_cond)) != ERROR_OK) {
+        if ((err = pool->get_internal()->wait_io(h, io_desc)) != ERROR_OK) {
             /* TODO: log the fail */
             state->err = err;
             return h;
@@ -1264,7 +1522,7 @@ struct fd_awaiter_t {
     }
 
     error_e await_resume() {
-        do_unwait_fd_modifs(state, fd);
+        do_unwait_io_modifs(state, io_desc);
         return state->err;
     }
 
@@ -1351,6 +1609,7 @@ private:
     pool_t *pool;
 };
 
+/* TODO: find a way for sem_waiter_handle_p to make sense */
 struct sem_awaiter_t {
     sem_awaiter_t(sem_t *sem) : sem(sem) {}
     sem_awaiter_t(const sem_awaiter_t &oth) = delete;
@@ -1363,9 +1622,9 @@ struct sem_awaiter_t {
         state = &to_suspend.promise().state;
 
         auto pool = sem->get_internal()->get_pool();
-        _sem_it = sem->get_internal()->push_waiter(to_suspend);
-        if (do_wait_sem_modifs(state, sem, _sem_it) != ERROR_OK) {
-            sem->get_internal()->erase_waiter(*_sem_it);
+        psem_it = sem->get_internal()->push_waiter(to_suspend);
+        if (do_wait_sem_modifs(state, sem, psem_it) != ERROR_OK) {
+            sem->get_internal()->erase_waiter(psem_it);
             return to_suspend;
         }
 
@@ -1375,7 +1634,7 @@ struct sem_awaiter_t {
 
     sem_t::unlocker_t await_resume() {
         if (triggered)
-            do_unwait_sem_modifs(state, sem, _sem_it);
+            do_unwait_sem_modifs(state, sem, psem_it);
         triggered = false;
         return sem_t::unlocker_t(sem);
     }
@@ -1386,7 +1645,7 @@ struct sem_awaiter_t {
 
     state_t *state = nullptr;
     sem_t *sem;
-    sem_waiter_handle_p _sem_it;
+    sem_waiter_handle_p psem_it;
     bool triggered = false;
 };
 
@@ -1451,6 +1710,10 @@ inline task<modif_p> creat_depend() {
     co_return nullptr;
 }
 
+inline task_t stop_io(io_desc_t io_desc) {
+    co_return ERROR_OK;
+}
+
 inline task_t stopfd(int fd) {
     /* TOSO: get the fd out of the poll, awakening all it's waiters */
     co_return ERROR_OK;
@@ -1478,7 +1741,7 @@ inline task_t sleep_s(uint64_t timeo_s) {
     co_return co_await sleep(std::chrono::seconds(timeo_s));
 }
 
-inline task_t wait_event(int fd, int event) {
+inline task_t wait_event(io_desc_t io_desc) {
     /* TODO */
     co_return ERROR_OK;
 }
