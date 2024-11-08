@@ -2,7 +2,7 @@
 #define CORO_H
 
 /* TODO:
-    - write the fd stuff
+    + write the fd stuff
     - add debug modifs, things are already breaking and I don't know why
     - consider implementing co_yield
     - consider implementing exception handling
@@ -36,13 +36,21 @@
 #include <list>
 #include <utility>
 
+#include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
+#include <sys/timerfd.h>
 
 /* The maximum amount of concurent timers that can be awaited */
 #ifndef CORO_MAX_TIMER_POOL_SIZE
 # define CORO_MAX_TIMER_POOL_SIZE 64
+#endif
+
+/* if file descriptor number is lower than this number it's associated awaiter data will be
+remembered in a faster structure */
+#ifndef CORO_MAX_FAST_FD_CACHE
+# define CORO_MAX_FAST_FD_CACHE 1024
 #endif
 
 /* Set if a pool can be available in more than one thread, necesary if you want to transfer the pool
@@ -66,7 +74,7 @@ to a callback that will be called from another thread */
 # define CORO_ENABLE_LOGGING true
 #endif
 #if CORO_ENABLE_LOGGING
-# define CORO_DEBUG(fmt, ...) dbg(__FILE__, __func__, __LINE__, ##__VA_ARGS__)
+# define CORO_DEBUG(fmt, ...) dbg(__FILE__, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #else
 # define CORO_DEBUG(fmt, ...) do {} while (0)
 #endif
@@ -143,7 +151,7 @@ corutine's name (a coro::task<T>, std::coroutine_handle or void *) */
 namespace coro {
 
 constexpr int MAX_TIMER_POOL_SIZE = CORO_MAX_TIMER_POOL_SIZE;
-
+constexpr int MAX_FAST_FD_CACHE = CORO_MAX_FAST_FD_CACHE;
 /* corutine return type, this is the result of creating a corutine, you can await it and also pass
 it around (practically holds a std::coroutine_handle and can be awaited call the coro and to get the
 return value) */
@@ -193,7 +201,7 @@ enum error_e : int32_t {
 enum run_e : int32_t {
     RUN_OK = 0,       /* when the pool stopped because it ran out of things to do */
     RUN_ERRORED = -1, /* comes from epoll errors */
-    RUN_ABORTED = -2, /* if a corutine is resumed without a pool */
+    RUN_ABORTED = -2, /* if a corutine had a stroke (some sort of internal error) */
     RUN_STOPPED = -3, /* can be re-run (comes from force_stop) */
 };
 
@@ -316,6 +324,8 @@ struct pool_t {
     pool_t &operator = (pool_t& sem) = delete;
     pool_t &operator = (pool_t&& sem) = delete;
 
+    ~pool_t() { clear(); }
+
     /* Same as coro::sched, but used outside of a corutine, based on the pool */
     template <typename T>
     void sched(task<T> task, const std::vector<modif_p>& v = {}); /* ignores return type */
@@ -323,8 +333,15 @@ struct pool_t {
     /* runs the event loop */
     run_e run();
 
-    /* Better to not touch this function */
+    /* clears all the corutines that are linked to this pool, so all waiters, all ready tasks, etc.
+    This will happen automatically inside the destructor */
+    error_e clear();
+
+    /* Better to not touch this function, you need to understand the internals of pool_t to use it */
     pool_internal_t *get_internal();
+
+    int64_t stopval = 0;            /* a value that is set by force_stop(stopval) */
+    std::shared_ptr<void> user_ptr; /* the library won't touch this, do whatever with it */
 
 protected:
     template <typename T>
@@ -375,8 +392,8 @@ private:
 /* This describes the async io op. It may be redefined if this lib will be ported to windows or
 other systems. */
 struct io_desc_t {
-    int fd = -1;         /* file descriptor */
-    int events = -1;     /* epoll events to be waited on the file descriptor */
+    int fd = -1;                        /* file descriptor */
+    uint32_t events = 0xffff'ffff;      /* epoll events to be waited on the file descriptor */
 };
 
 /* This is the state struct that each corutine has */
@@ -487,7 +504,7 @@ inline task_t await(Awaiter&& awaiter);
 
 /* creates a timeout modification, i.e. the corutine will be stopped from executing if the given
 time passes */
-inline modif_p creat_timeo(const std::chrono::microseconds& timeo);
+inline modif_p create_timeo(const std::chrono::microseconds& timeo);
 
 /* sleep functions */
 inline task_t sleep_us(uint64_t timeo_us);
@@ -517,13 +534,13 @@ inline task<sem_p> create_sem(int64_t val = 0);
 
 /* a modification that depends on the pool, this is used in scheduled coroutines to end the current
 corutine if they die. This is not inherited by either calls or spawns, but it is inherited by other
-calls to creat_depend further down. */
-inline task<modif_p> creat_depend();
+calls to create_depend further down. */
+inline task<modif_p> create_depend();
 
 /* modifier that, once signaled, will awake the corutine and make it return ERROR_WAKEUP. If the
 corutine is not waiting it will return as soon as it reaches any co_await ?or co_yield? */
 /* TODO: don't forget to awake the fds nicely(something like stopfd) */
-inline modif_p creat_killer();
+inline modif_p create_killer();
 inline error_e sig_killer(modif_p p);
 
 /* takes a task and adds the requred modifications to it such that the returned object will be
@@ -544,7 +561,7 @@ inline task_t wait_all(task<ret_v>... tasks);
 
 /* causes the running pool::run to stop, the function will stop at this point, can be resumed with
 another run */
-inline task_t force_stop(int ret);
+inline task_t force_stop(int64_t stopval);
 
 /* EPOLL:
 ------------------------------------------------------------------------------------------------  */
@@ -600,7 +617,7 @@ inline void * dbg_register_name(void *addr, const char *fmt, Args&&...);
 /* creates a modifier that traces things from corutines, mostly a convenience function, it also
 uses the log_str function, or does nothing else if it isn't defined. If you don't like the
 verbosity, be free to null any callback you don't care about. */
-inline modif_p creat_dbg_tracer();
+inline modif_p dbg_create_tracer();
 
 /* Obtains the name given to the respective task, handle or address */
 template <typename T>
@@ -611,9 +628,13 @@ inline dbg_string_t dbg_name(std::coroutine_handle<P> h);
 
 inline dbg_string_t dbg_name(void *v);
 
+/* Obtains a string from the given enum */
+inline dbg_string_t dbg_enum(error_e code);
+inline dbg_string_t dbg_enum(run_e code);
+inline dbg_string_t dbg_epoll_events(uint32_t events);
 
-/* formats a string using the C snprintf, similar in functionality to snprintf+std::format, in the
-version of g++ that I'm using std::format is not available  */
+/* formats a string using the C snprintf, similar in functionality to a combination of
+snprintf+std::format, in the version of g++ that I'm using std::format is not available  */
 template <typename... Args>
 inline dbg_string_t dbg_format(const char *fmt, Args&& ...args);
 
@@ -1052,23 +1073,24 @@ mechanisms until the endpoint functions like accept, connect, write, etc. */
 struct io_pool_t {
     struct fd_data_t {
         struct waiter_t {
-            int mask = 0; /* individual waiter mask */
+            uint32_t mask = 0; /* individual waiter mask */
             state_t *state;
         };
         int fd;
-        int mask = 0; /* all the masks in one */
+        uint32_t mask = 0; /* all the masks in one */
         std::vector<waiter_t, allocator_t<waiter_t>> waiters;
     };
 
-    constexpr int max_fast_fd = 1024;
-
     io_pool_t(pool_t *pool, std::deque<handle<void>, allocator_t<handle<void>>> &ready_tasks)
-    : fd_alloc{pool}, fd_data_fast(allocator_t<int>{pool}), ret_evs(allocator_t<int>{pool}),
-    ready_tasks(ready_tasks)
+    :       pool{pool},
+            fd_data_slow(allocator_t<int>{pool}),
+            ret_evs(allocator_t<int>{pool}),
+            ready_tasks{ready_tasks}
     {
         epoll_fd = epoll_create1(EPOLL_CLOEXEC);
         if (epoll_fd < 0) {
-            dbg("FAILED epoll_create1 %s[%d] -> %d", strerror(errno), errno, epoll_fd);
+            CORO_DEBUG("FAILED epoll_create1 err:%s[%d] -> ret:%d",
+                    strerror(errno), errno, epoll_fd);
             /* TODO: we can except on this warning if enabled */
         }
     }
@@ -1084,6 +1106,11 @@ struct io_pool_t {
             return ERROR_OK;
         }
 
+        if (ret_evs.size() == 0) {
+            /* we don't have what to wait on, there are no registered awaiters */
+            return ERROR_OK;
+        }
+
         /* Now that we know we have no corutines ready we know we have to wait for some sort of io
         event to happen(timers, file io, network io, etc.). */
         int num_evs;
@@ -1092,7 +1119,8 @@ struct io_pool_t {
         }
         while (num_evs < 0 && errno == EINTR);
         if (num_evs < 0) {
-            dbg("FAILED epoll_wait: %s[%d] -> %d", strerror(errno), errno, num_evs);
+            CORO_DEBUG("FAILED epoll_wait: epoll_fd[%d] err:%s[%d] -> ret:%d",
+                    epoll_fd, strerror(errno), errno, num_evs);
             return ERROR_GENERIC;
         }
 
@@ -1101,18 +1129,18 @@ struct io_pool_t {
             int fd = ret_evs[i].data.fd;
             fd_data_t *data = get_data(fd);
             if (!data) {
-                dbg("FATAL: fd[%d] doesn't have associated data", fd);
+                CORO_DEBUG("FAILED: fd[%d] doesn't have associated data", fd);
                 return ERROR_GENERIC;
             }
 
-            int events = ret_evs[i].events;
+            uint32_t events = ret_evs[i].events;
             if (~data->mask & events) {
-                dbg("WARNING: unexpected events[%x] on fd[%d] with mask[%x]",
-                        events, fd, data->mask);
+                CORO_DEBUG("WARNING: unexpected events[%s] on fd[%d] with mask[%s]",
+                        dbg_epoll_events(events).c_str(), fd, dbg_epoll_events(data->mask).c_str());
                 /* TODO: figure it out */
             }
 
-            int remove_mask = 0;
+            uint32_t remove_mask = 0;
             for (auto &w : data->waiters) {
                 if (w.mask & events) {
                     w.state->err = ERROR_OK;
@@ -1122,7 +1150,8 @@ struct io_pool_t {
             }
             error_e ret;
             if ((ret = remove_waiter(io_desc_t{ .fd = fd, .events = remove_mask })) != ERROR_OK) {
-                dbg("Failed to remove awaiter");
+                CORO_DEBUG("FAILED to remove awaiter fd[%d] events%s",
+                        fd, dbg_epoll_events(remove_mask).c_str());
                 return ret;
             }
         }
@@ -1132,12 +1161,16 @@ struct io_pool_t {
 
     error_e add_waiter(state_t *state, io_desc_t io_desc) {
         if (!io_desc.events) {
-            dbg("can't await zero events");
+            CORO_DEBUG("FAILED Can't await zero events fd[%d]", io_desc.fd);
             return ERROR_GENERIC;
         }
-        if (fd_data_t *data = get_data(io_desc.fd)) {
+        fd_data_t *data = nullptr;
+        if (data = get_data(io_desc.fd)) {
             if (data->mask & io_desc.events) {
-                dbg("Can't wait on same events twice");
+                CORO_DEBUG("FAILED Can't wait on same events twice: fd[%d] existing%s attempt%s",
+                        io_desc.fd,
+                        dbg_epoll_events(data->mask).c_str(),
+                        dbg_epoll_events(io_desc.events).c_str());
                 return ERROR_GENERIC;
             }
             struct epoll_event ev = {};
@@ -1145,11 +1178,12 @@ struct io_pool_t {
             ev.data.fd = io_desc.fd;
             int ret = 0;
             if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, io_desc.fd, &ev)) < 0) {
-                dbg("FAILED epoll_ctl EPOLL_CTL_MOD %s[%d] -> %d", strerror(errno), ret);
+                CORO_DEBUG("FAILED epoll_ctl EPOLL_CTL_MOD fd[%d] events%s err:%s[%d] -> ret:%d",
+                        io_desc.fd, dbg_epoll_events(ev.events).c_str(), strerror(errno), ret);
                 return ERROR_GENERIC;
             }
             data->mask = ev.events;
-            data->waiters.push_back(waiter_t{
+            data->waiters.push_back(fd_data_t::waiter_t{
                 .mask = io_desc.events,
                 .state = state,
             });
@@ -1162,15 +1196,17 @@ struct io_pool_t {
             ev.data.fd = io_desc.fd;
             int ret;
             if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, io_desc.fd, &ev)) < 0) {
-                dbg("FAILED epoll_ctl EPOLL_CTL_ADD %s[%d] -> %d", strerror(errno), ret);
+                CORO_DEBUG("FAILED epoll_ctl EPOLL_CTL_ADD fd[%d] events%s err:%s[%d] -> ret:%d",
+                        io_desc.fd, dbg_epoll_events(ev.events).c_str(), strerror(errno), ret);
                 return ERROR_GENERIC;
             }
-            fd_data_t *data = fd_alloc.allocate(fd_data_t{
+            data = alloc<fd_data_t>(pool, fd_data_t{
                 .fd = io_desc.fd,
                 .mask = ev.events,
+                .waiters = std::vector<fd_data_t::waiter_t, allocator_t<fd_data_t::waiter_t>>{pool},
             });
             set_data(io_desc.fd, data);
-            data->waiters.push_back(waiter_t{
+            data->waiters.push_back(fd_data_t::waiter_t{
                 .mask = io_desc.events,
                 .state = state,
             });
@@ -1180,20 +1216,45 @@ struct io_pool_t {
         }
     }
 
+    error_e force_awake(io_desc_t io_desc, error_e retcode) {
+        auto data = get_data(io_desc.fd);
+        if (!data || !(data->mask & io_desc.events)) {
+            return ERROR_OK;
+        }
+
+        uint32_t remove_mask = 0;
+        for (auto &w : data->waiters) {
+            if ((w.mask & io_desc.events)) {
+                remove_mask |= w.mask;
+                w.state->err = retcode;
+                ready_tasks.push_back(w.state->self);
+            }
+        }
+        error_e ret;
+        if ((ret = remove_waiter(io_desc_t{ .fd = io_desc.fd, .events = remove_mask })) != ERROR_OK) {
+            CORO_DEBUG("FAILED remove_waiter in force_awake fd[%d] events%s",
+                    io_desc.fd, dbg_epoll_events(remove_mask).c_str());
+            return ret;
+        }
+        return ERROR_OK;
+    }
+
+private:
     error_e remove_waiter(io_desc_t io_desc) {
         auto data = get_data(io_desc.fd);
         if (!data) {
-            dbg("attempted to remove an inexisting waiter")
+            CORO_DEBUG("FAILED attempted to remove an inexisting waiter fd[%d]", io_desc.fd);
             return ERROR_GENERIC;
         }
         if ((data->mask & ~io_desc.events) != 0) {
             struct epoll_event ev;
             ev.events = data->mask & ~io_desc.events;
-            ev.data.fd = fd;
+            ev.data.fd = io_desc.fd;
             data->mask = ev.events;
             int ret;
             if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, io_desc.fd, &ev)) < 0) {
-                dbg("FAILED epoll_ctl EPOLL_CTL_MOD %s[%d] -> %d", strerror(errno), ret);
+                CORO_DEBUG("FAILED epoll_ctl EPOLL_CTL_MOD fd[%d] events%s err:%s[%d] -> ret:%d",
+                        io_desc.fd, dbg_epoll_events(ev.events).c_str(), strerror(errno), ret);
                 return ERROR_GENERIC;
             }
             data->waiters.erase(
@@ -1211,7 +1272,8 @@ struct io_pool_t {
             set_data(io_desc.fd, nullptr);
             int ret;
             if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, io_desc.fd, NULL)) < 0) {
-                dbg("FAILED epoll_ctl EPOLL_CTL_DEL %s[%d] -> %d", strerror(errno), ret);
+                CORO_DEBUG("FAILED epoll_ctl EPOLL_CTL_DEL fd[%d] err:%s[%d] -> ret:%d",
+                        io_desc.fd, strerror(errno), ret);
                 return ERROR_GENERIC;
             }
             ret_evs.pop_back();
@@ -1219,44 +1281,23 @@ struct io_pool_t {
         return ERROR_OK;
     }
 
-    error_e force_awake(io_desc_t io_desc) {
-        auto data = get_data(io_desc.fd);
-        if (!data || !(data->mask & io_desc.events)) {
-            return ERROR_OK;
-        }
-
-        int remove_mask = 0;
-        for (auto &w : data->waiters) {
-            if ((w.mask & io_desc.events)) {
-                remove_mask |= w.mask;
-                w.state->err = ERROR_WAKEUP;
-                ready_tasks.push_back(w.state->self);
-            }
-        }
-        error_e ret;
-        if ((ret = remove_waiter(io_desc_t{ .fd = io_desc.fd, .events = remove_mask })) != ERROR_OK) {
-            dbg("Failed remove_waiter in force_awake");
-            return ret;
-        }
-        return ERROR_OK;
-    }
-
-private:
     fd_data_t *get_data(int fd) {
         if (fd < 0) /* TODO: maybe remove this check */
             return nullptr;
-        if (fd >= max_fast_fd)
+        if (fd >= MAX_FAST_FD_CACHE)
             return has(fd_data_slow, fd) ? fd_data_slow[fd] : nullptr;
         else
             return fd_data_fast[fd];
     }
 
     void set_data(int fd, fd_data_t *data) {
+        /* for some reason, that I forgot, but there was a reason, I think, i preffered explicit
+        allocation/deallocation, if you find it, the reason, consider sharing it with me. */
         if (auto p = get_data(fd))
-            fd_alloc.deallocate(p);
+            deallocator_t<fd_data_t>{pool}(p);
         if (fd < 0) /* TODO: maybe remove this check */
             return ;
-        if (fd >= max_fast_fd) {
+        if (fd >= MAX_FAST_FD_CACHE) {
             if (!data)
                 fd_data_slow.erase(fd);
             else
@@ -1268,14 +1309,79 @@ private:
     }
     /* usually fds are at most 1024, so an array of ints is 4kb and will be way faster to access
     than a map */
-    allocator_t<fd_data_t> fd_alloc;
-    fd_data_t *fd_data_fast[max_fast_fd] = {nullptr,};
-    std::map<int, fd_data_t *, std::less<int>, allocator_t<std::pair<int, fd_data_t *>>> fd_data_slow;
+    pool_t *pool = nullptr;
+    fd_data_t *fd_data_fast[MAX_FAST_FD_CACHE] = {nullptr,};
+    std::map<int, fd_data_t *, std::less<int>, allocator_t<std::pair<const int, fd_data_t *>>>
+            fd_data_slow;
 
     std::vector<struct epoll_event, allocator_t<struct epoll_event>> ret_evs;
 
     std::deque<handle<void>, allocator_t<handle<void>>> &ready_tasks;
     int epoll_fd = -1;
+};
+
+/* same as above, this is a part of pool_internal_t and it stays here for potential later rewriting.
+The idea is that timers need to be created by some sort of system provided mechanism and waiting
+on it should be compatibile with the io_pool_t and as such, the timer should return a io_desc_t */
+struct timer_pool_t {
+    error_e get_timer(io_desc_t& new_timer) {
+        if (stack_head > 0) {
+            new_timer.fd = timer_stack[stack_head];
+            new_timer.events = EPOLLIN;
+            stack_head--;
+            return ERROR_OK;
+        }
+
+        int timer_fd = timerfd_create(CLOCK_BOOTTIME, TFD_CLOEXEC);
+        if (timer_fd < 0) {
+            CORO_DEBUG("FAILED to allocate new timer err:%s[%d] -> ret: %d",
+                    strerror(errno), errno, timer_fd);
+            return ERROR_GENERIC;
+        }
+
+        new_timer.fd = timer_fd;
+        new_timer.events = EPOLLIN;
+
+        return ERROR_OK;
+    }
+
+    /* This function arms the timer and it will be triggered once the timer expires */
+    /* not necesary to be a member function on Linux, but I feel it is better to put it here for
+    future use */
+    error_e set_timer(io_desc_t timer, const std::chrono::microseconds& time_us) {
+        int64_t t = time_us.count();
+        itimerspec its = {};
+        its.it_value.tv_nsec = (t % 1000'000) * 1000ULL;
+        its.it_value.tv_sec = t / 1000'000ULL;
+        int ret = 0;
+        if ((ret = timerfd_settime(timer.fd, 0, &its, NULL)) < 0) {
+            CORO_DEBUG("FAILED to set expiration date fd[%d] err:%s[%d] -> ret: %d",
+                    timer.fd, strerror(errno), errno, ret);
+            return ERROR_GENERIC;
+        }
+        return ERROR_OK;
+    }
+
+    error_e free_timer(io_desc_t timer) {
+        if (stack_head + 1 < MAX_TIMER_POOL_SIZE) {
+            stack_head++;
+            timer_stack[stack_head] = timer.fd;
+        }
+        else {
+            close(timer.fd);
+        }
+        return ERROR_OK;
+    }
+
+    ~timer_pool_t() {
+        while (stack_head >= 0) {
+            close(timer_stack[stack_head]);
+            stack_head--;
+        }
+    }
+private:
+    int timer_stack[MAX_TIMER_POOL_SIZE];
+    int stack_head = -1;
 };
 
 /* If this is not really needed here we move it bellow */
@@ -1299,7 +1405,7 @@ struct pool_internal_t {
 
     run_e run() {
         if (!io_pool.is_ok()) {
-            dbg("the io pool is not working, check previous logs");
+            CORO_DEBUG("the io pool is not working, check previous logs");
             return RUN_ERRORED;
         }
 
@@ -1318,9 +1424,13 @@ struct pool_internal_t {
         ready_tasks.push_back(h);
     }
 
+    void push_ready_front(handle<void> h) {
+        ready_tasks.push_front(h);
+    }
+
     handle<void> next_task() {
-        if (io_pool.handle_ready(ready_tasks) != ERROR_OK) {
-            dbg("Failed io pool");
+        if (io_pool.handle_ready() != ERROR_OK) {
+            CORO_DEBUG("Failed io pool");
             ret_val = RUN_ERRORED;
             return std::noop_coroutine();
         }
@@ -1342,12 +1452,35 @@ struct pool_internal_t {
         return io_pool.add_waiter(&h.promise().state, io_desc);
     }
 
+    error_e stop_io(io_desc_t io_desc, error_e retcode) {
+        /* stop the io and set it's return code as retcode */
+        return io_pool.force_awake(io_desc, retcode);
+    }
+
+    error_e get_timer(io_desc_t& new_timer) {
+        /* returns a timer object, referenced by the io descriptor new_timer, gaining ownership over
+        it */
+        return timer_pool.get_timer(new_timer);
+    }
+
+    error_e set_timer(io_desc_t timer, const std::chrono::microseconds& time_us) {
+        /* arms the timer referenced by the descriptor timer to be awakened after time_us
+        microseconds from now */
+        return timer_pool.set_timer(timer, time_us);
+    }
+
+    error_e free_timer(io_desc_t timer) {
+        /* releases the ownership of the timer back to the pool */
+        return timer_pool.free_timer(timer);
+    }
+
     run_e ret_val;
 
 private:
     pool_t *pool;
     std::deque<handle<void>, allocator_t<handle<void>>> ready_tasks;
     io_pool_t io_pool;
+    timer_pool_t timer_pool;
 };
 
 /* Allocate/deallocate need the definition of pool_internal_t */
@@ -1412,6 +1545,14 @@ inline void pool_t::sched(task<T> task, const std::vector<modif_p>& v) {
 
 inline run_e pool_t::run() {
     return internal->run();
+}
+
+inline error_e pool_t::clear() {
+    /* TODO: implement this */
+    /* TODO: try to implement this in a way that makes sense, ie, if a corutine is called by another
+    try to destroy the callee before the caller. Since io events are allways callees, destroy those
+    first */
+    return ERROR_OK;
 }
 
 inline pool_internal_t *pool_t::get_internal() {
@@ -1515,6 +1656,8 @@ struct io_awaiter_t {
         error_e err;
         if ((err = pool->get_internal()->wait_io(h, io_desc)) != ERROR_OK) {
             /* TODO: log the fail */
+            CORO_DEBUG("Failed to register wait: %s on: %s",
+                    dbg_enum(err).c_str(), dbg_name(h).c_str());
             state->err = err;
             return h;
         }
@@ -1624,7 +1767,7 @@ struct sem_awaiter_t {
         auto pool = sem->get_internal()->get_pool();
         psem_it = sem->get_internal()->push_waiter(to_suspend);
         if (do_wait_sem_modifs(state, sem, psem_it) != ERROR_OK) {
-            sem->get_internal()->erase_waiter(psem_it);
+            sem->get_internal()->erase_waiter(*psem_it);
             return to_suspend;
         }
 
@@ -1703,7 +1846,7 @@ inline task<pool_t *> get_pool() {
     co_return co_await awaiter;
 }
 
-inline task<modif_p> creat_depend() {
+inline task<modif_p> create_depend() {
     /* TODO: create a killer, that will kill this corutine and the ones spawned from it? if the
     depended task fails, this is kinda stupid, I may ignore it, (or maybe it is necesary to be able
     to do something like wait_any?) */
@@ -1711,21 +1854,76 @@ inline task<modif_p> creat_depend() {
 }
 
 inline task_t stop_io(io_desc_t io_desc) {
-    co_return ERROR_OK;
+    co_return (co_await get_pool())->get_internal()->stop_io(io_desc, ERROR_WAKEUP);
 }
 
 inline task_t stopfd(int fd) {
-    /* TOSO: get the fd out of the poll, awakening all it's waiters */
-    co_return ERROR_OK;
+    /* gets the fd out of the poll, awakening all it's waiters with error_e ERROR_WAKEUP */
+    co_return (co_await stop_io(io_desc_t{.fd = fd}));
 }
 
-inline task_t force_stop(run_e ret) {
-    /* TODO: simply interrupt the pool, if you continue it, it will continue from this place */
-    co_return ERROR_OK;
+inline task_t force_stop(int64_t stopval) {
+    struct stop_awaiter_t {
+        stop_awaiter_t(int64_t stopval) : stopval(stopval) {}
+
+        bool await_ready() { return false; };
+
+        handle<void> await_suspend(handle<task_state_t<int>> h) {
+            state = &h.promise().state;
+            if (do_leave_modifs(state) != ERROR_OK) {
+                CORO_DEBUG("WARNING: Can't interrupt stop");
+            }
+            state->pool->get_internal()->push_ready_front(h);
+            state->pool->get_internal()->ret_val = RUN_STOPPED;
+            state->pool->stopval = stopval;
+            return std::noop_coroutine();
+        }
+
+        error_e await_resume() {
+            do_entry_modifs(state);
+            return ERROR_OK; /* no errors to be had here */
+        }
+
+        int64_t stopval = 0;
+        state_t *state = nullptr;
+    };
+    /* this interrupts the pool, if you continue it, it will continue from this place */
+    co_return (co_await stop_awaiter_t{stopval});
 }
 
 inline task_t sleep(const std::chrono::microseconds& timeo) {
-    /* TODO: create sleeper and sleep */
+    auto pool = co_await get_pool();
+    io_desc_t timer;
+    error_e err;
+    if ((err = pool->get_internal()->get_timer(timer)) != ERROR_OK) {
+        CORO_DEBUG("FAILED to get a timer %s", dbg_enum(err).c_str());
+        co_return err;
+    }
+    if ((err = pool->get_internal()->set_timer(timer, timeo)) != ERROR_OK) {
+        CORO_DEBUG("FAILED to set a timer %s", dbg_enum(err).c_str());
+        error_e err_err;
+        if ((err_err = pool->get_internal()->free_timer(timer)) != ERROR_OK) {
+            CORO_DEBUG("FAILED to free(on error: %s) the timer %s",
+                    dbg_enum(err).c_str(), dbg_enum(err_err).c_str());
+        }
+        co_return err;
+    }
+
+    io_awaiter_t awaiter(timer);
+    if ((err = co_await awaiter) != ERROR_OK) {
+        CORO_DEBUG("FAILED waiting on timer: %s", dbg_enum(err).c_str());
+        error_e err_err;
+        if ((err_err = pool->get_internal()->free_timer(timer)) != ERROR_OK) {
+            CORO_DEBUG("FAILED to free(on error: %s) the timer %s",
+                    dbg_enum(err).c_str(), dbg_enum(err_err).c_str());
+        }
+        co_return err;
+    }
+    if ((err = pool->get_internal()->free_timer(timer)) != ERROR_OK) {
+        CORO_DEBUG("FAILED to free the timer %s", dbg_enum(err).c_str());
+        co_return err;
+    }
+
     co_return ERROR_OK;
 }
 
@@ -1742,8 +1940,8 @@ inline task_t sleep_s(uint64_t timeo_s) {
 }
 
 inline task_t wait_event(io_desc_t io_desc) {
-    /* TODO */
-    co_return ERROR_OK;
+    io_awaiter_t awaiter(io_desc);
+    co_return (co_await awaiter);
 }
 
 inline task_t connect(int fd, sockaddr *sa, socklen_t *len) {
@@ -1861,13 +2059,13 @@ inline task<T> create_future(task<T> t) {
 }
 
 /* TODO: depends on the pool_t to create the timer */
-inline modif_p creat_timeo(const std::chrono::microseconds& timeo) {
+inline modif_p create_timeo(const std::chrono::microseconds& timeo) {
     /* TODO: create the 'modif packet' that will kill the corutines in the call-path when the
     timer expires */
     return nullptr;
 }
 
-inline modif_p creat_killer() {
+inline modif_p create_killer() {
     /* TODO: create the 'modif packet' that can stop the corutines in the call-path when triggered */
     return nullptr;
 }
@@ -1902,7 +2100,45 @@ inline dbg_string_t dbg_name(handle<P> h) {
     return dbg_name(h.address());
 }
 
-inline modif_p creat_dbg_tracer() {
+inline dbg_string_t dbg_enum(error_e code) {
+    switch (code) {
+        case ERROR_OK:      return dbg_string_t{"ERROR_OK",        allocator_t<char>{nullptr}};
+        case ERROR_GENERIC: return dbg_string_t{"ERROR_GENERIC",   allocator_t<char>{nullptr}};
+        case ERROR_TIMEOUT: return dbg_string_t{"ERROR_TIMEOUT",   allocator_t<char>{nullptr}};
+        case ERROR_WAKEUP:  return dbg_string_t{"ERROR_WAKEUP",    allocator_t<char>{nullptr}};
+        case ERROR_USER:    return dbg_string_t{"ERROR_USER",      allocator_t<char>{nullptr}};
+        case ERROR_DEPEND:  return dbg_string_t{"ERROR_DEPEND",    allocator_t<char>{nullptr}};
+        default:            return dbg_string_t{"[ERROR_UNKNOWN]", allocator_t<char>{nullptr}};
+    }
+}
+
+inline dbg_string_t dbg_enum(run_e code) {
+    dbg_string_t ret{"", allocator_t<char>{nullptr}};
+    switch (code) {
+        case RUN_OK:      return dbg_string_t{"RUN_OK"       , allocator_t<char>{nullptr}};      
+        case RUN_ERRORED: return dbg_string_t{"RUN_ERRORED"  , allocator_t<char>{nullptr}}; 
+        case RUN_ABORTED: return dbg_string_t{"RUN_ABORTED"  , allocator_t<char>{nullptr}}; 
+        case RUN_STOPPED: return dbg_string_t{"RUN_STOPPED"  , allocator_t<char>{nullptr}};
+        default:          return dbg_string_t{"[RUN_UNKNOWN]", allocator_t<char>{nullptr}};
+    }
+}
+
+inline dbg_string_t dbg_epoll_events(uint32_t events) {
+    dbg_string_t ret{"[", allocator_t<char>{nullptr}};
+    if (events & EPOLLIN)    ret += "EPOLLIN|";
+    if (events & EPOLLOUT)   ret += "EPOLLOUT|";
+    if (events & EPOLLRDHUP) ret += "EPOLLRDHUP|";
+    if (events & EPOLLPRI)   ret += "EPOLLPRI|";
+    if (events & EPOLLERR)   ret += "EPOLLERR|";
+    if (events & EPOLLHUP)   ret += "EPOLLHUP|";
+    if (ret.size() > 1)
+        ret[ret.size() - 1] = ']';
+    else
+        ret += "]";
+    return ret;
+}
+
+inline modif_p dbg_create_tracer() {
     /* TODO: create a 'modif packet' that can be used to trace all the corutine's actions */
     return nullptr;
 }

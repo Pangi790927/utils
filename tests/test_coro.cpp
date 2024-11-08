@@ -250,6 +250,83 @@ int test4_semaphore() {
     return 0;
 }
 
+/* Test5
+================================================================================================= */
+
+int test5_counter = 0;
+int test5_stopped = 0;
+int test5_increment = 0;
+
+co::task_t test5_co_stop() {
+    for (int i = 0; i < 5; i++) {
+        for (int j = 0; j < 5; j++)
+            test5_counter++;
+        co_await co::force_stop(i);
+    }
+    co_return 0;
+}
+
+int test5_stopping() {
+    auto pool = co::create_pool();
+    pool->sched(test5_co_stop());
+
+    while (true) {
+        auto ret = pool->run();
+        test5_stopped++;
+        test5_increment += pool->stopval;
+        // pool->stopval = 0; // <- if the stopval is not reset, it keeps it's value 
+        if (ret == co::RUN_OK)
+            break;
+        if (ret != co::RUN_STOPPED) {
+            DBG("Something went wrong: %s", co::dbg_enum(ret).c_str());
+            return -1;
+        }
+    }
+
+    ASSERT_FN(CHK_BOOL(test5_stopped == 6));    /* 5 stops + 1 end */
+    ASSERT_FN(CHK_BOOL(test5_counter == 25));   /* 5*5 == 25 */
+    ASSERT_FN(CHK_BOOL(test5_increment == 14)); /* 0+1+2+3+4+4 the last one from not reseting stopval */
+
+    return 0;
+}
+
+/* Test6
+================================================================================================= */
+
+int test6_num = 0;
+
+co::task_t test6_co_sleep_1000us() {
+    co_await co::sleep_us(1000);
+    test6_num = 1;
+    DBG("Done");
+    co_return 0;
+}
+
+co::task_t test6_co_sleep_100ms() {
+    co_await co::sleep_ms(100);
+    test6_num *= 100;
+    DBG("Done");
+    co_return 0;
+}
+
+co::task_t test6_co_sleep_1s() {
+    co_await co::sleep_s(1);
+    test6_num += 5;
+    DBG("Done");
+    co_return 0;
+}
+
+int test6_sleeping() {
+    auto pool = co::create_pool();
+    pool->sched(test6_co_sleep_1s());
+    pool->sched(test6_co_sleep_100ms());
+    pool->sched(test6_co_sleep_1000us());
+
+    ASSERT_FN(pool->run());
+    ASSERT_FN(CHK_BOOL(test6_num == 105));
+    return 0;
+}
+
 /* Main:
 ================================================================================================= */
 
@@ -259,6 +336,8 @@ int main(int argc, char const *argv[]) {
         { test2_semaphore, "test2_semaphore" },
         { test3_semaphore, "test3_semaphore" },
         { test4_semaphore, "test4_semaphore" },
+        { test5_stopping,  "test5_stopping" },
+        { test6_sleeping,  "test6_sleeping" },
     };
 
     for (auto test : tests) {
