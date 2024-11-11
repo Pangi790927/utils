@@ -41,6 +41,7 @@
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
+#include <fcntl.h>
 
 /* The maximum amount of concurent timers that can be awaited */
 #ifndef CORO_MAX_TIMER_POOL_SIZE
@@ -356,8 +357,6 @@ private:
     std::unique_ptr<pool_internal_t> internal;
 };
 
-/* TODO: if the semaphore dies, the things waiting on it will still wait, that doesn't seem ok,
-maybe wake them up? give a warning? */
 struct sem_t {
     struct unlocker_t{ /* compatibility with guard objects ex: std::lock_guard guard(co_await s); */
         sem_t *sem;
@@ -371,6 +370,10 @@ struct sem_t {
     sem_t(sem_t&& sem) = delete;
     sem_t &operator = (sem_t& sem) = delete;
     sem_t &operator = (sem_t&& sem) = delete;
+
+    /* If the semaphore dies while waiters wait, they will all be forcefully destroyed (their entire
+    call stack) */
+    ~sem_t();
 
     sem_awaiter_t wait(); /* if awaited returns unlocker_t{} */
     error_e signal(); /* returns error if the pool disapeared */
@@ -417,12 +420,12 @@ using sem_waiter_handle_p =
                                                    evicted from the waiters list */
             std::list<                          /* List with the semaphore waiters */
                 std::pair<
-                    std::coroutine_handle<void>,/* The corutine handle */
+                    state_t *,                  /* The waiting corutine state */
                     std::shared_ptr<void>       /* Where the shared_ptr is actually stored */
                 >,
                 allocator_t<std::
                     pair<
-                        std::coroutine_handle<void>,
+                        state_t *,
                         std::shared_ptr<void>
                     >
                 >                               /* profiling shows the default is slow */
@@ -437,8 +440,8 @@ struct modif_t {
         std::function<error_e(state_t *)>,              /* exit_cbk */
         std::function<error_e(state_t *)>,              /* leave_cbk */
         std::function<error_e(state_t *)>,              /* enter_cbk */
-        std::function<error_e(state_t *, io_desc_t)>,   /* wait_io_cbk */
-        std::function<error_e(state_t *, io_desc_t)>,   /* unwait_io_cbk */
+        std::function<error_e(state_t *, io_desc_t&)>,  /* wait_io_cbk */
+        std::function<error_e(state_t *, io_desc_t&)>,  /* unwait_io_cbk */
 
          /* wait_sem_cbk - OBS: the std::shared_ptr<void> part can be ignored, it's internal */
         std::function<error_e(state_t *, sem_t *, sem_waiter_handle_p)>,
@@ -561,14 +564,14 @@ inline task_t wait_all(task<ret_v>... tasks);
 
 /* causes the running pool::run to stop, the function will stop at this point, can be resumed with
 another run */
-inline task_t force_stop(int64_t stopval);
+inline task_t force_stop(int64_t stopval = 0);
 
 /* EPOLL:
 ------------------------------------------------------------------------------------------------  */
 
 /* event can be EPOLLIN or EPOLLOUT (maybe some others work too?) This can be used to be notified
 when those are ready without doing a read or a write. */
-inline task_t wait_event(io_desc_t io_desc);
+inline task_t wait_event(const io_desc_t& io_desc);
 
 /* closing a file descriptor while it is managed by the coroutine pool will break the entire system
 so you must use stopfd on the file descriptor before you close it. This makes sure the fd is
@@ -577,7 +580,7 @@ awakened and ejected from the system before closing it. For example:
     co_await coro::stopfd(fd);
     close(fd);
 */
-inline task_t stop_io(io_desc_t io_desc);
+inline task_t stop_io(const io_desc_t& io_desc);
 
 /* Linux Specific:
 ------------------------------------------------------------------------------------------------  */
@@ -585,12 +588,12 @@ inline task_t stop_io(io_desc_t io_desc);
 inline task_t stopfd(int fd);
 
 /* TODO: describe their usage */
-inline task_t connect(int fd, sockaddr *sa, socklen_t *len);
-inline task_t accept(int fd, sockaddr *sa, socklen_t *len);
-inline task_t read(int fd, void *buff, size_t len);
-inline task_t write(int fd, const void *buff, size_t len);
-inline task_t read_sz(int fd, void *buff, size_t len);
-inline task_t write_sz(int fd, const void *buff, size_t len);
+inline task_t        connect(int fd, sockaddr *sa, socklen_t *len);
+inline task_t        accept(int fd, sockaddr *sa, socklen_t *len);
+inline task<ssize_t> read(int fd, void *buff, size_t len);
+inline task<ssize_t> write(int fd, const void *buff, size_t len);
+inline task<ssize_t> read_sz(int fd, void *buff, size_t len);
+inline task<ssize_t> write_sz(int fd, const void *buff, size_t len);
 
 /* Debug Interfaces:
 ------------------------------------------------------------------------------------------------  */
@@ -668,9 +671,17 @@ constexpr auto has(T&& data_struct, K&& key) {
     return std::forward<T>(data_struct).find(std::forward<K>(key)) != std::forward<T>(data_struct).end();
 }
 
-using sem_wait_list_t = std::list<std::pair<handle<void>, std::shared_ptr<void>>,
-        allocator_t<std::pair<std::coroutine_handle<void>,std::shared_ptr<void>>>>;
+using sem_wait_list_t = std::list<std::pair<state_t *, std::shared_ptr<void>>,
+        allocator_t<std::pair<state_t *,std::shared_ptr<void>>>>;
 using sem_wait_list_it = sem_wait_list_t::iterator;
+
+inline void destroy_state(state_t *curr) {
+    while (curr) {
+        state_t *next = curr->caller_state;
+        curr->self.destroy();
+        curr = next;
+    }
+}
 
 /* Allocator
 ------------------------------------------------------------------------------------------------- */
@@ -886,11 +897,11 @@ inline error_e do_exit_modifs(state_t *state) {
     return do_generic_modifs<CO_MODIF_EXIT_CBK>(state);
 }
 
-inline error_e do_wait_io_modifs(state_t *state, io_desc_t io_desc) {
+inline error_e do_wait_io_modifs(state_t *state, io_desc_t &io_desc) {
     return do_generic_modifs<CO_MODIF_WAIT_IO_CBK>(state, io_desc);
 }
 
-inline error_e do_unwait_io_modifs(state_t *state, io_desc_t io_desc) {
+inline error_e do_unwait_io_modifs(state_t *state, io_desc_t &io_desc) {
     return do_generic_modifs<CO_MODIF_UNWAIT_IO_CBK>(state, io_desc);
 }
 
@@ -998,8 +1009,7 @@ struct task {
 /* has to know about pool, will be implemented bellow the pool, but it is required here and to be
 accesible to others that need to clean the corutine (for example in modifs, if the tasks need
 killing) */
-inline handle<void> final_awaiter_cleanup(state_t *ending_task_state,
-        handle<void> ending_task_handle);
+inline handle<void> final_awaiter_cleanup(state_t *ending_task_state);
 
 template <typename T>
 struct task_state_t {
@@ -1008,7 +1018,7 @@ struct task_state_t {
         void await_resume() noexcept { /* TODO: here some exceptions? */ }
         
         handle<void> await_suspend(handle<task_state_t<T>> ending_task) noexcept {
-            return final_awaiter_cleanup(&ending_task.promise().state, ending_task);
+            return final_awaiter_cleanup(&ending_task.promise().state);
         }
 
         pool_t *pool;
@@ -1081,7 +1091,7 @@ struct io_pool_t {
         std::vector<waiter_t, allocator_t<waiter_t>> waiters;
     };
 
-    io_pool_t(pool_t *pool, std::deque<handle<void>, allocator_t<handle<void>>> &ready_tasks)
+    io_pool_t(pool_t *pool, std::deque<state_t *, allocator_t<state_t *>> &ready_tasks)
     :       pool{pool},
             fd_data_slow(allocator_t<int>{pool}),
             ret_evs(allocator_t<int>{pool}),
@@ -1137,14 +1147,14 @@ struct io_pool_t {
             if (~data->mask & events) {
                 CORO_DEBUG("WARNING: unexpected events[%s] on fd[%d] with mask[%s]",
                         dbg_epoll_events(events).c_str(), fd, dbg_epoll_events(data->mask).c_str());
-                /* TODO: figure it out */
+                /* TODO: figure it out (probably throw) */
             }
 
             uint32_t remove_mask = 0;
             for (auto &w : data->waiters) {
                 if (w.mask & events) {
                     w.state->err = ERROR_OK;
-                    ready_tasks.push_back(w.state->self);
+                    ready_tasks.push_back(w.state);
                     remove_mask |= w.mask;
                 }
             }
@@ -1159,7 +1169,7 @@ struct io_pool_t {
         return ERROR_OK;
     }
 
-    error_e add_waiter(state_t *state, io_desc_t io_desc) {
+    error_e add_waiter(state_t *state, const io_desc_t& io_desc) {
         if (!io_desc.events) {
             CORO_DEBUG("FAILED Can't await zero events fd[%d]", io_desc.fd);
             return ERROR_GENERIC;
@@ -1216,7 +1226,7 @@ struct io_pool_t {
         }
     }
 
-    error_e force_awake(io_desc_t io_desc, error_e retcode) {
+    error_e force_awake(const io_desc_t& io_desc, error_e retcode) {
         auto data = get_data(io_desc.fd);
         if (!data || !(data->mask & io_desc.events)) {
             return ERROR_OK;
@@ -1227,7 +1237,7 @@ struct io_pool_t {
             if ((w.mask & io_desc.events)) {
                 remove_mask |= w.mask;
                 w.state->err = retcode;
-                ready_tasks.push_back(w.state->self);
+                ready_tasks.push_back(w.state);
             }
         }
         error_e ret;
@@ -1239,8 +1249,36 @@ struct io_pool_t {
         return ERROR_OK;
     }
 
+    error_e clear() {
+        for (int i = 0; i < MAX_FAST_FD_CACHE; i++) {
+            if (auto *data = fd_data_fast[i]) {
+                for (auto &w : data->waiters) {
+                    destroy_state(w.state);
+                }
+                if (remove_waiter(io_desc_t{ .fd = i, .events = 0xffff'ffff }) != ERROR_OK) {
+                    CORO_DEBUG("FAILED to remove awaiter: fd:%d", i);
+                    return ERROR_GENERIC;
+                }
+            }
+            fd_data_fast[i] = nullptr;
+        }
+        for (auto &[fd, data] : fd_data_slow) {
+            if (data) {
+                for (auto &w : data->waiters) {
+                    destroy_state(w.state);
+                }
+                if (remove_waiter(io_desc_t{ .fd = fd, .events = 0xffff'ffff }) != ERROR_OK) {
+                    CORO_DEBUG("FAILED to remove awaiter: fd:%d", fd);
+                    return ERROR_GENERIC;
+                }
+            }
+        }
+        fd_data_slow.clear();
+        return ERROR_OK;
+    }
+
 private:
-    error_e remove_waiter(io_desc_t io_desc) {
+    error_e remove_waiter(const io_desc_t& io_desc) {
         auto data = get_data(io_desc.fd);
         if (!data) {
             CORO_DEBUG("FAILED attempted to remove an inexisting waiter fd[%d]", io_desc.fd);
@@ -1282,7 +1320,7 @@ private:
     }
 
     fd_data_t *get_data(int fd) {
-        if (fd < 0) /* TODO: maybe remove this check */
+        if (fd < 0)
             return nullptr;
         if (fd >= MAX_FAST_FD_CACHE)
             return has(fd_data_slow, fd) ? fd_data_slow[fd] : nullptr;
@@ -1295,7 +1333,7 @@ private:
         allocation/deallocation, if you find it, the reason, consider sharing it with me. */
         if (auto p = get_data(fd))
             deallocator_t<fd_data_t>{pool}(p);
-        if (fd < 0) /* TODO: maybe remove this check */
+        if (fd < 0)
             return ;
         if (fd >= MAX_FAST_FD_CACHE) {
             if (!data)
@@ -1316,7 +1354,7 @@ private:
 
     std::vector<struct epoll_event, allocator_t<struct epoll_event>> ret_evs;
 
-    std::deque<handle<void>, allocator_t<handle<void>>> &ready_tasks;
+    std::deque<state_t *, allocator_t<state_t *>> &ready_tasks;
     int epoll_fd = -1;
 };
 
@@ -1348,7 +1386,7 @@ struct timer_pool_t {
     /* This function arms the timer and it will be triggered once the timer expires */
     /* not necesary to be a member function on Linux, but I feel it is better to put it here for
     future use */
-    error_e set_timer(io_desc_t timer, const std::chrono::microseconds& time_us) {
+    error_e set_timer(const io_desc_t& timer, const std::chrono::microseconds& time_us) {
         int64_t t = time_us.count();
         itimerspec its = {};
         its.it_value.tv_nsec = (t % 1000'000) * 1000ULL;
@@ -1362,7 +1400,7 @@ struct timer_pool_t {
         return ERROR_OK;
     }
 
-    error_e free_timer(io_desc_t timer) {
+    error_e free_timer(const io_desc_t& timer) {
         if (stack_head + 1 < MAX_TIMER_POOL_SIZE) {
             stack_head++;
             timer_stack[stack_head] = timer.fd;
@@ -1387,7 +1425,11 @@ private:
 /* If this is not really needed here we move it bellow */
 struct pool_internal_t {
     pool_internal_t(pool_t *_pool)
-    : pool(_pool), ready_tasks{allocator_t<handle<void>>(_pool)}, io_pool{_pool, ready_tasks} {}
+    :   pool(_pool),
+        ready_tasks{allocator_t<state_t *>{_pool}},
+        io_pool{_pool, ready_tasks},
+        sem_pool{allocator_t<sem_t *>{_pool}}
+    {}
 
     template <typename T>
     void sched(task<T> task, modif_table_p parent_table) {
@@ -1400,7 +1442,7 @@ struct pool_internal_t {
         }
 
         /* third, we add the task to the pool */
-        ready_tasks.push_back(task.h);
+        ready_tasks.push_back(&task.h.promise().state);
     }
 
     run_e run() {
@@ -1420,12 +1462,12 @@ struct pool_internal_t {
         return ret_val;
     }
 
-    void push_ready(handle<void> h) {
-        ready_tasks.push_back(h);
+    void push_ready(state_t *state) {
+        ready_tasks.push_back(state);
     }
 
-    void push_ready_front(handle<void> h) {
-        ready_tasks.push_front(h);
+    void push_ready_front(state_t *state) {
+        ready_tasks.push_front(state);
     }
 
     handle<void> next_task() {
@@ -1438,7 +1480,7 @@ struct pool_internal_t {
         if (!ready_tasks.empty()) {
             auto ret = ready_tasks.front();
             ready_tasks.pop_front();
-            return ret;
+            return ret->self;
         }
 
         /* we have nothing else to do, we resume the pool_t::run */
@@ -1447,12 +1489,12 @@ struct pool_internal_t {
     }
 
     template <typename P>
-    error_e wait_io(handle<P> h, io_desc_t io_desc) {
+    error_e wait_io(handle<P> h, const io_desc_t& io_desc) {
         /* add the file descriptor inside epoll and schedule the corutine for waiting on it */
         return io_pool.add_waiter(&h.promise().state, io_desc);
     }
 
-    error_e stop_io(io_desc_t io_desc, error_e retcode) {
+    error_e stop_io(const io_desc_t& io_desc, error_e retcode) {
         /* stop the io and set it's return code as retcode */
         return io_pool.force_awake(io_desc, retcode);
     }
@@ -1463,24 +1505,38 @@ struct pool_internal_t {
         return timer_pool.get_timer(new_timer);
     }
 
-    error_e set_timer(io_desc_t timer, const std::chrono::microseconds& time_us) {
+    error_e set_timer(const io_desc_t& timer, const std::chrono::microseconds& time_us) {
         /* arms the timer referenced by the descriptor timer to be awakened after time_us
         microseconds from now */
         return timer_pool.set_timer(timer, time_us);
     }
 
-    error_e free_timer(io_desc_t timer) {
+    error_e free_timer(const io_desc_t& timer) {
         /* releases the ownership of the timer back to the pool */
         return timer_pool.free_timer(timer);
     }
+
+    void add_sem(sem_t *s) {
+        sem_pool.insert(s);
+    }
+
+    void rm_sem(sem_t *s) {
+        sem_pool.erase(s);
+    }
+
+    /* This function needs the semaphore definition so it is implemented bellow the semaphore */
+    error_e clear();
 
     run_e ret_val;
 
 private:
     pool_t *pool;
-    std::deque<handle<void>, allocator_t<handle<void>>> ready_tasks;
+    std::deque<state_t *, allocator_t<state_t *>> ready_tasks;
     io_pool_t io_pool;
     timer_pool_t timer_pool;
+
+    /* bookkeeping for end of life destruction */
+    std::set<sem_t *, std::less<sem_t *>, allocator_t<sem_t *>> sem_pool;
 };
 
 /* Allocate/deallocate need the definition of pool_internal_t */
@@ -1513,8 +1569,7 @@ inline void allocator_t<T>::deallocate(T* _p, std::size_t) noexcept {
 }
 
 
-inline handle<void> final_awaiter_cleanup(state_t *ending_task_state,
-        handle<void> ending_task_handle)
+inline handle<void> final_awaiter_cleanup(state_t *ending_task_state)
 {
     /* not sure if I should do something with the return value ... */
     state_t *caller_state = ending_task_state->caller_state;
@@ -1529,7 +1584,7 @@ inline handle<void> final_awaiter_cleanup(state_t *ending_task_state,
     no one needs it's return value(futures?). Else it will be destroyed by the caller. */
     /* TODO: maybe the future can just simply create a task and set it's coro as the continuation
     here? Such that the future continues in the caller_state branch? */
-    ending_task_handle.destroy();
+    ending_task_state->self.destroy();
     return pool->get_internal()->next_task();
 }
 
@@ -1547,12 +1602,25 @@ inline run_e pool_t::run() {
     return internal->run();
 }
 
+/*  OBS: if clear is called, it is called from outside of the pool, else this is UB
+    There are 4 places where tasks can reside:
+        1. the io_pool - waiting on some sort of event
+        2. a semaphore queue - waiting on a semaphore to signal
+        3. the ready queue - waiting to be rescheduled
+        4. call stacks - waiting for a call to finish
+
+    Tasks can be created by either:
+        a. sched
+        b. call
+
+    So on clear we will destroy the corutines in the following order:
+        *. whenever a corutine is terminated, also terminate the caller (state_t *caller_state)
+        1. terminate all corutines waiting on the io_pool
+        2. terminate all the corutines waiting on semaphores
+        3. terminate all corutines waiting in the ready queue, in the ready order, terminating
+ */
 inline error_e pool_t::clear() {
-    /* TODO: implement this */
-    /* TODO: try to implement this in a way that makes sense, ie, if a corutine is called by another
-    try to destroy the callee before the caller. Since io events are allways callees, destroy those
-    first */
-    return ERROR_OK;
+    return get_internal()->clear();
 }
 
 inline pool_internal_t *pool_t::get_internal() {
@@ -1578,7 +1646,7 @@ struct yield_awaiter_t {
     template <typename P>
     inline handle<void> await_suspend(handle<P> h) {
         auto pool = h.promise().state.pool;
-        pool->get_internal()->push_ready(h);
+        pool->get_internal()->push_ready(&h.promise().state);
         state = &h.promise().state;
         do_leave_modifs(state);
         return pool->get_internal()->next_task();
@@ -1636,8 +1704,9 @@ struct get_pool_awaiter_t {
 wait_cond and fd and co_await on it. The resulting integer must be positive to not be an error */
 struct io_awaiter_t {
     io_desc_t io_desc;
+    error_e err;
 
-    io_awaiter_t(io_desc_t io_desc) : io_desc(io_desc) {}
+    io_awaiter_t(const io_desc_t& io_desc) : io_desc(io_desc) {}
     io_awaiter_t(const io_awaiter_t &oth) = delete;
     io_awaiter_t &operator = (const io_awaiter_t &oth) = delete;
     io_awaiter_t(io_awaiter_t &&oth) = delete;
@@ -1653,12 +1722,9 @@ struct io_awaiter_t {
         if (do_wait_io_modifs(state, io_desc) != ERROR_OK) {
             return h;
         }
-        error_e err;
         if ((err = pool->get_internal()->wait_io(h, io_desc)) != ERROR_OK) {
-            /* TODO: log the fail */
             CORO_DEBUG("Failed to register wait: %s on: %s",
                     dbg_enum(err).c_str(), dbg_name(h).c_str());
-            state->err = err;
             return h;
         }
         return pool->get_internal()->next_task();
@@ -1666,7 +1732,7 @@ struct io_awaiter_t {
 
     error_e await_resume() {
         do_unwait_io_modifs(state, io_desc);
-        return state->err;
+        return err;
     }
 
 private:
@@ -1701,11 +1767,28 @@ struct sem_internal_t {
             return _awake_one();
         
         val++;
-        if (val == 0)
-            return _awake_one();
+        if (val == 0) {
+            /* for negative initialized semaphores: if there is no awaiter we create a slot to be
+            taken by the first awaiter by increasing the counter twice. It is, at least for me,
+            more intuitive to initialize the semaphore with a negative number amounting to the
+            count of signals needed to awake the semaphore, not with that number -1 */
+            if (waiting_on_sem.size())
+                return _awake_one();
+            else
+                val++;
+        }
 
         /* we awake when val is 0, do nothing on negative, only increment and on positive we
         don't have awaiters */
+        return ERROR_OK;
+    }
+
+    error_e clear() {
+        while (waiting_on_sem.size()) {
+            auto to_awake = waiting_on_sem.back();
+            destroy_state(to_awake.first);
+            waiting_on_sem.pop_back();
+        }
         return ERROR_OK;
     }
 
@@ -1714,7 +1797,7 @@ protected:
     friend sem_t;
     friend inline sem_p create_sem(pool_t *pool, int64_t val);
 
-    sem_waiter_handle_p push_waiter(handle<void> to_suspend) {
+    sem_waiter_handle_p push_waiter(state_t *state) {
         /* TODO: explanation no longer true, search other solution */
         /* Don't know another way to fix this mess, so, yeah... The problem is that the awaiter
         bellow needs a way to register the waiter on this list so it may potentialy awake it (via the
@@ -1725,7 +1808,7 @@ protected:
         auto p = std::shared_ptr<sem_wait_list_it>(
                 alloc<sem_wait_list_it>(pool), dealloc_create<sem_wait_list_it>(pool),
                 allocator_t<int>{pool});
-        waiting_on_sem.push_front({to_suspend, p});
+        waiting_on_sem.push_front({state, p});
         *p = waiting_on_sem.begin();
         return p;
     }
@@ -1746,11 +1829,28 @@ private:
         return ERROR_OK;
     }
 
-
     sem_wait_list_t waiting_on_sem;
     int64_t val;
     pool_t *pool;
 };
+
+inline error_e pool_internal_t::clear() {
+    if (io_pool.clear() != ERROR_OK) {
+        CORO_DEBUG("FAILED to clear events waiting for io");
+        return ERROR_GENERIC;
+    }
+    for (auto &s : sem_pool) {
+        if (s->get_internal()->clear() != ERROR_OK) {
+            CORO_DEBUG("FAILED to clear events waiting on one of the semaphores");
+            return ERROR_GENERIC; 
+        }
+    }
+    for (auto &state : ready_tasks) {
+        destroy_state(state);
+    }
+    ready_tasks.clear();
+    return ERROR_OK;
+}
 
 /* TODO: find a way for sem_waiter_handle_p to make sense */
 struct sem_awaiter_t {
@@ -1765,7 +1865,7 @@ struct sem_awaiter_t {
         state = &to_suspend.promise().state;
 
         auto pool = sem->get_internal()->get_pool();
-        psem_it = sem->get_internal()->push_waiter(to_suspend);
+        psem_it = sem->get_internal()->push_waiter(state);
         if (do_wait_sem_modifs(state, sem, psem_it) != ERROR_OK) {
             sem->get_internal()->erase_waiter(*psem_it);
             return to_suspend;
@@ -1794,7 +1894,15 @@ struct sem_awaiter_t {
 
 inline sem_t::sem_t(pool_t *pool, int64_t val)
 : internal(std::unique_ptr<sem_internal_t, deallocator_t<sem_internal_t>>(
-        alloc<sem_internal_t>(pool, pool, val), dealloc_create<sem_internal_t>(pool))) {}
+        alloc<sem_internal_t>(pool, pool, val), dealloc_create<sem_internal_t>(pool)))
+{
+    get_internal()->pool->get_internal()->add_sem(this);
+}
+
+inline sem_t::~sem_t() {
+    get_internal()->clear();
+    get_internal()->pool->get_internal()->rm_sem(this);
+}
 
 inline sem_awaiter_t sem_t::wait() { return sem_awaiter_t(this); }
 inline error_e       sem_t::signal() { return internal->signal(); }
@@ -1853,7 +1961,7 @@ inline task<modif_p> create_depend() {
     co_return nullptr;
 }
 
-inline task_t stop_io(io_desc_t io_desc) {
+inline task_t stop_io(const io_desc_t& io_desc) {
     co_return (co_await get_pool())->get_internal()->stop_io(io_desc, ERROR_WAKEUP);
 }
 
@@ -1873,7 +1981,7 @@ inline task_t force_stop(int64_t stopval) {
             if (do_leave_modifs(state) != ERROR_OK) {
                 CORO_DEBUG("WARNING: Can't interrupt stop");
             }
-            state->pool->get_internal()->push_ready_front(h);
+            state->pool->get_internal()->push_ready_front(state);
             state->pool->get_internal()->ret_val = RUN_STOPPED;
             state->pool->stopval = stopval;
             return std::noop_coroutine();
@@ -1939,39 +2047,163 @@ inline task_t sleep_s(uint64_t timeo_s) {
     co_return co_await sleep(std::chrono::seconds(timeo_s));
 }
 
-inline task_t wait_event(io_desc_t io_desc) {
+inline task_t wait_event(const io_desc_t& io_desc) {
     io_awaiter_t awaiter(io_desc);
     co_return (co_await awaiter);
 }
 
-inline task_t connect(int fd, sockaddr *sa, socklen_t *len) {
-    /* TODO */
+inline task_t connect(int fd, sockaddr *sa, socklen_t len) {
+    /* connect is special, first we take it and make it non-blocking for the initial connection */
+    int flags;
+    if ((flags = fcntl(fd, F_GETFL, 0)) < 0) {
+        CORO_DEBUG("FAILED to get old flags for fd[%d] %s[%d]",
+                fd, strerror(errno), errno);
+        co_return ERROR_GENERIC;
+    }
+    bool need_nonblock = (flags & O_NONBLOCK) == 0;
+    if (need_nonblock && (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)) {
+        CORO_DEBUG("FAILED to toggle on the O_NONBLOCK flag on fd[%d] %s[%d]",
+                fd, strerror(errno), errno);
+        co_return ERROR_GENERIC;
+    }
+
+    int res = ::connect(fd, sa, len);
+
+    if (need_nonblock && (flags = fcntl(fd, F_GETFL, 0) < 0)) {
+        CORO_DEBUG("FAILED to get the new flags for the fd[%d] %s[%d]",
+                fd, strerror(errno), errno);
+        co_return ERROR_GENERIC;
+    }
+    if (need_nonblock && (fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) < 0)) {
+        CORO_DEBUG("FAILED to toggle off the O_NONBLOCK flag on fd[%d] %s [%d]",
+                fd, strerror(errno), errno);
+        co_return ERROR_GENERIC;
+    }
+
+    /* now that our intention to connect was sent to the os we first check if the connection was
+    not done */
+    if (res < 0 && errno != EINPROGRESS) {
+        co_return res;
+    }
+
+    if (res == 0)
+        co_return 0;
+
+    /* if not, then we need to create an awaiter */
+    io_awaiter_t awaiter{io_desc_t{
+        .fd = fd,
+        .events = EPOLLOUT,
+    }};
+    error_e err = co_await awaiter;
+
+    if (err != ERROR_OK) {
+        CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
+                fd, dbg_enum(err).c_str(), strerror(errno), errno);
+        co_return err;
+    }
+
+    /* now that we where signaled back by the os, we can check that we are connected and return: */
+    int result;
+    socklen_t result_len = sizeof(result);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &result, &result_len) < 0) {
+        CORO_DEBUG("FAILED getsockopt: fd: %d err: %s[%d]", fd, strerror(errno), errno);
+        co_return ERROR_GENERIC;
+    }
+
+    if (result != 0) {
+        CORO_DEBUG("FAILED connect: fd: %d err: %s[%d]", fd, strerror(errno), errno);
+        co_return result;
+    }
+
     co_return ERROR_OK;
 }
 
 inline task_t accept(int fd, sockaddr *sa, socklen_t *len) {
-    /* TODO */
-    co_return ERROR_OK;
+    io_awaiter_t awaiter(io_desc_t{
+        .fd = fd,
+        .events = EPOLLIN | EPOLLHUP,
+    });
+    error_e err;
+    if (err != ERROR_OK) {
+        CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
+                fd, dbg_enum(err).c_str(), strerror(errno), errno);
+        co_return err;
+    }
+    /* OBS: those functions are a bit special, they return the result of the operation, not only
+    the enums listed in the lib */
+    co_return ::accept(fd, sa, len); 
 }
 
-inline task_t read(int fd, void *buff, size_t len) {
-    /* TODO */
-    co_return ERROR_OK;
+inline task<ssize_t> read(int fd, void *buff, size_t len) {
+    io_awaiter_t awaiter(io_desc_t{
+        .fd = fd,
+        .events = EPOLLIN,
+    });
+    error_e err;
+    if (err != ERROR_OK) {
+        CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
+                fd, dbg_enum(err).c_str(), strerror(errno), errno);
+        co_return err;
+    }
+    /* OBS: those functions are a bit special, they return the result of the operation, not only
+    the enums listed in the lib */
+    co_return ::read(fd, buff, len);
 }
 
-inline task_t write(int fd, const void *buff, size_t len) {
-    /* TODO */
-    co_return ERROR_OK;
+inline task<ssize_t> write(int fd, const void *buff, size_t len) {
+    io_awaiter_t awaiter(io_desc_t{
+        .fd = fd,
+        .events = EPOLLOUT,
+    });
+    error_e err;
+    if (err != ERROR_OK) {
+        CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
+                fd, dbg_enum(err).c_str(), strerror(errno), errno);
+        co_return err;
+    }
+    /* OBS: those functions are a bit special, they return the result of the operation, not only
+    the enums listed in the lib */
+    co_return ::write(fd, buff, len);
 }
 
-inline task_t read_sz(int fd, void *buff, size_t len) {
-    /* TODO */
-    co_return ERROR_OK;
+inline task<ssize_t> read_sz(int fd, void *buff, size_t len) {
+    ssize_t original_len = len;
+    while (true) {
+        if (!len)
+            break ;
+        ssize_t ret = co_await read(fd, buff, len);
+        if (ret == 0) {
+            CORO_DEBUG("Read failed, peer is closed, fd: %d", fd);
+            co_return -1;
+        }
+        else if (ret < 0) {
+            CORO_DEBUG("Failed read, fd: %d", fd);
+            co_return -1;
+        }
+        else {
+            len -= ret;
+            buff = (char *)buff + ret;
+        }
+    }
+    co_return original_len;
 }
 
-inline task_t write_sz(int fd, const void *buff, size_t len) {
-    /* TODO */
-    co_return ERROR_OK;
+inline task<ssize_t> write_sz(int fd, const void *buff, size_t len) {
+    ssize_t original_len = len;
+    while (true) {
+        if (!len)
+            break ;
+        ssize_t ret = co_await write(fd, buff, len);
+        if (ret < 0) {
+            CORO_DEBUG("Failed write, fd: %d", fd);
+            co_return -1;
+        }
+        else {
+            len -= ret;
+            buff = (char *)buff + ret;
+        }
+    }
+    co_return original_len;
 }
 
 struct task_modifs_getter_t {
@@ -2198,7 +2430,6 @@ inline dbg_string_t dbg_name(void *v) { return dbg_string_t{"", allocator_t<char
 
 inline void dbg_raw(const dbg_string_t& msg, const char *file, const char *func, int line) {
     if (log_str) {
-        /* TODO: function_name: this is bullshit, replace it with something else */
         log_str(dbg_format("[%" PRIu64 "] %s:%4d %s() :> %s\n", dbg_get_time(),
                 file, line, func, msg.c_str()));
     }
