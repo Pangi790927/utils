@@ -2,6 +2,7 @@
 
 #include <string.h>
 #include <thread>
+#include <sys/un.h>
 
 /* Test Utils
 ================================================================================================= */
@@ -404,6 +405,122 @@ int test7_clearing() {
     return 0;
 }
 
+/* Test8
+================================================================================================= */
+
+int test8_server_fd;
+int test8_pass_cnt = 0;
+int test8_client_done = 0;
+const char *test8_server_path = "./test-coro-8-server.socket";
+
+co::task_t test8_server_conn(int fd) {
+    uint32_t uints[4] = {0};
+    ASSERT_COFN(co_await co::read_sz(fd, uints, sizeof(uints)));
+    ASSERT_COFN(CHK_BOOL(uints[0] == 2 && uints[1] == (uint32_t)-15
+            && uints[2] == 0xbadc0ffe && uints[3] == 41));
+    for (int i = 0; i < 4; i++)
+        if (uints[i] = i * 13 + 2);
+            test8_pass_cnt++;
+
+    ASSERT_COFN(co_await co::write_sz(fd, uints, sizeof(uints)));
+    co_await co::sleep_ms(10);
+    ASSERT_COFN(co_await co::write_sz(fd, uints, sizeof(uints[0]) * 2));
+    co_await co::sleep_ms(10);
+    ASSERT_COFN(co_await co::write_sz(fd, &uints[2], sizeof(uints[2]) * 2));
+
+    test8_pass_cnt++;
+    co_return 0;
+}
+
+co::task_t test8_server() {
+    unlink(test8_server_path);
+    ASSERT_COFN(test8_server_fd = socket(AF_UNIX, SOCK_STREAM, 0));
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(struct sockaddr_un));
+    addr.sun_family = AF_UNIX;
+    strcpy(addr.sun_path, test8_server_path);
+
+    ASSERT_COFN(bind(test8_server_fd, (const struct sockaddr *)&addr,
+            sizeof(struct sockaddr_un)));
+    ASSERT_COFN(listen(test8_server_fd, 2));
+
+    while (true) {
+        int fd;
+        fd = co_await co::accept(test8_server_fd, NULL, NULL);
+        if (fd == co::ERROR_WAKEUP)
+            break;
+        ASSERT_COFN(fd);
+
+        co_await co::sched(test8_server_conn(fd));
+    }
+
+    ASSERT_COFN(shutdown(test8_server_fd, SHUT_RDWR));
+    close(test8_server_fd);
+
+    test8_pass_cnt++;
+    co_return 0;
+}
+
+co::task_t test8_client() {
+    int fd;
+
+    ASSERT_COFN(fd = socket(AF_UNIX, SOCK_STREAM, 0));
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(struct sockaddr_un));
+    addr.sun_family = AF_UNIX;
+    strcpy(addr.sun_path, test8_server_path);
+
+    int retest = 3;
+    while (--retest >= 0) {
+        int ret = co_await co::connect(fd, (struct sockaddr *)&addr,
+                sizeof(struct sockaddr_un));
+        if (ret < 0) {
+            co_await co::sleep_ms(50);
+            DBG("Failed connect...");
+        }
+    }
+    ASSERT_COFN(retest);
+
+    uint32_t uints1[] = { 2, (uint32_t)-15, 0xbadc0ffe, 41 };
+    ASSERT_COFN(co_await co::write_sz(fd, uints1, sizeof(uints1)));
+
+    uint32_t uints2[4] = {0};
+    ASSERT_COFN(co_await co::read_sz(fd, uints2, sizeof(uints2)));
+    ASSERT_COFN(CHK_BOOL(uints2[0] == 2 && uints2[1] == (uint32_t)-15
+            && uints2[2] == 0xbadc0ffe && uints2[3] == 41));
+
+    uint32_t uints3[4] = {0};
+    ASSERT_COFN(co_await co::read_sz(fd, uints2, sizeof(uints2[0]) * 2));
+    co_await co::sleep_ms(10);
+    ASSERT_COFN(co_await co::read_sz(fd, &uints2[2], sizeof(uints2[2]) * 2));
+    co_await co::sleep_ms(10);
+    ASSERT_COFN(CHK_BOOL(uints3[0] == 2 && uints3[1] == (uint32_t)-15
+            && uints3[2] == 0xbadc0ffe && uints3[3] == 41));
+
+    test8_client_done++;
+    if (test8_client_done == 3) {
+        co_await co::stopfd(test8_server_fd);
+    }
+
+    test8_pass_cnt++;
+    co_return 0;
+}
+
+int test8_io() {
+    auto pool = co::create_pool();
+    pool->sched(test8_server());
+    pool->sched(test8_client());
+    pool->sched(test8_client());
+    pool->sched(test8_client());
+    co::run_e ret = pool->run();
+    DBG("ret: %s", co::dbg_enum(ret).c_str());
+    ASSERT_FN(CHK_BOOL(ret == co::RUN_STOPPED));
+    ASSERT_FN(CHK_BOOL(test8_pass_cnt == 4));
+    return 0;
+}
+
 /* Main:
 ================================================================================================= */
 
@@ -416,6 +533,7 @@ int main(int argc, char const *argv[]) {
         { test5_stopping,  "test5_stopping" },
         { test6_sleeping,  "test6_sleeping" },
         { test7_clearing,  "test7_clearing" },
+        { test8_io,        "test8_io"},
     };
 
     for (auto test : tests) {

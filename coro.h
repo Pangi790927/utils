@@ -304,7 +304,7 @@ protected:
     template <typename U>
     friend struct allocator_t; /* lonely class */
 
-    pool_t *pool = nullptr; /* this allocator is allways called on a valid pool */
+    pool_t *pool = nullptr; /* this allocator should allways be called on a valid pool */
 };
 template <typename T> 
 struct deallocator_t { /* This class is part of the allocator implementation and is here only
