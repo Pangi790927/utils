@@ -3,7 +3,7 @@
 
 /* TODO:
     + write the fd stuff
-    - add debug modifs, things are already breaking and I don't know why
+    + add debug modifs, things are already breaking and I don't know why
     - consider implementing co_yield
     - consider implementing exception handling
     - write the tutorial at the start of this file
@@ -11,6 +11,9 @@
     - add the licence
     - check own comments
     - check the review again
+    - consider porting for windows
+    - consider multithreading
+    - tests
 */
 
 /* rewrite of co_utils.h ->
@@ -19,6 +22,13 @@
     - Meant to have one pool/thread or enable mutexes on pool (this will allow callbacks and pool
     sharing)
     - Meant to have modifs (callbacks on corutine execution)
+*/
+
+/*  Documentation Tutorial
+====================================================================================================
+
+
+====================================================================================================
 */
 
 #include <memory>
@@ -35,6 +45,7 @@
 #include <cinttypes>
 #include <list>
 #include <utility>
+#include <stack>
 
 #include <string.h>
 #include <unistd.h>
@@ -187,6 +198,8 @@ using pool_p = std::shared_ptr<pool_t>;
 using modif_p = std::shared_ptr<modif_t>;
 using modif_table_p = std::shared_ptr<modif_table_t>;
 
+using modif_pack_t = std::vector<modif_p>;
+
 /* Tasks errors */
 enum error_e : int32_t {
     ERROR_OK      =  0,
@@ -207,20 +220,41 @@ enum run_e : int32_t {
 };
 
 enum modif_e : int32_t {
+    /* This is called when a task is called (on the task), via 'co_await task' */
     CO_MODIF_CALL_CBK = 0,
+
+    /* This is called on the corutine that is scheduled. Other mods are inherited before this is
+    called. The return value of the callback is ignored. */
     CO_MODIF_SCHED_CBK,
+
+    /* This is called on a corutine right before it is destroyed. The return value of the callback
+    is ignored */
     CO_MODIF_EXIT_CBK,
+
+    /* This is called on each suspended corutine. The return value of the callback is ignored*/
     CO_MODIF_LEAVE_CBK,
+
+    /* This is called on a resume. The return value of the callback is ignored */
     CO_MODIF_ENTER_CBK,
+
+    /* This is called when a corutine is waiting for an IO (after the leave cbk). If the return
+    value is not ERROR_OK, then the wait is aborted. */
     CO_MODIF_WAIT_IO_CBK,
+
+    /* This is called when the io is done and the corutine that awaited it is resumed */
     CO_MODIF_UNWAIT_IO_CBK,
+
+    /* This is similar to wait_io, but on a semaphore */
     CO_MODIF_WAIT_SEM_CBK,
+
+    /* This is similar to unwait_io, but on a semaphore */
     CO_MODIF_UNWAIT_SEM_CBK,
 
     CO_MODIF_COUNT,
 };
 
 enum modif_flags_e : int32_t {
+    CO_MODIF_INHERIT_NONE = 0x0,
     CO_MODIF_INHERIT_ON_CALL = 0x1,
     CO_MODIF_INHERIT_ON_SCHED = 0x2,
 };
@@ -235,6 +269,7 @@ struct sem_awaiter_t;
 struct pool_internal_t;
 struct sem_internal_t;
 struct allocator_memory_t;
+struct io_desc_t;
 
 template <typename T>
 struct sched_awaiter_t;
@@ -300,6 +335,12 @@ struct allocator_t {
     T* allocate(size_t n);
     void deallocate(T* _p, std::size_t n) noexcept;
 
+    template <typename U>
+    bool operator != (const allocator_t<U>& o) noexcept { return this->pool != o.pool; }
+
+    template <typename U>
+    bool operator == (const allocator_t<U>& o) noexcept { return this->pool == o.pool; }
+
 protected:
     template <typename U>
     friend struct allocator_t; /* lonely class */
@@ -309,7 +350,7 @@ protected:
 template <typename T> 
 struct deallocator_t { /* This class is part of the allocator implementation and is here only
                           because a definition needs it as a full type */
-    pool_t *pool;
+    pool_t *pool = nullptr;
     void operator ()(T *p) { p->~T(); allocator_t<T>{pool}.deallocate(p, 1); }
 };
 
@@ -329,7 +370,7 @@ struct pool_t {
 
     /* Same as coro::sched, but used outside of a corutine, based on the pool */
     template <typename T>
-    void sched(task<T> task, const std::vector<modif_p>& v = {}); /* ignores return type */
+    void sched(task<T> task, const modif_pack_t& v = {}); /* ignores return type */
 
     /* runs the event loop */
     run_e run();
@@ -337,6 +378,10 @@ struct pool_t {
     /* clears all the corutines that are linked to this pool, so all waiters, all ready tasks, etc.
     This will happen automatically inside the destructor */
     error_e clear();
+
+    /* stops awaiters from waiting on the descriptor (this is the non-awaiting variant) */
+    error_e stop_io(const io_desc_t& io_desc);
+    error_e stop_fd(int fd);
 
     /* Better to not touch this function, you need to understand the internals of pool_t to use it */
     pool_internal_t *get_internal();
@@ -402,7 +447,7 @@ struct io_desc_t {
 /* This is the state struct that each corutine has */
 struct state_t {
     error_e err = ERROR_OK;             /* holds the error return in diverse cases */
-    pool_t *pool;                       /* the pool of this coro */
+    pool_t *pool = nullptr;             /* the pool of this coro */
     modif_table_p modif_table;          /* we allocate a table only if there are mods */
 
     state_t *caller_state = nullptr;    /* this holds the caller's state, and with it the return path */ 
@@ -434,7 +479,7 @@ using sem_waiter_handle_p =
 
 /* A modif is a callback for a specifi stage in the corutine's flow */
 struct modif_t {
-    std::variant<
+    using variant_t = std::variant<
         std::function<error_e(state_t *)>,              /* call_cbk */
         std::function<error_e(state_t *)>,              /* sched_cbk */
         std::function<error_e(state_t *)>,              /* exit_cbk */
@@ -448,8 +493,9 @@ struct modif_t {
 
          /* unwait_sem_cbk */
         std::function<error_e(state_t *, sem_t *, sem_waiter_handle_p)>
-    > cbk;
+    >;
 
+    variant_t cbk;
     modif_e type = CO_MODIF_COUNT;
     modif_flags_e flags = CO_MODIF_INHERIT_ON_CALL;
 };
@@ -462,11 +508,12 @@ inline std::shared_ptr<pool_t> create_pool();
 /* gets the pool of the current corutine, necesary if you want to sched corutines from callbacks.
 Don't forget you need multithreading enabled if you want to schedule from another thread. */
 inline task<pool_t *> get_pool();
+inline task<state_t *> get_state();
 
 /* This does not stop the curent corutine, it only schedules the task, but does not yet run it.
 Modifs duplicates are eliminated. */
 template <typename T>
-inline sched_awaiter_t<T> sched(task<T> to_sched, const std::vector<modif_p>& v = {});
+inline sched_awaiter_t<T> sched(task<T> to_sched, const modif_pack_t& v = {});
 
 /* This stops the current coroutine from running and places it at the end of the ready queue. */
 inline yield_awaiter_t yield();
@@ -474,11 +521,11 @@ inline yield_awaiter_t yield();
 /* Modifications
 ------------------------------------------------------------------------------------------------  */
 
-template <typename Cbk>
-inline modif_p create_modif(pool_t *pool, modif_e type, Cbk&& cbk, modif_flags_e flags);
+template <modif_e type, typename Cbk>
+inline modif_p create_modif(pool_t *pool, modif_flags_e flags, Cbk&& cbk);
 
-template <typename Cbk>
-inline modif_p create_modif(pool_p pool, modif_e type, Cbk&& cbk, modif_flags_e flags);
+template <modif_e type, typename Cbk>
+inline modif_p create_modif(pool_p  pool, modif_flags_e flags, Cbk&& cbk);
 
 /* This returns the internal vec that holds the different modifications of the task. Changing them
 here is ill-defined */
@@ -487,16 +534,16 @@ inline std::vector<modif_p> task_modifs(task<T> t);
 
 /* This adds a modifier to the task and returns the task. Duplicates will be ignored */
 template <typename T>
-inline task<T> add_modifs(task<T> t, std::set<modif_p> mods); /* not awaitable */
+inline task<T> add_modifs(pool_t *pool, task<T> t, const std::set<modif_p>& mods); /* not awaitable */
 
 /* Removes modifier from the vector */
 template <typename T>
-inline task<T> rm_modifs(task<T> t, std::set<modif_p> mods); /* not awaitable */
+inline task<T> rm_modifs(task<T> t, const std::set<modif_p>& mods); /* not awaitable */
 
 /* same as above, but adds them for the current task */
 inline task<std::vector<modif_p>> task_modifs();
-inline task_t add_modifs(std::set<modif_p> mods); 
-inline task_t rm_modifs(std::set<modif_p> mods);
+inline task_t add_modifs(const std::set<modif_p>& mods); 
+inline task_t rm_modifs(const std::set<modif_p>& mods);
 
 /* calls an awaitable inside a task_t, this is done to be able to use modifs on awaitables */
 template <typename Awaiter>
@@ -505,9 +552,11 @@ inline task_t await(Awaiter&& awaiter);
 /* Timing
 ------------------------------------------------------------------------------------------------  */
 
-/* creates a timeout modification, i.e. the corutine will be stopped from executing if the given
-time passes */
-inline modif_p create_timeo(const std::chrono::microseconds& timeo);
+/* adds a timeout modification to the task, i.e. the corutine will be stopped from executing if the
+given time passes (uses create_killer) */
+template <typename T>
+inline task<std::pair<T, error_e>> create_timeo(
+        task<T> t, pool_t *pool, const std::chrono::microseconds& timeo);
 
 /* sleep functions */
 inline task_t sleep_us(uint64_t timeo_us);
@@ -535,16 +584,10 @@ inline sem_p create_sem(pool_t *pool, int64_t val = 0);
 inline sem_p create_sem(pool_p  pool, int64_t val = 0);
 inline task<sem_p> create_sem(int64_t val = 0);
 
-/* a modification that depends on the pool, this is used in scheduled coroutines to end the current
-corutine if they die. This is not inherited by either calls or spawns, but it is inherited by other
-calls to create_depend further down. */
-inline task<modif_p> create_depend();
-
 /* modifier that, once signaled, will awake the corutine and make it return ERROR_WAKEUP. If the
 corutine is not waiting it will return as soon as it reaches any co_await ?or co_yield? */
-/* TODO: don't forget to awake the fds nicely(something like stopfd) */
-inline modif_p create_killer();
-inline error_e sig_killer(modif_p p);
+/* TODO: don't forget to awake the fds nicely(something like stop_fd) */
+inline std::pair<modif_pack_t, std::function<error_e(void)>> create_killer(pool_t *pool, error_e e);
 
 /* takes a task and adds the requred modifications to it such that the returned object will be
 returned once the return value of the task is available so:
@@ -555,12 +598,12 @@ returned once the return value of the task is available so:
     co_await fut; // returns the value of co_task once it has finished executing 
 */
 template <typename T>
-inline task<T> create_future(task<T> t); /* not awaitable */
+inline task<T> create_future(pool_t *pool, task<T> t); /* not awaitable */
 
 /* wait for all the tasks to finish, the return value can be found in the respective task, killing
 one kills all (sig_killer installed in all). The inheritance is the same as with 'call'. */
 template <typename ...ret_v>
-inline task_t wait_all(task<ret_v>... tasks);
+inline task<std::tuple<ret_v>...> wait_all(task<ret_v>... tasks);
 
 /* causes the running pool::run to stop, the function will stop at this point, can be resumed with
 another run */
@@ -574,10 +617,10 @@ when those are ready without doing a read or a write. */
 inline task_t wait_event(const io_desc_t& io_desc);
 
 /* closing a file descriptor while it is managed by the coroutine pool will break the entire system
-so you must use stopfd on the file descriptor before you close it. This makes sure the fd is
+so you must use stop_fd on the file descriptor before you close it. This makes sure the fd is
 awakened and ejected from the system before closing it. For example:
 
-    co_await coro::stopfd(fd);
+    co_await coro::stop_fd(fd);
     close(fd);
 */
 inline task_t stop_io(const io_desc_t& io_desc);
@@ -585,7 +628,7 @@ inline task_t stop_io(const io_desc_t& io_desc);
 /* Linux Specific:
 ------------------------------------------------------------------------------------------------  */
 
-inline task_t stopfd(int fd);
+inline task_t stop_fd(int fd);
 
 /* TODO: describe their usage */
 inline task_t        connect(int fd, sockaddr *sa, socklen_t *len);
@@ -620,7 +663,7 @@ inline void * dbg_register_name(void *addr, const char *fmt, Args&&...);
 /* creates a modifier that traces things from corutines, mostly a convenience function, it also
 uses the log_str function, or does nothing else if it isn't defined. If you don't like the
 verbosity, be free to null any callback you don't care about. */
-inline modif_p dbg_create_tracer();
+inline modif_pack_t dbg_create_tracer(pool_t *pool);
 
 /* Obtains the name given to the respective task, handle or address */
 template <typename T>
@@ -668,7 +711,8 @@ using handle = std::coroutine_handle<P>;
 
 template <typename T, typename K>
 constexpr auto has(T&& data_struct, K&& key) {
-    return std::forward<T>(data_struct).find(std::forward<K>(key)) != std::forward<T>(data_struct).end();
+    return std::forward<T>(data_struct).find(std::forward<K>(key))
+            != std::forward<T>(data_struct).end();
 }
 
 using sem_wait_list_t = std::list<std::pair<state_t *, std::shared_ptr<void>>,
@@ -682,6 +726,19 @@ inline void destroy_state(state_t *curr) {
         curr = next;
     }
 }
+
+struct FnScope {
+    std::function<void(void)> fn;
+    FnScope(std::function<void(void)> fn) : fn(fn) {}
+    ~FnScope() {
+        if (fn)
+            fn();
+    }
+    void precall() {
+        fn();
+        fn = {};
+    }
+};
 
 /* Allocator
 ------------------------------------------------------------------------------------------------- */
@@ -697,7 +754,7 @@ struct allocator_memory_t {
 
         alignas(allocator_t<int>::common_alignment) bucket_object_t objects[cnt];
         int free_stack[cnt];
-        int stack_head;
+        int stack_head = 0;
 
         static constexpr int floorlog2(int x) {
             return x == 1 ? 0 : 1 + floorlog2(x >> 1);
@@ -718,6 +775,10 @@ struct allocator_memory_t {
             if (!stack_head)
                 return NULL;
 
+            // if (stack_head > cnt) {
+                // CORO_DEBUG("alloc bytes[%ld] stack_head[%d] obj_sz[%ld], cnt[%ld]",
+                //         bytes, stack_head, obj_sz, cnt);
+            // }
             void *ret = &objects[free_stack[stack_head]];
             stack_head--;
             return ret;
@@ -914,60 +975,20 @@ inline error_e do_unwait_sem_modifs(state_t *state, sem_t *sem, sem_waiter_handl
 }
 
 /* considering you may want to create a modif at runtime this seems to be the best way */
-template <typename Cbk>
-inline modif_p create_modif(pool_t *pool, modif_e type, Cbk&& cbk, modif_flags_e flags) {
+template <modif_e type, typename Cbk>
+inline modif_p create_modif(pool_t *pool, modif_flags_e flags, Cbk&& cbk) {
     modif_p ret = modif_p(alloc<modif_t>(pool, modif_t{
         .type = type,
         .flags = flags,
     }), dealloc_create<modif_t>(pool), allocator_t<int>{pool});
-
-    switch (type) {
-        case CO_MODIF_CALL_CBK:
-            ret->cbk.emplace<CO_MODIF_CALL_CBK>(std::forward<Cbk>(cbk));
-            break;
-
-        case CO_MODIF_SCHED_CBK:
-            ret->cbk.emplace<CO_MODIF_SCHED_CBK>(std::forward<Cbk>(cbk));
-            break;
-
-        case CO_MODIF_EXIT_CBK:
-            ret->cbk.emplace<CO_MODIF_EXIT_CBK>(std::forward<Cbk>(cbk));
-            break;
-
-        case CO_MODIF_LEAVE_CBK:
-            ret->cbk.emplace<CO_MODIF_LEAVE_CBK>(std::forward<Cbk>(cbk));
-            break;
-
-        case CO_MODIF_ENTER_CBK:
-            ret->cbk.emplace<CO_MODIF_ENTER_CBK>(std::forward<Cbk>(cbk));
-            break;
-
-        case CO_MODIF_WAIT_IO_CBK:
-            ret->cbk.emplace<CO_MODIF_WAIT_IO_CBK>(std::forward<Cbk>(cbk));
-            break;
-
-        case CO_MODIF_UNWAIT_IO_CBK:
-            ret->cbk.emplace<CO_MODIF_UNWAIT_IO_CBK>(std::forward<Cbk>(cbk));
-            break;
-
-        case CO_MODIF_WAIT_SEM_CBK:
-            ret->cbk.emplace<CO_MODIF_WAIT_SEM_CBK>(std::forward<Cbk>(cbk));
-            break;
-
-        case CO_MODIF_UNWAIT_SEM_CBK:
-            ret->cbk.emplace<CO_MODIF_UNWAIT_SEM_CBK>(std::forward<Cbk>(cbk));
-            break;
-
-        default:
-            return nullptr;
-            break;
-    }
+    
+    ret->cbk = modif_t::variant_t(std::in_place_index_t<type>{}, std::forward<Cbk>(cbk));
     return ret;
 }
 
-template <typename Cbk>
-inline modif_p create_modif(pool_p pool, modif_e type, Cbk&& cbk, modif_flags_e flags) {
-    return create_modif(pool.get(), type, std::forward<Cbk>(cbk), flags);
+template <modif_e type, typename Cbk>
+inline modif_p create_modif(pool_p pool, modif_flags_e flags, Cbk&& cbk) {
+    return create_modif<type>(pool.get(), flags, std::forward<Cbk>(cbk));
 }
 /* The Task
 ------------------------------------------------------------------------------------------------- */
@@ -999,6 +1020,7 @@ struct task {
     handle<void> await_suspend(handle<P> caller) noexcept;
     T            await_resume() noexcept;
     pool_t       *get_pool();
+    state_t      *get_state();
 
     error_e get_err() { return ERROR_OK; };
 
@@ -1020,8 +1042,6 @@ struct task_state_t {
         handle<void> await_suspend(handle<task_state_t<T>> ending_task) noexcept {
             return final_awaiter_cleanup(&ending_task.promise().state);
         }
-
-        pool_t *pool;
     };
 
     task<T> get_return_object() {
@@ -1031,7 +1051,7 @@ struct task_state_t {
     }
 
     std::suspend_always initial_suspend() noexcept { return {}; }
-    final_awaiter_t     final_suspend() noexcept   { return final_awaiter_t{ .pool = state.pool }; }
+    final_awaiter_t     final_suspend() noexcept   { return final_awaiter_t{}; }
     void                unhandled_exception()      { /* TODO: something with exceptions */ }
 
     template <typename R>
@@ -1048,12 +1068,14 @@ struct task_state_t {
 template <typename T>
 template <typename P>
 inline handle<void> task<T>::await_suspend(handle<P> caller) noexcept {
+    do_leave_modifs(&caller.promise().state);
     ever_called = true;
 
     h.promise().state.caller_state = &caller.promise().state;
     h.promise().state.pool = caller.promise().state.pool;
 
     if (do_call_modifs(&this->h.promise().state, caller.promise().state.modif_table) != ERROR_OK) {
+        do_entry_modifs(&caller.promise().state);
         return caller;
     }
 
@@ -1064,6 +1086,7 @@ template <typename T>
 inline T task<T>::await_resume() noexcept {
     ever_called = true;
     auto ret = std::get<T>(h.promise()._ret);
+    do_entry_modifs(h.promise().state.caller_state);
     h.destroy();
     return ret;
 }
@@ -1071,6 +1094,11 @@ inline T task<T>::await_resume() noexcept {
 template <typename T>
 inline pool_t *task<T>::get_pool() {
     return h.promise().state.pool;
+}
+
+template <typename T>
+inline state_t *task<T>::get_state() {
+    return &h.promise().state;
 }
 
 /* The Pool & Epoll engine
@@ -1453,12 +1481,13 @@ struct pool_internal_t {
 
         dbg_register_name(task_t{std::noop_coroutine()}, "std::noop_coroutine");
 
-        auto h = next_task();
-        if (h == std::noop_coroutine())
+        state_t *state = next_task_state();
+        if (state == nullptr)
             return RUN_OK;
 
         ret_val = RUN_ABORTED;
-        h.resume();
+        do_entry_modifs(state);
+        state->self.resume();
         return ret_val;
     }
 
@@ -1470,22 +1499,37 @@ struct pool_internal_t {
         ready_tasks.push_front(state);
     }
 
-    handle<void> next_task() {
+    bool remove_ready(state_t *state) {
+        for (auto it = ready_tasks.begin(); it != ready_tasks.end(); it++) {
+            if (*it == state) {
+                ready_tasks.erase(it);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    state_t *next_task_state() {
         if (io_pool.handle_ready() != ERROR_OK) {
             CORO_DEBUG("Failed io pool");
             ret_val = RUN_ERRORED;
-            return std::noop_coroutine();
+            return nullptr;
         }
 
         if (!ready_tasks.empty()) {
             auto ret = ready_tasks.front();
             ready_tasks.pop_front();
-            return ret->self;
+            return ret;
         }
 
         /* we have nothing else to do, we resume the pool_t::run */
         ret_val = RUN_OK;
-        return std::noop_coroutine();
+        return nullptr;
+    }
+
+    handle<void> next_task() {
+        state_t *ns = next_task_state();
+        return ns ? ns->self : std::noop_coroutine();
     }
 
     template <typename P>
@@ -1571,12 +1615,12 @@ inline void allocator_t<T>::deallocate(T* _p, std::size_t) noexcept {
 
 inline handle<void> final_awaiter_cleanup(state_t *ending_task_state)
 {
+    do_leave_modifs(ending_task_state);
     /* not sure if I should do something with the return value ... */
     state_t *caller_state = ending_task_state->caller_state;
     do_exit_modifs(ending_task_state);
 
     if (caller_state) {
-        do_entry_modifs(caller_state);
         return caller_state->self;
     }
     auto pool = ending_task_state->pool;
@@ -1594,7 +1638,7 @@ inline pool_t::pool_t() {
 }
 
 template <typename T>
-inline void pool_t::sched(task<T> task, const std::vector<modif_p>& v) {
+inline void pool_t::sched(task<T> task, const modif_pack_t& v) {
     internal->sched(task, create_modif_table(this, v));
 }
 
@@ -1627,6 +1671,14 @@ inline pool_internal_t *pool_t::get_internal() {
     return internal.get();
 }
 
+inline error_e pool_t::stop_io(const io_desc_t& io_desc) {
+    return get_internal()->stop_io(io_desc, ERROR_WAKEUP);
+}
+
+inline error_e pool_t::stop_fd(int fd) {
+    return stop_io(io_desc_t{.fd = fd});
+}
+
 inline std::shared_ptr<pool_t> create_pool() {
     return std::shared_ptr<pool_t>(new pool_t{});
 }
@@ -1646,9 +1698,9 @@ struct yield_awaiter_t {
     template <typename P>
     inline handle<void> await_suspend(handle<P> h) {
         auto pool = h.promise().state.pool;
-        pool->get_internal()->push_ready(&h.promise().state);
         state = &h.promise().state;
-        do_leave_modifs(state);
+        do_leave_modifs(&h.promise().state);
+        pool->get_internal()->push_ready(&h.promise().state);
         return pool->get_internal()->next_task();
     }
 
@@ -1661,7 +1713,7 @@ struct yield_awaiter_t {
 
 template <typename T>
 struct sched_awaiter_t {
-    sched_awaiter_t(task<T> t, modif_table_p table) : t(t), table(table) {}
+    sched_awaiter_t(task<T> t, std::vector<modif_p> v) : t(t), v(v) {}
     sched_awaiter_t(const sched_awaiter_t &oth) = delete;
     sched_awaiter_t &operator = (const sched_awaiter_t &oth) = delete;
     sched_awaiter_t(sched_awaiter_t &&oth) = delete;
@@ -1673,12 +1725,12 @@ struct sched_awaiter_t {
     template <typename P>
     bool await_suspend(handle<P> h) {
         auto pool = h.promise().state.pool;
-        pool->get_internal()->sched(t, table);
+        pool->get_internal()->sched(t, create_modif_table(pool, v));
         return false;
     }
 
     task<T> t;
-    modif_table_p table;
+    std::vector<modif_p> v;
 };
 
 struct get_pool_awaiter_t {
@@ -1700,6 +1752,26 @@ struct get_pool_awaiter_t {
     pool_t *pool;
 };
 
+
+struct get_state_awaiter_t {
+    get_state_awaiter_t() {}
+    get_state_awaiter_t(const get_state_awaiter_t &oth) = delete;
+    get_state_awaiter_t &operator = (const get_state_awaiter_t &oth) = delete;
+    get_state_awaiter_t(get_state_awaiter_t &&oth) = delete;
+    get_state_awaiter_t &operator = (get_state_awaiter_t &&oth) = delete;
+
+    template <typename P>
+    bool await_suspend(handle<P> h) {
+        state = &h.promise().state;
+        return false;
+    }
+
+    bool     await_ready()              { return false; };
+    state_t *await_resume()             { return state; }
+
+    state_t *state;
+};
+
 /* This is the object with which you wait for a file descriptor, you create it with a valid
 wait_cond and fd and co_await on it. The resulting integer must be positive to not be an error */
 struct io_awaiter_t {
@@ -1719,12 +1791,15 @@ struct io_awaiter_t {
         auto pool = h.promise().state.pool;
         state = &h.promise().state;
         /* in case we can't schedule the fd we log the failure and return the same coro */
+        do_leave_modifs(state);
         if (do_wait_io_modifs(state, io_desc) != ERROR_OK) {
+            do_entry_modifs(state);
             return h;
         }
         if ((err = pool->get_internal()->wait_io(h, io_desc)) != ERROR_OK) {
             CORO_DEBUG("Failed to register wait: %s on: %s",
                     dbg_enum(err).c_str(), dbg_name(h).c_str());
+            do_entry_modifs(state);
             return h;
         }
         return pool->get_internal()->next_task();
@@ -1732,7 +1807,8 @@ struct io_awaiter_t {
 
     error_e await_resume() {
         do_unwait_io_modifs(state, io_desc);
-        return err;
+        do_entry_modifs(state);
+        return state->err;
     }
 
 private:
@@ -1792,6 +1868,11 @@ struct sem_internal_t {
         return ERROR_OK;
     }
 
+    /* be carefull with this one */
+    void erase_waiter(sem_wait_list_it it) {
+        waiting_on_sem.erase(it);
+    }
+
 protected:
     friend sem_awaiter_t;
     friend sem_t;
@@ -1813,9 +1894,6 @@ protected:
         return p;
     }
 
-    void erase_waiter(sem_wait_list_it it) {
-        waiting_on_sem.erase(it);
-    }
 
     pool_t *get_pool() {
         return pool;
@@ -1866,8 +1944,11 @@ struct sem_awaiter_t {
 
         auto pool = sem->get_internal()->get_pool();
         psem_it = sem->get_internal()->push_waiter(state);
+
+        do_leave_modifs(state);
         if (do_wait_sem_modifs(state, sem, psem_it) != ERROR_OK) {
             sem->get_internal()->erase_waiter(*psem_it);
+            do_entry_modifs(state);
             return to_suspend;
         }
 
@@ -1876,8 +1957,10 @@ struct sem_awaiter_t {
     }
 
     sem_t::unlocker_t await_resume() {
-        if (triggered)
+        if (triggered) {
             do_unwait_sem_modifs(state, sem, psem_it);
+            do_entry_modifs(state);
+        }
         triggered = false;
         return sem_t::unlocker_t(sem);
     }
@@ -1887,7 +1970,7 @@ struct sem_awaiter_t {
     }
 
     state_t *state = nullptr;
-    sem_t *sem;
+    sem_t *sem = nullptr;
     sem_waiter_handle_p psem_it;
     bool triggered = false;
 };
@@ -1928,15 +2011,22 @@ inline task<sem_p> create_sem(int64_t val) {
 /* Functions
 ------------------------------------------------------------------------------------------------  */
 
-template <typename ...Args>
-inline task_t wait_all(task<Args>... tasks) {
-    /* TODO: this should return once all the tasks have been executed (use futures here?) */
-    co_return ERROR_OK;
+template <typename ...ret_v>
+inline task<std::tuple<ret_v...>> wait_all(task<ret_v>... tasks) {
+    auto pool = co_await get_pool();
+
+    std::tuple<task<ret_v>...> futures = {create_future(pool, tasks)...};
+
+    (co_await sched(tasks), ...);
+
+    co_return co_await std::apply([](auto&&... futures) -> task<std::tuple<ret_v...>> {
+        co_return std::tuple<ret_v...>{co_await futures...};
+    }, futures);
 }
 
 template <typename T>
-inline sched_awaiter_t<T> sched(task<T> to_sched, const std::vector<modif_p>& v) {
-    return sched_awaiter_t(to_sched, create_modif_table(to_sched.h.promise().state.pool, v));
+inline sched_awaiter_t<T> sched(task<T> to_sched, const modif_pack_t& v) {
+    return sched_awaiter_t(to_sched, v);
 }
 
 template <typename Awaiter>
@@ -1954,18 +2044,16 @@ inline task<pool_t *> get_pool() {
     co_return co_await awaiter;
 }
 
-inline task<modif_p> create_depend() {
-    /* TODO: create a killer, that will kill this corutine and the ones spawned from it? if the
-    depended task fails, this is kinda stupid, I may ignore it, (or maybe it is necesary to be able
-    to do something like wait_any?) */
-    co_return nullptr;
+inline task<state_t *> get_state() {
+    get_state_awaiter_t awaiter;
+    co_return co_await awaiter;
 }
 
 inline task_t stop_io(const io_desc_t& io_desc) {
     co_return (co_await get_pool())->get_internal()->stop_io(io_desc, ERROR_WAKEUP);
 }
 
-inline task_t stopfd(int fd) {
+inline task_t stop_fd(int fd) {
     /* gets the fd out of the poll, awakening all it's waiters with error_e ERROR_WAKEUP */
     co_return (co_await stop_io(io_desc_t{.fd = fd}));
 }
@@ -1978,9 +2066,7 @@ inline task_t force_stop(int64_t stopval) {
 
         handle<void> await_suspend(handle<task_state_t<int>> h) {
             state = &h.promise().state;
-            if (do_leave_modifs(state) != ERROR_OK) {
-                CORO_DEBUG("WARNING: Can't interrupt stop");
-            }
+            do_leave_modifs(state);
             state->pool->get_internal()->push_ready_front(state);
             state->pool->get_internal()->ret_val = RUN_STOPPED;
             state->pool->stopval = stopval;
@@ -2017,21 +2103,23 @@ inline task_t sleep(const std::chrono::microseconds& timeo) {
         co_return err;
     }
 
-    io_awaiter_t awaiter(timer);
-    if ((err = co_await awaiter) != ERROR_OK) {
-        CORO_DEBUG("FAILED waiting on timer: %s", dbg_enum(err).c_str());
+    FnScope scope([pool, timer] {
+        /* this function can be called on a kill */
         error_e err_err;
         if ((err_err = pool->get_internal()->free_timer(timer)) != ERROR_OK) {
             CORO_DEBUG("FAILED to free(on error: %s) the timer %s",
-                    dbg_enum(err).c_str(), dbg_enum(err_err).c_str());
+                    dbg_enum(err_err).c_str());
+            /* good place for an exception warning */
         }
-        co_return err;
-    }
-    if ((err = pool->get_internal()->free_timer(timer)) != ERROR_OK) {
-        CORO_DEBUG("FAILED to free the timer %s", dbg_enum(err).c_str());
+    });
+    io_awaiter_t awaiter(timer);
+    if ((err = co_await awaiter) != ERROR_OK) {
+        CORO_DEBUG("FAILED waiting on timer: %s", dbg_enum(err).c_str());
+        scope.precall();
         co_return err;
     }
 
+    scope.precall();
     co_return ERROR_OK;
 }
 
@@ -2123,10 +2211,10 @@ inline task_t accept(int fd, sockaddr *sa, socklen_t *len) {
         .fd = fd,
         .events = EPOLLIN | EPOLLHUP,
     });
-    error_e err;
+    error_e err = co_await awaiter;
     if (err != ERROR_OK) {
-        CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
-                fd, dbg_enum(err).c_str(), strerror(errno), errno);
+        // CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
+        //         fd, dbg_enum(err).c_str(), strerror(errno), errno);
         co_return err;
     }
     /* OBS: those functions are a bit special, they return the result of the operation, not only
@@ -2139,10 +2227,10 @@ inline task<ssize_t> read(int fd, void *buff, size_t len) {
         .fd = fd,
         .events = EPOLLIN,
     });
-    error_e err;
+    error_e err = co_await awaiter;
     if (err != ERROR_OK) {
-        CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
-                fd, dbg_enum(err).c_str(), strerror(errno), errno);
+        // CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
+        //         fd, dbg_enum(err).c_str(), strerror(errno), errno);
         co_return err;
     }
     /* OBS: those functions are a bit special, they return the result of the operation, not only
@@ -2155,10 +2243,10 @@ inline task<ssize_t> write(int fd, const void *buff, size_t len) {
         .fd = fd,
         .events = EPOLLOUT,
     });
-    error_e err;
+    error_e err = co_await awaiter;
     if (err != ERROR_OK) {
-        CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
-                fd, dbg_enum(err).c_str(), strerror(errno), errno);
+        // CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
+        //         fd, dbg_enum(err).c_str(), strerror(errno), errno);
         co_return err;
     }
     /* OBS: those functions are a bit special, they return the result of the operation, not only
@@ -2178,7 +2266,7 @@ inline task<ssize_t> read_sz(int fd, void *buff, size_t len) {
         }
         else if (ret < 0) {
             CORO_DEBUG("Failed read, fd: %d", fd);
-            co_return -1;
+            co_return ret;
         }
         else {
             len -= ret;
@@ -2196,7 +2284,7 @@ inline task<ssize_t> write_sz(int fd, const void *buff, size_t len) {
         ssize_t ret = co_await write(fd, buff, len);
         if (ret < 0) {
             CORO_DEBUG("Failed write, fd: %d", fd);
-            co_return -1;
+            co_return ret;
         }
         else {
             len -= ret;
@@ -2263,48 +2351,239 @@ inline void rm_modifs_from_table(modif_table_p table, const std::set<modif_p>& m
 }
 
 template <typename T>
-inline task<T> add_modifs(task<T> t, const std::set<modif_p>& mods) {
-    add_modifs_to_table(t.h.promise().state.modif_table, mods);
+inline task<T> add_modifs(pool_t *pool, task<T> t, const std::set<modif_p>& mods) {
+    auto &table = t.h.promise().state.modif_table;
+    if (!table)
+        table = std::shared_ptr<modif_table_t>(alloc<modif_table_t>(pool, pool),
+                dealloc_create<modif_table_t>(pool), allocator_t<int>{pool});
+    add_modifs_to_table(table, mods);
+    if (get_modif_table_sz(table) == 0)
+        table = nullptr;
     return t;
 }
 
 template <typename T>
 inline task<T> rm_modifs(task<T> t, const std::set<modif_p>& mods) {
-    rm_modifs_from_table(t.h.promise().state.modif_table, mods);
+    auto &table = t.h.promise().state.modif_table;
+    rm_modifs_from_table(table, mods);
+    if (get_modif_table_sz(table) == 0)
+        table = nullptr;
     return t;
 }
 
 inline task_t add_modifs(const std::set<modif_p>& mods) {
-    auto table = co_await task_modifs_getter_t{};
+    auto &table = (co_await get_state())->modif_table;
+    auto pool = co_await get_pool();
+    if (!table)
+        table = std::shared_ptr<modif_table_t>(alloc<modif_table_t>(pool, pool),
+                dealloc_create<modif_table_t>(pool), allocator_t<int>{pool});
     add_modifs_to_table(table, mods);
+    if (get_modif_table_sz(table) == 0)
+        table = nullptr;
+    co_return ERROR_OK;
 }
 
 inline task_t rm_modifs(const std::set<modif_p>& mods) {
     auto table = co_await task_modifs_getter_t{};
     rm_modifs_from_table(table, mods);
+    if (get_modif_table_sz(table) == 0)
+        table = nullptr;
+    co_return ERROR_OK;
 }
 
 template <typename T>
-inline task<T> create_future(task<T> t) {
-    /* TODO: create a function that will return the return value of t once awaited. */
-    return t;
+inline task<T> create_future(pool_t *pool, task<T> t) {
+    using data_t = std::pair<T, bool>;
+
+    auto sem = create_sem(pool, 0);
+    auto data = std::shared_ptr<data_t>(alloc<data_t>(pool),
+            dealloc_create<data_t>(pool), allocator_t<int>{pool});
+
+    data->second = false;
+
+    /* ! this std::function will not be used using our allocator */
+    auto exit_func = [sem, data](state_t *state) -> error_e {
+        typename task<T>::handle_t h = task<T>::handle_t::from_address(state->self.address());
+        data->first = std::get<T>(h.promise()._ret);
+        data->second = true;
+        sem->signal();
+        return ERROR_OK;
+    };
+
+    add_modifs(pool, t, std::set<modif_p>{
+            create_modif<CO_MODIF_EXIT_CBK>(pool, CO_MODIF_INHERIT_NONE, exit_func)});
+
+    return [](sem_p sem, std::shared_ptr<data_t> data) -> task<T> {
+        if (!data->second) {
+            co_await sem->wait();
+        }
+        co_return data->first;
+    }(sem, data);
 }
 
-/* TODO: depends on the pool_t to create the timer */
-inline modif_p create_timeo(const std::chrono::microseconds& timeo) {
+template <typename T>
+inline task<std::pair<T, error_e>> create_timeo(
+        task<T> t, pool_t *pool, const std::chrono::microseconds& timeo)
+{
     /* TODO: create the 'modif packet' that will kill the corutines in the call-path when the
     timer expires */
-    return nullptr;
+    struct timer_state_t {
+        std::function<error_e(void)> timer_elapsed_sig;
+        std::function<error_e(void)> timer_sig;
+        sem_p sem;
+        uint64_t duration;
+        error_e err;
+        task<T> t;
+        T ret;
+    };
+
+    auto tstate = std::shared_ptr<timer_state_t>(alloc<timer_state_t>(pool),
+            dealloc_create<timer_state_t>(pool), allocator_t<int>{pool});
+
+    auto [timer_elapsed_killer, timer_elapsed_sig] = create_killer(pool, ERROR_WAKEUP);
+    auto [timer_killer, timer_sig] = create_killer(pool, ERROR_TIMEOUT);
+
+    tstate->sem = create_sem(pool, 0);
+    tstate->timer_elapsed_sig = timer_elapsed_sig;
+    tstate->timer_sig = timer_sig;
+    tstate->duration = timeo.count();
+    tstate->err = ERROR_OK;
+    tstate->t = t;
+
+    auto exec_coro = [](std::shared_ptr<timer_state_t> tstate) -> task_t {
+        tstate->ret = co_await tstate->t;
+        tstate->timer_sig();
+        tstate->sem->signal();
+        tstate->err = ERROR_OK;
+        co_return ERROR_OK;
+    }(tstate);
+
+    auto timer_coro = [](std::shared_ptr<timer_state_t> tstate) -> task_t {
+        error_e err;
+        if ((err = co_await sleep_us(tstate->duration)) != ERROR_OK) {
+            tstate->err = err;
+            tstate->timer_elapsed_sig();
+            co_return ERROR_GENERIC;
+        }
+        tstate->err = ERROR_TIMEOUT;
+        tstate->timer_elapsed_sig();
+        tstate->sem->signal();
+        co_return ERROR_OK;
+    }(tstate);
+
+    add_modifs(pool, timer_coro, timer_killer);
+    add_modifs(pool, exec_coro, timer_elapsed_killer);
+
+    pool->sched(timer_coro);
+    pool->sched(exec_coro);
+
+    return [](std::shared_ptr<timer_state_t> tstate) -> task<std::pair<T, error_e>>{
+        co_await tstate->sem->wait();
+        co_return {tstate->ret, tstate->err};
+    }(tstate);
 }
 
-inline modif_p create_killer() {
-    /* TODO: create the 'modif packet' that can stop the corutines in the call-path when triggered */
-    return nullptr;
-}
-inline error_e sig_killer(modif_p p) {
-    /* TODO: this signals the coro_killer that it should kill the coro */
-    /* TODO: change the return type, make it such that it makes sense ('modif packet') */
-    return ERROR_OK;
+/* TODO: link the kill-fn to the pack on a 1 to 1 basis (you can't use one pack for multiple
+call-stacks) */
+/* CAUTION: this doesn't kill sched paths (for example 'futures' or 'wait_all') */
+/* this is inherited by-call and it must kill all coros in the call path and also stop all waiters
+(io and sem) */
+/* CAUTION: This will be similar to an exception thrown on the active await and the call stack */
+inline std::pair<modif_pack_t, std::function<error_e(void)>> create_killer(pool_t *pool, error_e e) {
+    struct kill_state_t {
+        std::stack<state_t *> call_stack;
+        io_desc_t io_desc;
+        sem_t *sem = nullptr;
+        sem_waiter_handle_p it;
+    };
+
+    auto kstate = std::shared_ptr<kill_state_t>(alloc<kill_state_t>(pool),
+            dealloc_create<kill_state_t>(pool), allocator_t<int>{pool});
+
+    modif_flags_e flags = CO_MODIF_INHERIT_ON_CALL;
+
+    /* ! those std::functions will not be used using our allocator */
+    auto sig_kill = [kstate, e]() -> error_e {
+        /* If there is no call stack we have nothing to awake */
+        if (kstate->call_stack.size() == 0)
+            return ERROR_GENERIC;
+
+        /* the top of the stack holds a pointer to the pool */
+        auto pool = kstate->call_stack.top()->pool;
+
+        /* if we are waiting for something in the top level we will first try to see if the last
+        pushed state is ready for resuming, case in witch we remove it from the ready queue. Else
+        we remove it from the io or semaphore waiting queue, whichever was holding the awaiter. */
+        if ((kstate->sem || kstate->io_desc.fd != -1) &&
+                pool->get_internal()->remove_ready(kstate->call_stack.top()))
+        {
+            kstate->sem = nullptr;
+            kstate->io_desc = io_desc_t{};
+        }
+        else if (kstate->sem) {
+            kstate->sem->get_internal()->erase_waiter(*kstate->it);
+            kstate->sem = nullptr;
+        }
+        else if (kstate->io_desc.fd != -1) {
+            pool->get_internal()->stop_io(kstate->io_desc, ERROR_WAKEUP);
+            kstate->io_desc = io_desc_t{};
+        }
+
+        /* Now we unwind the call stack, removing all except the last one. The last one will be
+        removed by it's caller */
+        while (kstate->call_stack.size() > 1) {
+            kstate->call_stack.top()->self.destroy();
+            kstate->call_stack.pop();
+        }
+
+        /* Finally we prepare the root of the trace and schedule it's caller */
+        kstate->call_stack.top()->err = e;
+        pool->get_internal()->push_ready(kstate->call_stack.top());
+        kstate->call_stack.pop();
+        return ERROR_OK;
+    };
+
+    modif_pack_t pack;
+    pack.push_back(create_modif<CO_MODIF_CALL_CBK>(pool, flags,
+        [kstate](state_t *s) -> error_e {
+            kstate->call_stack.push(s);
+            return ERROR_OK;
+        }
+    ));
+    pack.push_back(create_modif<CO_MODIF_EXIT_CBK>(pool, flags,
+        [kstate](state_t *s) -> error_e {
+            kstate->call_stack.pop();
+            return ERROR_OK;
+        }
+    ));
+    pack.push_back(create_modif<CO_MODIF_WAIT_IO_CBK>(pool, flags,
+        [kstate](state_t *s, io_desc_t &io_desc) -> error_e {
+            kstate->io_desc = io_desc;
+            return ERROR_OK;
+        }
+    ));
+    pack.push_back(create_modif<CO_MODIF_UNWAIT_IO_CBK>(pool, flags,
+        [kstate](state_t *s, io_desc_t &io_desc) -> error_e {
+            kstate->io_desc = io_desc_t{};
+            return ERROR_OK;
+        }
+    ));
+    pack.push_back(create_modif<CO_MODIF_WAIT_SEM_CBK>(pool, flags,
+        [kstate](state_t *s, sem_t *sem, sem_waiter_handle_p it) -> error_e {
+            /* TODO: save semaphore here */
+            kstate->sem = sem;
+            kstate->it = it;
+            return ERROR_OK;
+        }
+    ));
+    pack.push_back(create_modif<CO_MODIF_UNWAIT_SEM_CBK>(pool, flags,
+        [kstate](state_t *s, sem_t *sem, sem_waiter_handle_p it) -> error_e {
+            kstate->sem = nullptr;
+            return ERROR_OK;
+        }
+    ));
+
+    return {pack, sig_kill};
 }
 
 /* Debug stuff
@@ -2370,9 +2649,55 @@ inline dbg_string_t dbg_epoll_events(uint32_t events) {
     return ret;
 }
 
-inline modif_p dbg_create_tracer() {
-    /* TODO: create a 'modif packet' that can be used to trace all the corutine's actions */
-    return nullptr;
+inline modif_pack_t dbg_create_tracer(pool_t *pool) {
+    modif_flags_e flags = modif_flags_e(CO_MODIF_INHERIT_ON_CALL | CO_MODIF_INHERIT_ON_SCHED);
+    modif_pack_t mods;
+
+    mods.push_back(create_modif<CO_MODIF_CALL_CBK>(pool, flags, [&](state_t *s) -> error_e {
+        CORO_DEBUG(">  CALL: %s", dbg_name(s->self).c_str());
+        return ERROR_OK;
+    }));
+    mods.push_back(create_modif<CO_MODIF_SCHED_CBK>(pool, flags, [&] (state_t *s) -> error_e {
+        CORO_DEBUG("> SCHED: %s", dbg_name(s->self).c_str());
+        return ERROR_OK;
+    }));
+    mods.push_back(create_modif<CO_MODIF_EXIT_CBK>(pool, flags, [&] (state_t *s) -> error_e {
+        CORO_DEBUG(">  EXIT: %s", dbg_name(s->self).c_str());
+        return ERROR_OK;
+    }));
+    mods.push_back(create_modif<CO_MODIF_LEAVE_CBK>(pool, flags, [&] (state_t *s) -> error_e {
+        CORO_DEBUG("> LEAVE: %s", dbg_name(s->self).c_str());
+        return ERROR_OK;
+    }));
+    mods.push_back(create_modif<CO_MODIF_ENTER_CBK>(pool, flags, [&] (state_t *s) -> error_e {
+        CORO_DEBUG("> ENTRY: %s", dbg_name(s->self).c_str());
+        return ERROR_OK;
+    }));
+    mods.push_back(create_modif<CO_MODIF_WAIT_IO_CBK>(pool, flags,
+        [&] (state_t *s, io_desc_t &io_desc) -> error_e {
+            CORO_DEBUG(">  WAIT: %s", dbg_name(s->self).c_str());
+            return ERROR_OK;
+        })
+    );
+    mods.push_back(create_modif<CO_MODIF_UNWAIT_IO_CBK>(pool, flags,
+        [&] (state_t *s, io_desc_t &io_desc) -> error_e {
+            CORO_DEBUG(">UNWAIT: %s", dbg_name(s->self).c_str());
+            return ERROR_OK;
+        }
+    ));
+    mods.push_back(create_modif<CO_MODIF_WAIT_SEM_CBK>(pool, flags,
+        [&] (state_t *s, sem_t *sem, sem_waiter_handle_p _it) -> error_e {
+            CORO_DEBUG(">   SEM: %s", dbg_name(s->self).c_str());
+            return ERROR_OK;
+        }
+    ));
+    mods.push_back(create_modif<CO_MODIF_UNWAIT_SEM_CBK>(pool, flags,
+        [&] (state_t *s, sem_t *sem, sem_waiter_handle_p _it) -> error_e {
+            CORO_DEBUG("> UNSEM: %s", dbg_name(s->self).c_str());
+            return ERROR_OK;
+        }
+    ));
+    return mods;
 }
 
 template <typename... Args>
@@ -2398,23 +2723,24 @@ inline uint64_t dbg_get_time() {
 #if CORO_ENABLE_DEBUG_NAMES
 
 /* TODO: mutex it if needed by multi-threads */
-inline std::map<void *, std::pair<dbg_string_t, int>, std::less<void *>,
-        allocator_t<std::pair<const void *, std::pair<dbg_string_t, int>>>> dbg_names(
-        allocator_t<std::pair<const void *, std::pair<dbg_string_t, int>>>> {nullptr});
+using dbg_val_type = std::map<void *, std::pair<dbg_string_t, int>>::value_type;
+inline std::map<void *,std::pair<dbg_string_t, int>, std::less<void *>, allocator_t<dbg_val_type>>
+        dbg_names{allocator_t<dbg_val_type> {nullptr}};
 
 template <typename ...Args>
 inline void *dbg_register_name(void *addr, const char *fmt, Args&&... args) {
     if (!has(dbg_names, addr))
-        dbg_names[addr] = {dbg_format(fmt, std::forward<Args>(args)...), 1};
+        dbg_names.insert({addr, {dbg_format(fmt, std::forward<Args>(args)...), 1}});
     else
-        dbg_names[addr].second++;
+        dbg_names.find(addr)->second.second++;
     return addr;
 }
 
 inline dbg_string_t dbg_name(void *v) {
     if (!has(dbg_names, v))
         dbg_register_name(v, "%p", v);
-    return dbg_format("%s[%" PRIu64 "]", dbg_names[v].first.c_str(), dbg_names[v].second);
+    return dbg_format("%s[%" PRIu64 "]", dbg_names.find(v)->second.first.c_str(),
+            dbg_names.find(v)->second.second);
 }
 
 #else /*CORO_ENABLE_DEBUG_NAMES*/

@@ -17,7 +17,7 @@ LIBS 	  += ${GLSL_ADDITIONAL_LIB}
 LIBS 	  += -Wl,--end-group
 LIBS      += -lpthread
 
-CXX       := g++-11
+CXX       := g++-13
 
 SRCS      := $(wildcard ../*.cpp)
 SRCS      += $(wildcard ../ap/*.cpp)

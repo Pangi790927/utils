@@ -1,8 +1,11 @@
+#define CORO_ENABLE_DEBUG_NAMES true
+
 #include "coro.h"
 
 #include <string.h>
 #include <thread>
-#include <sys/un.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 
 /* Test Utils
 ================================================================================================= */
@@ -31,6 +34,40 @@
 #define DBG(fmt, ...) co::dbg(__FILE__, __func__, __LINE__, fmt, ##__VA_ARGS__)
 
 namespace co = coro;
+
+struct FnScope {
+    using fn_t = std::function<void(void)>;
+    std::vector<fn_t> fns;
+    bool done = false;
+
+    FnScope(fn_t fn) {
+        add(fn);
+    }
+
+    FnScope() {}
+
+    ~FnScope() {
+        call();
+    }
+
+    void operator() (fn_t fn) {
+        add(fn);
+    }
+
+    void add(fn_t fn) {
+        fns.push_back(fn);
+    }
+
+    void disable() {
+        fns.clear();
+    }
+
+    void call() {
+        for (auto &f : fns)
+            f();
+        fns.clear();
+    }
+};
 
 /* Test1
 ================================================================================================= */
@@ -411,38 +448,55 @@ int test7_clearing() {
 int test8_server_fd;
 int test8_pass_cnt = 0;
 int test8_client_done = 0;
-const char *test8_server_path = "./test-coro-8-server.socket";
+const char *test8_local_ip = "127.0.0.1";
+const int test8_port = 3000;
+
+static void test8_set_msg(uint32_t uints[4]) {
+    uints[0] = 2;
+    uints[1] = uint32_t(-15);
+    uints[2] = 0xbadc0ffe;
+    uints[3] = 41;
+}
+
+static int test8_chk_msg(uint32_t uints[4]) {
+    if (!(uints[0] == 2 && uints[1] == uint32_t(-15) && uints[2] == 0xbadc0ffe && uints[3] == 41)) {
+        DBG("WRONG MESSAGE: %u %d 0x%x %u", uints[0], uints[1], uints[2], uints[3]);
+        return -1;
+    }
+    return 0;
+}
 
 co::task_t test8_server_conn(int fd) {
     uint32_t uints[4] = {0};
+    FnScope scope([fd]{ close(fd); });
+
     ASSERT_COFN(co_await co::read_sz(fd, uints, sizeof(uints)));
-    ASSERT_COFN(CHK_BOOL(uints[0] == 2 && uints[1] == (uint32_t)-15
-            && uints[2] == 0xbadc0ffe && uints[3] == 41));
-    for (int i = 0; i < 4; i++)
-        if (uints[i] = i * 13 + 2);
-            test8_pass_cnt++;
+    test8_set_msg(uints);
 
     ASSERT_COFN(co_await co::write_sz(fd, uints, sizeof(uints)));
     co_await co::sleep_ms(10);
-    ASSERT_COFN(co_await co::write_sz(fd, uints, sizeof(uints[0]) * 2));
+    ASSERT_COFN(co_await co::write_sz(fd, uints, sizeof(uints[0]) * 3));
     co_await co::sleep_ms(10);
-    ASSERT_COFN(co_await co::write_sz(fd, &uints[2], sizeof(uints[2]) * 2));
+    ASSERT_COFN(co_await co::write_sz(fd, &uints[3], sizeof(uints[3]) * 1));
 
     test8_pass_cnt++;
     co_return 0;
 }
 
 co::task_t test8_server() {
-    unlink(test8_server_path);
-    ASSERT_COFN(test8_server_fd = socket(AF_UNIX, SOCK_STREAM, 0));
+    ASSERT_COFN(test8_server_fd = socket(AF_INET, SOCK_STREAM, 0));
 
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(struct sockaddr_un));
-    addr.sun_family = AF_UNIX;
-    strcpy(addr.sun_path, test8_server_path);
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(struct sockaddr_in));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(test8_port);
+    addr.sin_addr.s_addr = inet_addr(test8_local_ip);
+
+    const int enable = 1;
+    ASSERT_COFN(setsockopt(test8_server_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)));
 
     ASSERT_COFN(bind(test8_server_fd, (const struct sockaddr *)&addr,
-            sizeof(struct sockaddr_un)));
+            sizeof(struct sockaddr_in)));
     ASSERT_COFN(listen(test8_server_fd, 2));
 
     while (true) {
@@ -465,44 +519,49 @@ co::task_t test8_server() {
 co::task_t test8_client() {
     int fd;
 
-    ASSERT_COFN(fd = socket(AF_UNIX, SOCK_STREAM, 0));
+    co::pool_t *pool = co_await co::get_pool();
+    FnScope scope([pool]{
+        test8_client_done++;
+        if (test8_client_done == 3)
+            pool->stop_fd(test8_server_fd);
+    });
 
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(struct sockaddr_un));
-    addr.sun_family = AF_UNIX;
-    strcpy(addr.sun_path, test8_server_path);
+    ASSERT_COFN(fd = socket(AF_INET, SOCK_STREAM, 0));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(struct sockaddr_in));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(test8_port);
+    addr.sin_addr.s_addr = inet_addr(test8_local_ip);
 
     int retest = 3;
     while (--retest >= 0) {
         int ret = co_await co::connect(fd, (struct sockaddr *)&addr,
-                sizeof(struct sockaddr_un));
+                sizeof(struct sockaddr_in));
         if (ret < 0) {
             co_await co::sleep_ms(50);
             DBG("Failed connect...");
         }
+        else
+            break;
     }
     ASSERT_COFN(retest);
 
-    uint32_t uints1[] = { 2, (uint32_t)-15, 0xbadc0ffe, 41 };
+    uint32_t uints1[4] = {0};
+    test8_set_msg(uints1);
+    ASSERT_COFN(test8_chk_msg(uints1));
     ASSERT_COFN(co_await co::write_sz(fd, uints1, sizeof(uints1)));
 
     uint32_t uints2[4] = {0};
     ASSERT_COFN(co_await co::read_sz(fd, uints2, sizeof(uints2)));
-    ASSERT_COFN(CHK_BOOL(uints2[0] == 2 && uints2[1] == (uint32_t)-15
-            && uints2[2] == 0xbadc0ffe && uints2[3] == 41));
+    ASSERT_COFN(test8_chk_msg(uints2));
 
     uint32_t uints3[4] = {0};
-    ASSERT_COFN(co_await co::read_sz(fd, uints2, sizeof(uints2[0]) * 2));
+    ASSERT_COFN(co_await co::read_sz(fd, uints3, sizeof(uints3[0]) * 2));
     co_await co::sleep_ms(10);
-    ASSERT_COFN(co_await co::read_sz(fd, &uints2[2], sizeof(uints2[2]) * 2));
+    ASSERT_COFN(co_await co::read_sz(fd, &uints3[2], sizeof(uints3[2]) * 2));
     co_await co::sleep_ms(10);
-    ASSERT_COFN(CHK_BOOL(uints3[0] == 2 && uints3[1] == (uint32_t)-15
-            && uints3[2] == 0xbadc0ffe && uints3[3] == 41));
-
-    test8_client_done++;
-    if (test8_client_done == 3) {
-        co_await co::stopfd(test8_server_fd);
-    }
+    ASSERT_COFN(test8_chk_msg(uints3));
 
     test8_pass_cnt++;
     co_return 0;
@@ -515,9 +574,87 @@ int test8_io() {
     pool->sched(test8_client());
     pool->sched(test8_client());
     co::run_e ret = pool->run();
-    DBG("ret: %s", co::dbg_enum(ret).c_str());
-    ASSERT_FN(CHK_BOOL(ret == co::RUN_STOPPED));
-    ASSERT_FN(CHK_BOOL(test8_pass_cnt == 4));
+    ASSERT_FN(CHK_BOOL(ret == co::RUN_OK));
+    ASSERT_FN(CHK_BOOL(test8_pass_cnt == 7));
+    return 0;
+}
+
+/* Test9
+================================================================================================= */
+
+/* TODO: more tests here */
+/* This test requires visual inspection */
+
+co::task_t test9_dbg_call() {
+    DBG("called...");
+    co_return 0;
+}
+
+co::task_t test9_dbg_sched() {
+    DBG("scheduled...");
+    co_await CORO_REGNAME(test9_dbg_call());
+    co_return 0;
+};
+
+int test9_dbg_trace() {
+    auto pool = co::create_pool();
+    auto trace = co::dbg_create_tracer(pool.get());
+    pool->sched(CORO_REGNAME(test9_dbg_sched()), trace);
+    co::run_e ret = pool->run();
+    ASSERT_FN(CHK_BOOL(ret == co::RUN_OK));
+    return 0;
+}
+
+/* Test10
+================================================================================================= */
+
+struct test10_data_t {
+    std::string name;
+    int val = 0;
+};
+
+co::task<test10_data_t> test10_future_result() {
+    co_return test10_data_t{ .name = "test10", .val = 10 };
+}
+
+co::task_t test10_co_futures() {
+    auto t = test10_future_result();
+    auto f = co::create_future(co_await co::get_pool(), t);
+    co_await co::sched(t);
+    auto [name, val] = co_await f;
+    ASSERT_COFN(CHK_BOOL(name == "test10" && val == 10));
+    co_return 0;
+}
+
+int test10_futures() {
+    auto pool = co::create_pool();
+    pool->sched(test10_co_futures());
+    co::run_e ret = pool->run();
+    ASSERT_FN(CHK_BOOL(ret == co::RUN_OK));
+    return 0;
+}
+
+/* Test10
+================================================================================================= */
+
+co::task_t test11_co_wait_all() {
+    auto ret = co_await co::wait_all(
+        []() -> co::task<std::string> { co_return "test11"; }(),
+        []() -> co::task<int> { co_return 11; }(),
+        []() -> co::task<float> { co_return 0.11; }()
+    );
+
+    bool is_ok = ret == std::tuple<std::string, int, float>{"test11", 11, 0.11};
+    ASSERT_COFN(CHK_BOOL(is_ok));
+
+    co_return 0;
+}
+
+int test11_wait_all() {
+    auto pool = co::create_pool();
+    pool->sched(test11_co_wait_all());
+    co::run_e ret = pool->run();
+    ASSERT_FN(CHK_BOOL(ret == co::RUN_OK));
     return 0;
 }
 
@@ -533,11 +670,13 @@ int main(int argc, char const *argv[]) {
         { test5_stopping,  "test5_stopping" },
         { test6_sleeping,  "test6_sleeping" },
         { test7_clearing,  "test7_clearing" },
-        { test8_io,        "test8_io"},
+        { test8_io,        "test8_io" },
+        { test9_dbg_trace, "test9_dbg_trace" },
+        { test10_futures,  "test10_futures" },
+        { test11_wait_all, "test11_wait_all" },
     };
 
     for (auto test : tests) {
-        // DBG("[STARTED]: %s", test.second.c_str());
         int ret = test.first();
         if (ret >= 0)
             DBG("[+PASSED]: %s", test.second.c_str());
