@@ -2,18 +2,18 @@
 #define CORO_H
 
 /* TODO:
-    + write the fd stuff
-    + add debug modifs, things are already breaking and I don't know why
-    - consider implementing co_yield
+    - consider multithreading
+    - consider porting for windows
     - consider implementing exception handling
+    - tests
     - write the tutorial at the start of this file
-    + speed optimizations [added allocator]
-    - add the licence
     - check own comments
     - check the review again
-    - consider porting for windows
-    - consider multithreading
-    - tests
+    - add the licence
+    - consider implementing co_yield
+    + write the fd stuff
+    + add debug modifs, things are already breaking and I don't know why
+    + speed optimizations [added allocator]
 */
 
 /* rewrite of co_utils.h ->
