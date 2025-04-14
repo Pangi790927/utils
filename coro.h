@@ -3,7 +3,7 @@
 
 /* TODO:
     - consider porting for windows
-    - fix error propagation (error_e)
+    - fix error propagation (error_e) (is there a problem?)
     - tests
     - write the tutorial at the start of this file
     - check own comments
@@ -32,28 +32,27 @@
 ====================================================================================================
 */
 
-#include <memory>
-#include <vector>
 #include <chrono>
-#include <coroutine>
-#include <functional>
-#include <variant>
-#include <unordered_set>
-#include <map>
-#include <deque>
-#include <set>
-#include <source_location>
 #include <cinttypes>
+#include <coroutine>
+#include <deque>
+#include <functional>
 #include <list>
+#include <map>
+#include <memory>
+#include <unordered_set>
 #include <utility>
+#include <variant>
+#include <vector>
+#include <set>
 #include <stack>
 
-#include <string.h>
+#include <fcntl.h>
 #include <unistd.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
-#include <fcntl.h>
 
 /* The maximum amount of concurent timers that can be awaited */
 #ifndef CORO_MAX_TIMER_POOL_SIZE

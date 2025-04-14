@@ -70,7 +70,7 @@ struct FnScope {
     }
 };
 
-/* Test1 - Calls
+/* Test1 - Semaphores
 ================================================================================================= */
 
 /* testing ping-pong usage of the semaphore */
@@ -289,7 +289,7 @@ int test4_semaphore() {
     return 0;
 }
 
-/* Test5
+/* Test5 - Force Stop
 ================================================================================================= */
 
 int test5_counter = 0;
@@ -366,7 +366,7 @@ int test6_sleeping() {
     return 0;
 }
 
-/* Test7 - Force stop
+/* Test7 - Clear
 ================================================================================================= */
 
 int test7_destruct_cnt = 0;
