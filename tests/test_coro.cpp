@@ -3,6 +3,7 @@
 #include "coro.h"
 
 #include <string.h>
+#include <stdexcept>
 #include <thread>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -69,7 +70,7 @@ struct FnScope {
     }
 };
 
-/* Test1
+/* Test1 - Calls
 ================================================================================================= */
 
 /* testing ping-pong usage of the semaphore */
@@ -115,7 +116,7 @@ int test1_semaphore() {
     return 0;
 }
 
-/* Test2
+/* Test2 - Semaphores
 ================================================================================================= */
 
 /* testing the multi-wait initialization of a semaphore */
@@ -164,7 +165,7 @@ int test2_semaphore() {
     return 0;
 }
 
-/* Test3
+/* Test3 - Semaphores
 ================================================================================================= */
 
 /* testing the  */
@@ -217,7 +218,7 @@ int test3_semaphore() {
     return 0;
 }
 
-/* Test4
+/* Test4 - Semaphores
 ================================================================================================= */
 
 int test4_counter_a = 0;
@@ -328,7 +329,7 @@ int test5_stopping() {
     return 0;
 }
 
-/* Test6
+/* Test6 - Sleep
 ================================================================================================= */
 
 int test6_num = 0;
@@ -365,7 +366,7 @@ int test6_sleeping() {
     return 0;
 }
 
-/* Test7
+/* Test7 - Force stop
 ================================================================================================= */
 
 int test7_destruct_cnt = 0;
@@ -442,7 +443,7 @@ int test7_clearing() {
     return 0;
 }
 
-/* Test8
+/* Test8 - IO
 ================================================================================================= */
 
 int test8_server_fd;
@@ -579,7 +580,7 @@ int test8_io() {
     return 0;
 }
 
-/* Test9
+/* Test9 - DBG Trace
 ================================================================================================= */
 
 /* TODO: more tests here */
@@ -605,7 +606,7 @@ int test9_dbg_trace() {
     return 0;
 }
 
-/* Test10
+/* Test10 - Futures
 ================================================================================================= */
 
 struct test10_data_t {
@@ -634,7 +635,7 @@ int test10_futures() {
     return 0;
 }
 
-/* Test10
+/* Test11 - wait_all
 ================================================================================================= */
 
 co::task_t test11_co_wait_all() {
@@ -658,6 +659,96 @@ int test11_wait_all() {
     return 0;
 }
 
+/* Test12 - Yielding
+================================================================================================= */
+
+co::task_t test12_co_yielder() {
+    for (int i = 0; i < 14; i++) {
+        co_yield i;
+    }
+    co_return 14;
+}
+
+co::task_t test12_yield_test() {
+    auto yielder = test12_co_yielder();
+    for (int i = 0; i < 15; i++)
+        if (i != co_await yielder) {
+            DBG("Bad yield");
+            co_return -1;
+        }
+    co_return 0;
+}
+
+int test12_yielding() {
+    auto pool = co::create_pool();
+    pool->sched(test12_yield_test());
+    co::run_e ret = pool->run();
+    ASSERT_FN(CHK_BOOL(ret == co::RUN_OK));
+    return 0;
+}
+
+/* Test13 - Exceptions
+================================================================================================= */
+
+int test13_val_inc = 0;
+
+co::task_t test13_c() {
+    test13_val_inc += 1;
+    FnScope scope([]{
+        test13_val_inc += 10;
+    });
+    throw std::runtime_error("test13");
+    test13_val_inc += 1;
+    co_return 0;
+}
+
+co::task_t test13_b() {
+    FnScope scope([]{
+        test13_val_inc += 1000;
+    });
+    test13_val_inc += 100;
+    co_await test13_c();
+    test13_val_inc += 100;
+    co_return 0;
+}
+
+co::task_t test13_a() {
+    try {
+        test13_val_inc += 10000;
+        co_await test13_b();
+        test13_val_inc += 10000;
+    }
+    catch (const std::exception& ex) {
+        ASSERT_COFN(CHK_BOOL(std::string(ex.what()) == "test13"));
+        test13_val_inc += 100000;
+    }
+    test13_val_inc += 1000000;
+    co_return 0;
+}
+
+co::task_t test13_exception_test() {
+    co_await test13_a();
+    test13_val_inc += 10000000;
+    throw std::runtime_error("Custom exception");
+    co_return 0;
+}
+
+int test13_except() {
+    auto pool = co::create_pool();
+    pool->sched(test13_exception_test());
+    bool excepted = false;
+    try {
+        pool->run();
+    }
+    catch (std::exception &ex) {
+        excepted = true;
+        ASSERT_FN(CHK_BOOL(std::string(ex.what()) == "Custom exception"));
+    }
+    ASSERT_FN(CHK_BOOL(excepted));
+    ASSERT_FN(CHK_BOOL(test13_val_inc == 11111111));
+    return 0;
+}
+
 /* Main:
 ================================================================================================= */
 
@@ -674,6 +765,8 @@ int main(int argc, char const *argv[]) {
         { test9_dbg_trace, "test9_dbg_trace" },
         { test10_futures,  "test10_futures" },
         { test11_wait_all, "test11_wait_all" },
+        { test12_yielding, "test12_yielding" },
+        { test13_except,   "test13_except" },
     };
 
     for (auto test : tests) {

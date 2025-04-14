@@ -2,15 +2,16 @@
 #define CORO_H
 
 /* TODO:
-    - consider multithreading
     - consider porting for windows
-    - consider implementing exception handling
+    - fix error propagation (error_e)
     - tests
     - write the tutorial at the start of this file
     - check own comments
     - check the review again
     - add the licence
-    - consider implementing co_yield
+    - fix noexcept if there are problems
+    + consider implementing exception handling
+    + consider implementing co_yield
     + write the fd stuff
     + add debug modifs, things are already breaking and I don't know why
     + speed optimizations [added allocator]
@@ -66,19 +67,14 @@ remembered in a faster structure */
 #endif
 
 /* Set if a pool can be available in more than one thread, necesary if you want to transfer the pool
-to a callback that will be called from another thread */
-#ifndef CORO_ENABLE_MULTITHREADS
-# define CORO_ENABLE_MULTITHREADS false
+to a callback that will be called from another thread, WARNING: this slows down a lot of things */
+#ifndef CORO_ENABLE_MULTITHREAD_SCHED
+# define CORO_ENABLE_MULTITHREAD_SCHED false
 #endif
 
 /* Enable the corutines to catch and throw exceptions */
 #ifndef CORO_ENABLE_EXCEPTIONS
 # define CORO_ENABLE_EXCEPTIONS false
-#endif
-
-/* If set to true, will enable the debug callbacks */
-#ifndef CORO_ENABLE_CALLBACKS
-# define CORO_ENABLE_CALLBACKS false
 #endif
 
 /* If set to true, will enable the logging callback */
@@ -202,6 +198,7 @@ using modif_pack_t = std::vector<modif_p>;
 
 /* Tasks errors */
 enum error_e : int32_t {
+    ERROR_YIELDED =  1, /* not really an error, but used to signal that the coro yielded */
     ERROR_OK      =  0,
     ERROR_GENERIC = -1, /* generic error, can use log_str to find the error, or sometimes errno */
     ERROR_TIMEOUT = -2, /* the error comes from a modif, namely a timeout */
@@ -359,6 +356,7 @@ struct deallocator_t { /* This class is part of the allocator implementation and
 /* TODO: the exception that will be thrown by the killing of a courutine */
 #endif
 
+/* having a task be called on two pools or two threads is UB */
 struct pool_t {
     /* you use the pointer made by create_pool */
     pool_t(pool_t& sem) = delete;
@@ -446,15 +444,19 @@ struct io_desc_t {
 
 /* This is the state struct that each corutine has */
 struct state_t {
-    error_e err = ERROR_OK;             /* holds the error return in diverse cases */
-    pool_t *pool = nullptr;             /* the pool of this coro */
-    modif_table_p modif_table;          /* we allocate a table only if there are mods */
+    error_e err = ERROR_OK;                 /* holds the error return in diverse cases */
+    pool_t *pool = nullptr;                 /* the pool of this coro */
+    modif_table_p modif_table;              /* we allocate a table only if there are mods */
 
-    state_t *caller_state = nullptr;    /* this holds the caller's state, and with it the return path */ 
-    std::coroutine_handle<void> self;   /* the coro's self handle */
+    state_t *caller_state = nullptr;        /* this holds the caller's state, and with it the
+                                            return path */ 
 
-    std::shared_ptr<void> user_ptr;     /* this is a pointer that the user can use for whatever
-                                        he feels like. This library will not touch this pointer */
+    std::coroutine_handle<void> self;       /* the coro's self handle */
+
+    std::exception_ptr exception = nullptr; /* the exception that must be propagated */
+
+    std::shared_ptr<void> user_ptr;         /* this is a pointer that the user can use for whatever
+                                            he feels like. This library will not touch this pointer */
 };
 
 /* This is mostly internal, but you can also use it to be able to check if someone is still waiting
@@ -809,17 +811,14 @@ struct allocator_memory_t {
     template <size_t N>
     using buckets_type = decltype(buckets_type_helper(std::make_index_sequence<N>{}))::type;
 
-    /* There are some objectives for this buckets array:
-        1. The buckets must all stay togheter (localized in memory)
-        2. The buckets must all be constructed automatically from allocator_bucket_sizes
-    */
-    buckets_type<buckets_cnt> buckets;
-
     allocator_memory_t() {
         std::apply([](auto&&... args) { ((args.init()), ...); }, buckets);
     }
 
     void *alloc(size_t bytes) {
+#if CORO_ENABLE_MULTITHREAD_SCHED
+        std::lock_guard guard(lock);
+#endif
         void *ret = NULL;
         bool invalidated = false;
         std::apply([&](auto&&... args) {
@@ -829,8 +828,21 @@ struct allocator_memory_t {
     }
 
     void free(void *ptr) {
+#if CORO_ENABLE_MULTITHREAD_SCHED
+        std::lock_guard guard(lock);
+#endif
         std::apply([&](auto&&... args) { ((args.free(ptr)), ...); }, buckets);
     }
+
+    /* There are some objectives for this buckets array:
+        1. The buckets must all stay togheter (localized in memory)
+        2. The buckets must all be constructed automatically from allocator_bucket_sizes
+    */
+    buckets_type<buckets_cnt> buckets;
+
+#if CORO_ENABLE_MULTITHREAD_SCHED
+    std::mutex lock;
+#endif
 };
 
 /* allocator_t<T>::allocate/deallocate are declared under pool_internal_t */
@@ -1018,7 +1030,7 @@ struct task {
     /* Those need to be implemented bellow the task_state */
     template <typename P>
     handle<void> await_suspend(handle<P> caller) noexcept;
-    T            await_resume() noexcept;
+    T            await_resume();
     pool_t       *get_pool();
     state_t      *get_state();
 
@@ -1032,15 +1044,25 @@ struct task {
 accesible to others that need to clean the corutine (for example in modifs, if the tasks need
 killing) */
 inline handle<void> final_awaiter_cleanup(state_t *ending_task_state);
+inline handle<void> cpp_yield_awaiter(state_t *yielding_task_state);
 
 template <typename T>
 struct task_state_t {
     struct final_awaiter_t {
         bool await_ready() noexcept  { return false; }
-        void await_resume() noexcept { /* TODO: here some exceptions? */ }
+        void await_resume() noexcept {}
         
         handle<void> await_suspend(handle<task_state_t<T>> ending_task) noexcept {
             return final_awaiter_cleanup(&ending_task.promise().state);
+        }
+    };
+
+    struct cpp_yield_awaiter_t {
+        bool await_ready() noexcept  { return false; }
+        void await_resume() noexcept {}
+        
+        handle<void> await_suspend(handle<task_state_t<T>> yielding_task) noexcept {
+            return cpp_yield_awaiter(&yielding_task.promise().state);
         }
     };
 
@@ -1052,17 +1074,25 @@ struct task_state_t {
 
     std::suspend_always initial_suspend() noexcept { return {}; }
     final_awaiter_t     final_suspend() noexcept   { return final_awaiter_t{}; }
-    void                unhandled_exception()      { /* TODO: something with exceptions */ }
+    void                unhandled_exception()      { state.exception = std::current_exception(); }
+
+    /* probably slower than most generators, but if you need it it's here */
+    template <typename R>
+    cpp_yield_awaiter_t yield_value(R&& ret) {
+        this->ret.template emplace<T>(std::forward<R>(ret));
+        return {};
+    }
 
     template <typename R>
     void return_value(R&& ret) {
         /* TODO: maybe if this coro is of our type it should also take into consideration the
         return value of the state.err? (or maybe better -> think more about that error thing) */
-        _ret.template emplace<T>(std::forward<R>(ret));
+        this->ret.template emplace<T>(std::forward<R>(ret));
     }
 
     state_t state;
-    std::variant<std::monostate, T> _ret;
+    std::exception_ptr exception;
+    std::variant<std::monostate, T> ret;
 };
 
 template <typename T>
@@ -1083,11 +1113,21 @@ inline handle<void> task<T>::await_suspend(handle<P> caller) noexcept {
 }
 
 template <typename T>
-inline T task<T>::await_resume() noexcept {
+inline T task<T>::await_resume() {
     ever_called = true;
-    auto ret = std::get<T>(h.promise()._ret);
     do_entry_modifs(h.promise().state.caller_state);
-    h.destroy();
+
+    // propagate coroutine exception in called context
+    std::exception_ptr exc_ptr = h.promise().state.exception;
+    if (exc_ptr) {
+        h.destroy();
+        std::rethrow_exception(exc_ptr);
+    }
+
+    auto ret = std::get<T>(h.promise().ret);
+    if (h.promise().state.err != ERROR_YIELDED)
+        h.destroy();
+
     return ret;
 }
 
@@ -1469,6 +1509,10 @@ struct pool_internal_t {
             return ;
         }
 
+#if CORO_ENABLE_MULTITHREAD_SCHED
+        std::lock_guard guard(lock);
+#endif
+
         /* third, we add the task to the pool */
         ready_tasks.push_back(&task.h.promise().state);
     }
@@ -1488,18 +1532,38 @@ struct pool_internal_t {
         ret_val = RUN_ABORTED;
         do_entry_modifs(state);
         state->self.resume();
+
+        if (posted_exception) {
+            auto pe = posted_exception;
+            posted_exception = nullptr;
+            std::rethrow_exception(pe);
+        }
+
         return ret_val;
     }
 
+    void set_exception(std::exception_ptr exc) {
+        posted_exception = exc;
+    }
+
     void push_ready(state_t *state) {
+#if CORO_ENABLE_MULTITHREAD_SCHED
+        std::lock_guard guard(lock);
+#endif
         ready_tasks.push_back(state);
     }
 
     void push_ready_front(state_t *state) {
+#if CORO_ENABLE_MULTITHREAD_SCHED
+        std::lock_guard guard(lock);
+#endif
         ready_tasks.push_front(state);
     }
 
     bool remove_ready(state_t *state) {
+#if CORO_ENABLE_MULTITHREAD_SCHED
+        std::lock_guard guard(lock);
+#endif
         for (auto it = ready_tasks.begin(); it != ready_tasks.end(); it++) {
             if (*it == state) {
                 ready_tasks.erase(it);
@@ -1516,6 +1580,9 @@ struct pool_internal_t {
             return nullptr;
         }
 
+#if CORO_ENABLE_MULTITHREAD_SCHED
+        std::lock_guard guard(lock);
+#endif
         if (!ready_tasks.empty()) {
             auto ret = ready_tasks.front();
             ready_tasks.pop_front();
@@ -1579,8 +1646,14 @@ private:
     io_pool_t io_pool;
     timer_pool_t timer_pool;
 
+    std::exception_ptr posted_exception = nullptr;
+
     /* bookkeeping for end of life destruction */
     std::set<sem_t *, std::less<sem_t *>, allocator_t<sem_t *>> sem_pool;
+
+#if CORO_ENABLE_MULTITHREAD_SCHED
+    std::mutex lock;
+#endif
 };
 
 /* Allocate/deallocate need the definition of pool_internal_t */
@@ -1612,9 +1685,25 @@ inline void allocator_t<T>::deallocate(T* _p, std::size_t) noexcept {
     pool->allocator_memory->free(p);
 }
 
+inline handle<void> cpp_yield_awaiter(state_t *yielding_task_state) {
+    /* bassicaly the same as bellow, except we don't destroy the corutine */
+    do_leave_modifs(yielding_task_state);
 
-inline handle<void> final_awaiter_cleanup(state_t *ending_task_state)
-{
+    yielding_task_state->err = ERROR_YIELDED;
+    state_t *caller_state = yielding_task_state->caller_state;
+
+    /* from the point of view of the corutine modifications we are exiting here, this keeps the
+    call stack proper */
+    do_exit_modifs(yielding_task_state);
+
+    if (caller_state) {
+        return caller_state->self;
+    }
+
+    return yielding_task_state->pool->get_internal()->next_task();
+}
+
+inline handle<void> final_awaiter_cleanup(state_t *ending_task_state) {
     do_leave_modifs(ending_task_state);
     /* not sure if I should do something with the return value ... */
     state_t *caller_state = ending_task_state->caller_state;
@@ -1625,9 +1714,14 @@ inline handle<void> final_awaiter_cleanup(state_t *ending_task_state)
     }
     auto pool = ending_task_state->pool;
     /* If the task that we are final_awaiting has no caller, then it is the moment to destroy it,
-    no one needs it's return value(futures?). Else it will be destroyed by the caller. */
+    no one needs it's return value. Else it will be destroyed by the caller. */
     /* TODO: maybe the future can just simply create a task and set it's coro as the continuation
     here? Such that the future continues in the caller_state branch? */
+    if (ending_task_state->exception) {
+        pool->get_internal()->set_exception(ending_task_state->exception);
+        ending_task_state->self.destroy();
+        return std::noop_coroutine();
+    }
     ending_task_state->self.destroy();
     return pool->get_internal()->next_task();
 }
@@ -2404,7 +2498,7 @@ inline task<T> create_future(pool_t *pool, task<T> t) {
     /* ! this std::function will not be used using our allocator */
     auto exit_func = [sem, data](state_t *state) -> error_e {
         typename task<T>::handle_t h = task<T>::handle_t::from_address(state->self.address());
-        data->first = std::get<T>(h.promise()._ret);
+        data->first = std::get<T>(h.promise().ret);
         data->second = true;
         sem->signal();
         return ERROR_OK;
