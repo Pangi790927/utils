@@ -66,7 +66,7 @@ remembered in a faster structure */
 #endif
 
 /* Set if a pool can be available in more than one thread, necesary if you want to transfer the pool
-to a callback that will be called from another thread, WARNING: this slows down a lot of things */
+to a callback that will be called from another thread */
 #ifndef CORO_ENABLE_MULTITHREAD_SCHED
 # define CORO_ENABLE_MULTITHREAD_SCHED false
 #endif
@@ -368,6 +368,11 @@ struct pool_t {
     /* Same as coro::sched, but used outside of a corutine, based on the pool */
     template <typename T>
     void sched(task<T> task, const modif_pack_t& v = {}); /* ignores return type */
+
+#if CORO_ENABLE_MULTITHREAD_SCHED
+    template <typename T>
+    void thread_sched(task<T> task);
+#endif
 
     /* runs the event loop */
     run_e run();
@@ -815,9 +820,6 @@ struct allocator_memory_t {
     }
 
     void *alloc(size_t bytes) {
-#if CORO_ENABLE_MULTITHREAD_SCHED
-        std::lock_guard guard(lock);
-#endif
         void *ret = NULL;
         bool invalidated = false;
         std::apply([&](auto&&... args) {
@@ -827,9 +829,6 @@ struct allocator_memory_t {
     }
 
     void free(void *ptr) {
-#if CORO_ENABLE_MULTITHREAD_SCHED
-        std::lock_guard guard(lock);
-#endif
         std::apply([&](auto&&... args) { ((args.free(ptr)), ...); }, buckets);
     }
 
@@ -838,10 +837,6 @@ struct allocator_memory_t {
         2. The buckets must all be constructed automatically from allocator_bucket_sizes
     */
     buckets_type<buckets_cnt> buckets;
-
-#if CORO_ENABLE_MULTITHREAD_SCHED
-    std::mutex lock;
-#endif
 };
 
 /* allocator_t<T>::allocate/deallocate are declared under pool_internal_t */
@@ -1508,13 +1503,17 @@ struct pool_internal_t {
             return ;
         }
 
-#if CORO_ENABLE_MULTITHREAD_SCHED
-        std::lock_guard guard(lock);
-#endif
-
         /* third, we add the task to the pool */
         ready_tasks.push_back(&task.h.promise().state);
     }
+
+#if CORO_ENABLE_MULTITHREAD_SCHED
+    template <typename T>
+    void thread_sched(task<T> task) {
+        std::lock_guard guard(lock);
+        ready_thread_tasks.push_back(&task.h.promise().state);
+    }
+#endif
 
     run_e run() {
         if (!io_pool.is_ok()) {
@@ -1546,23 +1545,14 @@ struct pool_internal_t {
     }
 
     void push_ready(state_t *state) {
-#if CORO_ENABLE_MULTITHREAD_SCHED
-        std::lock_guard guard(lock);
-#endif
         ready_tasks.push_back(state);
     }
 
     void push_ready_front(state_t *state) {
-#if CORO_ENABLE_MULTITHREAD_SCHED
-        std::lock_guard guard(lock);
-#endif
         ready_tasks.push_front(state);
     }
 
     bool remove_ready(state_t *state) {
-#if CORO_ENABLE_MULTITHREAD_SCHED
-        std::lock_guard guard(lock);
-#endif
         for (auto it = ready_tasks.begin(); it != ready_tasks.end(); it++) {
             if (*it == state) {
                 ready_tasks.erase(it);
@@ -1573,15 +1563,21 @@ struct pool_internal_t {
     }
 
     state_t *next_task_state() {
+#if CORO_ENABLE_MULTITHREAD_SCHED
+        /* First move the tasks comming from another thread, that is if there are any */
+        {
+            std::lock_guard guard(lock);
+            ready_tasks.insert(ready_thread_tasks.begin(), ready_thread_tasks.end());
+            ready_thread_tasks.clear();
+        }
+#endif
+
         if (io_pool.handle_ready() != ERROR_OK) {
             CORO_DEBUG("Failed io pool");
             ret_val = RUN_ERRORED;
             return nullptr;
         }
 
-#if CORO_ENABLE_MULTITHREAD_SCHED
-        std::lock_guard guard(lock);
-#endif
         if (!ready_tasks.empty()) {
             auto ret = ready_tasks.front();
             ready_tasks.pop_front();
@@ -1652,6 +1648,7 @@ private:
 
 #if CORO_ENABLE_MULTITHREAD_SCHED
     std::mutex lock;
+    std::vector<state_t *> ready_thread_tasks;
 #endif
 };
 
@@ -1733,6 +1730,11 @@ inline pool_t::pool_t() {
 template <typename T>
 inline void pool_t::sched(task<T> task, const modif_pack_t& v) {
     internal->sched(task, create_modif_table(this, v));
+}
+
+template <typename T>
+inline void pool_t::thread_sched(task<T> task) {
+    internal->sched(task);
 }
 
 inline run_e pool_t::run() {
