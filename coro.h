@@ -1511,6 +1511,7 @@ struct pool_internal_t {
     template <typename T>
     void thread_sched(task<T> task) {
         std::lock_guard guard(lock);
+        thread_pushed_new_tasks = true;
         ready_thread_tasks.push_back(&task.h.promise().state);
     }
 #endif
@@ -1565,10 +1566,12 @@ struct pool_internal_t {
     state_t *next_task_state() {
 #if CORO_ENABLE_MULTITHREAD_SCHED
         /* First move the tasks comming from another thread, that is if there are any */
-        {
+        /* TODO: check if the if bellow does something for speed (i.e. if the atomic is usefull) */
+        if (thread_pushed_new_tasks) {
             std::lock_guard guard(lock);
             ready_tasks.insert(ready_thread_tasks.begin(), ready_thread_tasks.end());
             ready_thread_tasks.clear();
+            thread_pushed_new_tasks = false;
         }
 #endif
 
@@ -1648,6 +1651,7 @@ private:
 
 #if CORO_ENABLE_MULTITHREAD_SCHED
     std::mutex lock;
+    std::atomic<bool> thread_pushed_new_tasks = false;
     std::vector<state_t *> ready_thread_tasks;
 #endif
 };
