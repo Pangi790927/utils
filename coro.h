@@ -32,6 +32,7 @@
 ====================================================================================================
 */
 
+#include <atomic>
 #include <chrono>
 #include <cinttypes>
 #include <coroutine>
@@ -53,6 +54,8 @@
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
+
+#define CORO_ENABLE_MULTITHREAD_SCHED true
 
 /* The maximum amount of concurent timers that can be awaited */
 #ifndef CORO_MAX_TIMER_POOL_SIZE
@@ -1569,7 +1572,8 @@ struct pool_internal_t {
         /* TODO: check if the if bellow does something for speed (i.e. if the atomic is usefull) */
         if (thread_pushed_new_tasks) {
             std::lock_guard guard(lock);
-            ready_tasks.insert(ready_thread_tasks.begin(), ready_thread_tasks.end());
+            for (auto &s : ready_thread_tasks)
+                ready_tasks.push_back(s);
             ready_thread_tasks.clear();
             thread_pushed_new_tasks = false;
         }
@@ -1736,10 +1740,12 @@ inline void pool_t::sched(task<T> task, const modif_pack_t& v) {
     internal->sched(task, create_modif_table(this, v));
 }
 
+#if CORO_ENABLE_MULTITHREAD_SCHED
 template <typename T>
 inline void pool_t::thread_sched(task<T> task) {
     internal->sched(task);
 }
+#endif
 
 inline run_e pool_t::run() {
     return internal->run();
