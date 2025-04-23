@@ -32,30 +32,56 @@
 ====================================================================================================
 */
 
-#include <atomic>
-#include <chrono>
-#include <cinttypes>
-#include <coroutine>
-#include <deque>
-#include <functional>
-#include <list>
-#include <map>
 #include <memory>
-#include <unordered_set>
-#include <utility>
-#include <variant>
 #include <vector>
+#include <chrono>
+#include <coroutine>
+#include <functional>
+#include <variant>
+#include <unordered_set>
+#include <map>
+#include <deque>
 #include <set>
-#include <stack>
-
-#include <fcntl.h>
-#include <unistd.h>
+#include <source_location>
+#include <cinttypes>
+#include <list>
+#include <utility>
 #include <string.h>
-#include <sys/socket.h>
-#include <sys/epoll.h>
-#include <sys/timerfd.h>
 
-#define CORO_ENABLE_MULTITHREAD_SCHED true
+#ifndef CORO_OS_LINUX
+# define CORO_OS_LINUX false
+#endif
+
+#ifndef CORO_OS_WINDOWS
+# define CORO_OS_WINDOWS true
+#endif
+
+#ifndef CORO_OS_UNKNOWN
+# define CORO_OS_UNKNOWN false
+#endif
+
+/* If you want to replace the pool with your own implementation */
+#ifndef CORO_OS_UNKNOWN
+# define CORO_OS_UNKNOWN false
+# define CORO_OS_UNKNOWN_IMPLEMENTATION
+# define CORO_OS_UNKNOWN_IO_DESC
+#endif
+
+#if CORO_OS_LINUX
+# include <unistd.h>
+# include <sys/socket.h>
+# include <sys/epoll.h>
+# include <sys/timerfd.h>
+# include <fcntl.h>
+#endif
+
+#if CORO_OS_WINDOWS
+# include <windows.h>
+#endif
+
+#if CORO_OS_UNKNOWN
+/* you should include your needed files before including this file */
+#endif
 
 /* The maximum amount of concurent timers that can be awaited */
 #ifndef CORO_MAX_TIMER_POOL_SIZE
@@ -203,7 +229,7 @@ enum error_e : int32_t {
     ERROR_YIELDED =  1, /* not really an error, but used to signal that the coro yielded */
     ERROR_OK      =  0,
     ERROR_GENERIC = -1, /* generic error, can use log_str to find the error, or sometimes errno */
-    ERROR_TIMEOUT = -2, /* the error comes from a modif, namely a timeout */
+    ERROR_TIMEO   = -2, /* the error comes from a modif, namely a timeout */
     ERROR_WAKEUP  = -3, /* the error comes from force awaking the awaiter */
     ERROR_USER    = -4, /* the error comes from a modif, namely an user defined modif, users can
                         use this if they wish to return from modif cbks */
@@ -442,12 +468,29 @@ private:
     std::unique_ptr<sem_internal_t, deallocator_t<sem_internal_t>> internal;
 };
 
-/* This describes the async io op. It may be redefined if this lib will be ported to windows or
-other systems. */
+
+#if CORO_OS_LINUX
+
+/* This describes the async io op. */
 struct io_desc_t {
     int fd = -1;                        /* file descriptor */
     uint32_t events = 0xffff'ffff;      /* epoll events to be waited on the file descriptor */
 };
+
+#endif /* CORO_OS_LINUX */
+#if CORO_OS_WINDOWS
+
+/* This describes the async io op. */
+struct io_desc_t {
+};
+
+#endif /* CORO_OS_WINDOWS */
+#if CORO_OS_UNKNOWN
+
+/* This describes the async io op. */
+CORO_OS_UNKNOWN_IO_DESC
+
+#endif /* CORO_OS_UNKNOWN */
 
 /* This is the state struct that each corutine has */
 struct state_t {
@@ -634,6 +677,8 @@ awakened and ejected from the system before closing it. For example:
 */
 inline task_t stop_io(const io_desc_t& io_desc);
 
+#if CORO_OS_LINUX
+
 /* Linux Specific:
 ------------------------------------------------------------------------------------------------  */
 
@@ -646,6 +691,26 @@ inline task<ssize_t> read(int fd, void *buff, size_t len);
 inline task<ssize_t> write(int fd, const void *buff, size_t len);
 inline task<ssize_t> read_sz(int fd, void *buff, size_t len);
 inline task<ssize_t> write_sz(int fd, const void *buff, size_t len);
+
+#endif /* CORO_OS_LINUX */
+
+/* Windows Specific:
+------------------------------------------------------------------------------------------------  */
+
+#if CORO_OS_WINDOWS
+
+/* TODO: */
+
+#endif /* CORO_OS_WINDOWS */
+
+/* Unknown Specific:
+------------------------------------------------------------------------------------------------  */
+
+#if CORO_OS_UNKNOWN
+
+/* You implement your own */
+
+#endif /* CORO_OS_UNKNOWN */
 
 /* Debug Interfaces:
 ------------------------------------------------------------------------------------------------  */
@@ -1141,6 +1206,8 @@ inline state_t *task<T>::get_state() {
 /* The Pool & Epoll engine
 ------------------------------------------------------------------------------------------------- */
 
+#if CORO_OS_LINUX
+
 /* This is a component of the pool_internal that is somehow prepared to be replaced in case this lib
 will be ported to other systems. In theory, to change the waiting mechanism you want to change this
 struct and io_desc_t and otherwise this whole library should be ignorant to the system async
@@ -1486,6 +1553,90 @@ private:
     int timer_stack[MAX_TIMER_POOL_SIZE];
     int stack_head = -1;
 };
+
+#endif /* CORO_OS_LINUX */
+#if CORO_OS_WINDOWS
+
+// Those two need implemented:
+
+struct io_pool_t {
+    io_pool_t(pool_t *pool, std::deque<state_t *, allocator_t<state_t *>> &ready_tasks) {}
+
+    // returns true if the constructor was succesfull
+    bool is_ok() {}
+
+    // populates ready_tasks with, well, tasks that are ready. This is the only point that blocks,
+    // i.e. if there are no ready tasks, this blocks till there are
+    error_e handle_ready() {}
+
+    // the task with state "state" will wait until the event "io_desc" is ready, this function adds
+    // this waiter inside this pool
+    error_e add_waiter(state_t *state, const io_desc_t& io_desc) {}
+
+    // the state (singular) that is waiting for io_desc must be awakened
+    error_e force_awake(const io_desc_t& io_desc, error_e retcode) {}
+
+    // awakes all
+    error_e clear() {}
+};
+
+struct timer_pool_t {
+    // initialize the io_desc_t class with a timer awaitable, not yet triggering the timer
+    error_e get_timer(io_desc_t& new_timer) {}
+
+    // start the respective timer with the time_us duration
+    error_e set_timer(const io_desc_t& timer, const std::chrono::microseconds& time_us) {}
+
+    // free the respective timer, this should happen only when there are no tasks waiting for this
+    // timer (for awaking timers the function force_awake is used)
+    error_e free_timer(const io_desc_t& timer) {}
+};
+
+#endif /* CORO_OS_WINDOWS */
+
+#if CORO_OS_UNKNOWN
+
+CORO_OS_UNKNOWN_IMPLEMENTATION
+
+/*
+// Those two need implemented:
+
+struct io_pool_t {
+    io_pool_t(pool_t *pool, std::deque<state_t *, allocator_t<state_t *>> &ready_tasks) {}
+
+    // returns true if the constructor was succesfull
+    bool is_ok() {}
+
+    // populates ready_tasks with, well, tasks that are ready. This is the only point that blocks,
+    // i.e. if there are no ready tasks, this blocks till there are
+    error_e handle_ready() {}
+
+    // the task with state "state" will wait until the event "io_desc" is ready, this function adds
+    // this waiter inside this pool
+    error_e add_waiter(state_t *state, const io_desc_t& io_desc) {}
+
+    // the state (singular) that is waiting for io_desc must be awakened
+    error_e force_awake(const io_desc_t& io_desc, error_e retcode) {}
+
+    // awakes all
+    error_e clear() {}
+};
+
+struct timer_pool_t {
+    // initialize the io_desc_t class with a timer awaitable, not yet triggering the timer
+    error_e get_timer(io_desc_t& new_timer) {}
+
+    // start the respective timer with the time_us duration
+    error_e set_timer(const io_desc_t& timer, const std::chrono::microseconds& time_us) {}
+
+    // free the respective timer, this should happen only when there are no tasks waiting for this
+    // timer (for awaking timers the function force_awake is used)
+    error_e free_timer(const io_desc_t& timer) {}
+};
+
+*/
+
+#endif /* CORO_OS_UNKNOWN */
 
 /* If this is not really needed here we move it bellow */
 struct pool_internal_t {
@@ -2158,11 +2309,6 @@ inline task_t stop_io(const io_desc_t& io_desc) {
     co_return (co_await get_pool())->get_internal()->stop_io(io_desc, ERROR_WAKEUP);
 }
 
-inline task_t stop_fd(int fd) {
-    /* gets the fd out of the poll, awakening all it's waiters with error_e ERROR_WAKEUP */
-    co_return (co_await stop_io(io_desc_t{.fd = fd}));
-}
-
 inline task_t force_stop(int64_t stopval) {
     struct stop_awaiter_t {
         stop_awaiter_t(int64_t stopval) : stopval(stopval) {}
@@ -2243,6 +2389,13 @@ inline task_t sleep_s(uint64_t timeo_s) {
 inline task_t wait_event(const io_desc_t& io_desc) {
     io_awaiter_t awaiter(io_desc);
     co_return (co_await awaiter);
+}
+
+#if CORO_OS_LINUX
+
+inline task_t stop_fd(int fd) {
+    /* gets the fd out of the poll, awakening all it's waiters with error_e ERROR_WAKEUP */
+    co_return (co_await stop_io(io_desc_t{.fd = fd}));
 }
 
 inline task_t connect(int fd, sockaddr *sa, socklen_t len) {
@@ -2398,6 +2551,18 @@ inline task<ssize_t> write_sz(int fd, const void *buff, size_t len) {
     }
     co_return original_len;
 }
+
+#endif /* CORO_OS_LINUX */ 
+
+#if CORO_OS_WINDOWS
+
+/* TODO: */
+
+#endif /* CORO_OS_WINDOWS */
+
+#if CORO_OS_UNKNOWN
+/* you implement your own */
+#endif
 
 struct task_modifs_getter_t {
     modif_table_p table;
@@ -2720,7 +2885,7 @@ inline dbg_string_t dbg_enum(error_e code) {
     switch (code) {
         case ERROR_OK:      return dbg_string_t{"ERROR_OK",        allocator_t<char>{nullptr}};
         case ERROR_GENERIC: return dbg_string_t{"ERROR_GENERIC",   allocator_t<char>{nullptr}};
-        case ERROR_TIMEOUT: return dbg_string_t{"ERROR_TIMEOUT",   allocator_t<char>{nullptr}};
+        case ERROR_TIMEO:   return dbg_string_t{"ERROR_TIMEO",     allocator_t<char>{nullptr}};
         case ERROR_WAKEUP:  return dbg_string_t{"ERROR_WAKEUP",    allocator_t<char>{nullptr}};
         case ERROR_USER:    return dbg_string_t{"ERROR_USER",      allocator_t<char>{nullptr}};
         case ERROR_DEPEND:  return dbg_string_t{"ERROR_DEPEND",    allocator_t<char>{nullptr}};
@@ -2848,14 +3013,14 @@ inline dbg_string_t dbg_name(void *v) {
             dbg_names.find(v)->second.second);
 }
 
-#else /*CORO_ENABLE_DEBUG_NAMES*/
+#else /* CORO_ENABLE_DEBUG_NAMES */
 
 template <typename ...Args>
 inline void *dbg_register_name(void *addr, const char *fmt, Args&&... args) { return addr; }
 
 inline dbg_string_t dbg_name(void *v) { return dbg_string_t{"", allocator_t<char>{nullptr}}; };
 
-#endif /*CORO_ENABLE_DEBUG_NAMES*/
+#endif /* CORO_ENABLE_DEBUG_NAMES */
 
 #if CORO_ENABLE_LOGGING
 
@@ -2871,16 +3036,16 @@ inline void dbg(const char *file, const char *func, int line, const char *fmt, A
     dbg_raw(dbg_format(fmt, std::forward<Args>(args)...), file, func, line);
 }
 
-#else /*CORO_ENABLE_LOGGING*/
+#else /* CORO_ENABLE_LOGGING */
 
 template <typename... Args> /* no logging -> do nothing */
 inline void dbg(const char *, const char *, int, const char *fmt, Args&&...) {}
 
-#endif /*CORO_ENABLE_LOGGING*/
+#endif /* CORO_ENABLE_LOGGING */
 
 /* The end
 ------------------------------------------------------------------------------------------------- */
 
 }
 
-#endif
+#endif /* CORO_H */
