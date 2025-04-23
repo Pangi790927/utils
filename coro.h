@@ -51,11 +51,11 @@
 #include <string.h>
 
 #ifndef CORO_OS_LINUX
-# define CORO_OS_LINUX true
+# define CORO_OS_LINUX false
 #endif
 
 #ifndef CORO_OS_WINDOWS
-# define CORO_OS_WINDOWS false
+# define CORO_OS_WINDOWS true
 #endif
 
 /* If you want to use your own implementation define CORO_OS_UNKNOWN and those bellow */
@@ -340,11 +340,10 @@ constexpr std::pair<int, int> allocator_bucket_sizes[] = {
     {512,   CORO_ALLOCATOR_SCALE * 64},
     {2048,  CORO_ALLOCATOR_SCALE * 16}
 };
+
 template <typename T>
 struct allocator_t {
-    constexpr static int common_alignment = 16;
-    static_assert(common_alignment % alignof(T) == 0,
-            "ERROR: The allocator assumption is that internal data is aligned to at most 16 bytes");
+    constexpr static int common_alignment = __STDCPP_DEFAULT_NEW_ALIGNMENT__;
 
     using value_type = T;
     allocator_t(pool_t *pool) : pool(pool) {}
@@ -365,7 +364,6 @@ struct allocator_t {
     bool operator == (const allocator_t<U>& o) noexcept { return this->pool == o.pool; }
 
 protected:
-    template <typename U>
     friend struct allocator_t; /* lonely class */
 
     pool_t *pool = nullptr; /* this allocator should allways be called on a valid pool */
