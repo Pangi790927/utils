@@ -46,6 +46,8 @@
 #include <cinttypes>
 #include <list>
 #include <utility>
+#include <array>
+#include <stack>
 #include <string.h>
 
 #ifndef CORO_OS_LINUX
@@ -56,15 +58,11 @@
 # define CORO_OS_WINDOWS true
 #endif
 
+/* If you want to use your own implementation define CORO_OS_UNKNOWN and those bellow */
 #ifndef CORO_OS_UNKNOWN
 # define CORO_OS_UNKNOWN false
-#endif
-
-/* If you want to replace the pool with your own implementation */
-#ifndef CORO_OS_UNKNOWN
-# define CORO_OS_UNKNOWN false
-# define CORO_OS_UNKNOWN_IMPLEMENTATION
-# define CORO_OS_UNKNOWN_IO_DESC
+# define CORO_OS_UNKNOWN_IMPLEMENTATION ;
+# define CORO_OS_UNKNOWN_IO_DESC ;
 #endif
 
 #if CORO_OS_LINUX
@@ -475,6 +473,8 @@ private:
 struct io_desc_t {
     int fd = -1;                        /* file descriptor */
     uint32_t events = 0xffff'ffff;      /* epoll events to be waited on the file descriptor */
+
+    bool is_valid() { return fd > 0; }
 };
 
 #endif /* CORO_OS_LINUX */
@@ -482,6 +482,8 @@ struct io_desc_t {
 
 /* This describes the async io op. */
 struct io_desc_t {
+
+    bool is_valid() {}
 };
 
 #endif /* CORO_OS_WINDOWS */
@@ -751,7 +753,10 @@ inline dbg_string_t dbg_name(void *v);
 /* Obtains a string from the given enum */
 inline dbg_string_t dbg_enum(error_e code);
 inline dbg_string_t dbg_enum(run_e code);
+
+#if CORO_OS_LINUX
 inline dbg_string_t dbg_epoll_events(uint32_t events);
+#endif /* CORO_OS_LINUX */
 
 /* formats a string using the C snprintf, similar in functionality to a combination of
 snprintf+std::format, in the version of g++ that I'm using std::format is not available  */
@@ -1599,7 +1604,7 @@ struct timer_pool_t {
 CORO_OS_UNKNOWN_IMPLEMENTATION
 
 /*
-// Those two need implemented:
+// Those two structs need implemented:
 
 struct io_pool_t {
     io_pool_t(pool_t *pool, std::deque<state_t *, allocator_t<state_t *>> &ready_tasks) {}
@@ -1929,10 +1934,6 @@ inline pool_internal_t *pool_t::get_internal() {
 
 inline error_e pool_t::stop_io(const io_desc_t& io_desc) {
     return get_internal()->stop_io(io_desc, ERROR_WAKEUP);
-}
-
-inline error_e pool_t::stop_fd(int fd) {
-    return stop_io(io_desc_t{.fd = fd});
 }
 
 inline std::shared_ptr<pool_t> create_pool() {
@@ -2711,7 +2712,7 @@ inline task<std::pair<T, error_e>> create_timeo(
             dealloc_create<timer_state_t>(pool), allocator_t<int>{pool});
 
     auto [timer_elapsed_killer, timer_elapsed_sig] = create_killer(pool, ERROR_WAKEUP);
-    auto [timer_killer, timer_sig] = create_killer(pool, ERROR_TIMEOUT);
+    auto [timer_killer, timer_sig] = create_killer(pool, ERROR_TIMEO);
 
     tstate->sem = create_sem(pool, 0);
     tstate->timer_elapsed_sig = timer_elapsed_sig;
@@ -2735,7 +2736,7 @@ inline task<std::pair<T, error_e>> create_timeo(
             tstate->timer_elapsed_sig();
             co_return ERROR_GENERIC;
         }
-        tstate->err = ERROR_TIMEOUT;
+        tstate->err = ERROR_TIMEO;
         tstate->timer_elapsed_sig();
         tstate->sem->signal();
         co_return ERROR_OK;
@@ -2784,7 +2785,7 @@ inline std::pair<modif_pack_t, std::function<error_e(void)>> create_killer(pool_
         /* if we are waiting for something in the top level we will first try to see if the last
         pushed state is ready for resuming, case in witch we remove it from the ready queue. Else
         we remove it from the io or semaphore waiting queue, whichever was holding the awaiter. */
-        if ((kstate->sem || kstate->io_desc.fd != -1) &&
+        if ((kstate->sem || kstate->io_desc.is_valid()) &&
                 pool->get_internal()->remove_ready(kstate->call_stack.top()))
         {
             kstate->sem = nullptr;
@@ -2794,7 +2795,7 @@ inline std::pair<modif_pack_t, std::function<error_e(void)>> create_killer(pool_
             kstate->sem->get_internal()->erase_waiter(*kstate->it);
             kstate->sem = nullptr;
         }
-        else if (kstate->io_desc.fd != -1) {
+        else if (kstate->io_desc.is_valid()) {
             pool->get_internal()->stop_io(kstate->io_desc, ERROR_WAKEUP);
             kstate->io_desc = io_desc_t{};
         }
@@ -2904,6 +2905,7 @@ inline dbg_string_t dbg_enum(run_e code) {
     }
 }
 
+#if CORO_OS_LINUX
 inline dbg_string_t dbg_epoll_events(uint32_t events) {
     dbg_string_t ret{"[", allocator_t<char>{nullptr}};
     if (events & EPOLLIN)    ret += "EPOLLIN|";
@@ -2918,6 +2920,7 @@ inline dbg_string_t dbg_epoll_events(uint32_t events) {
         ret += "]";
     return ret;
 }
+#endif /* CORO_OS_LINUX */
 
 inline modif_pack_t dbg_create_tracer(pool_t *pool) {
     modif_flags_e flags = modif_flags_e(CO_MODIF_INHERIT_ON_CALL | CO_MODIF_INHERIT_ON_SCHED);
