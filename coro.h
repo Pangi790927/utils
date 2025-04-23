@@ -51,11 +51,11 @@
 #include <string.h>
 
 #ifndef CORO_OS_LINUX
-# define CORO_OS_LINUX false
+# define CORO_OS_LINUX true
 #endif
 
 #ifndef CORO_OS_WINDOWS
-# define CORO_OS_WINDOWS true
+# define CORO_OS_WINDOWS false
 #endif
 
 /* If you want to use your own implementation define CORO_OS_UNKNOWN and those bellow */
@@ -410,7 +410,6 @@ struct pool_t {
 
     /* stops awaiters from waiting on the descriptor (this is the non-awaiting variant) */
     error_e stop_io(const io_desc_t& io_desc);
-    error_e stop_fd(int fd);
 
     /* Better to not touch this function, you need to understand the internals of pool_t to use it */
     pool_internal_t *get_internal();

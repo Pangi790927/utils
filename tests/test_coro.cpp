@@ -524,7 +524,7 @@ co::task_t test8_client() {
     FnScope scope([pool]{
         test8_client_done++;
         if (test8_client_done == 3)
-            pool->stop_fd(test8_server_fd);
+            pool->stop_io(co::io_desc_t{.fd = test8_server_fd});
     });
 
     ASSERT_COFN(fd = socket(AF_INET, SOCK_STREAM, 0));
