@@ -480,8 +480,26 @@ struct io_desc_t {
 #endif /* CORO_OS_LINUX */
 #if CORO_OS_WINDOWS
 
+struct io_data_t {
+    enum io_flag_e : int32_t {
+        IO_FLAG_NONE = 0,
+        IO_FLAG_TIMER = 1,
+        IO_FLAG_ADDED = 2,
+    };
+
+    OVERLAPPED overlapped = {0};
+    state_t *state = nullptr;
+    io_flag_e flags = io_flag_e{0};
+    HANDLE fd = NULL;
+    std::shared_ptr<io_data_t> next = nullptr;
+    std::shared_ptr<io_data_t> prev = nullptr;
+};
+
 /* This describes the async io op. */
 struct io_desc_t {
+    std::shared_ptr<io_data_t> data = nullptr;
+    std::function<error_e(void *)> push_io_request;
+    void *ctx;
 
     bool is_valid() {}
 };
@@ -701,7 +719,26 @@ inline task<ssize_t> write_sz(int fd, const void *buff, size_t len);
 
 #if CORO_OS_WINDOWS
 
-/* TODO: */
+/* TODO: 
+    ConnectEx *
+
+    AcceptEx
+    ConnectNamedPipe
+    DeviceIoControl
+    LockFileEx
+    ReadDirectoryChangesW
+    ReadFile
+    TransactNamedPipe
+    WaitCommEvent
+    WriteFile
+    WSASendMsg
+    WSASendTo
+    WSASend
+    WSARecvFrom
+    LPFN_WSARECVMSG (WSARecvMsg)
+    WSARecv
+
+*/
 
 #endif /* CORO_OS_WINDOWS */
 
@@ -1242,6 +1279,10 @@ struct io_pool_t {
         }
     }
 
+    ~io_pool_t() {
+        close(epoll_fd);
+    }
+
     bool is_ok() {
         return epoll_fd >= 0;
     }
@@ -1499,6 +1540,8 @@ private:
 The idea is that timers need to be created by some sort of system provided mechanism and waiting
 on it should be compatibile with the io_pool_t and as such, the timer should return a io_desc_t */
 struct timer_pool_t {
+    timer_pool_t(pool_t *pool) {}
+
     error_e get_timer(io_desc_t& new_timer) {
         if (stack_head > 0) {
             new_timer.fd = timer_stack[stack_head];
@@ -1562,39 +1605,284 @@ private:
 #endif /* CORO_OS_LINUX */
 #if CORO_OS_WINDOWS
 
-// Those two need implemented:
+inline std::string get_last_error() {
+    char num_buff[64] = {0};
+    LPVOID lpMsgBuf;
+    DWORD dw = GetLastError();
+    sprintf(num_buff, "0x%x", dw);
+
+    if (FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+            FORMAT_MESSAGE_IGNORE_INSERTS, NULL, dw, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+            (LPTSTR) &lpMsgBuf, 0, NULL) == 0)
+    {
+        return std::string("UNKNOWN_WINDOWS_ERROR [") + num_buff + std::string("]");
+    }
+    else {
+        auto ret = (LPCTSTR)lpMsgBuf + std::string("[") + num_buff + std::string("]");
+        LocalFree(lpMsgBuf);
+        return ret;
+    }
+}
+
+struct timer_data_t {
+    uint64_t us;
+    HANDLE timer = NULL;
+    HANDLE iocp = NULL;
+    LPOVERLAPPED overlapped_ptr = NULL;
+};
 
 struct io_pool_t {
-    io_pool_t(pool_t *pool, std::deque<state_t *, allocator_t<state_t *>> &ready_tasks) {}
+    io_pool_t(pool_t *pool, std::deque<state_t *, allocator_t<state_t *>> &ready_tasks)
+    : pool{pool}, ready_tasks{ready_tasks}
+    {
+        iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 0);
+        if (!iocp) {
+            CORO_DEBUG("FAILED CreateIoCompletionPort err:%s", get_last_error().c_str());
+            /* TODO: we can except on this warning if enabled */
+        }
+    }
 
-    // returns true if the constructor was succesfull
-    bool is_ok() {}
+    ~io_pool_t() {
+        clear();
+        CloseHandle(iocp);
+    }
 
-    // populates ready_tasks with, well, tasks that are ready. This is the only point that blocks,
-    // i.e. if there are no ready tasks, this blocks till there are
-    error_e handle_ready() {}
+    bool is_ok() {
+        return iocp;
+    }
 
-    // the task with state "state" will wait until the event "io_desc" is ready, this function adds
-    // this waiter inside this pool
-    error_e add_waiter(state_t *state, const io_desc_t& io_desc) {}
+    error_e handle_ready() {
+        if (ready_tasks.size() > 0) {
+            /* we don't do anything if there are tasks ready, we only start interogating the system
+            about ready io events if we don't have corutines to serve */
+            return ERROR_OK;
+        }
+
+        /* TODO: emulate this */
+        if (waiter_cnt == 0) {
+            /* we don't have what to wait on, there are no registered awaiters */
+            return ERROR_OK;
+        }
+
+        /* Now that we know we have no corutines ready we know we have to wait for some sort of io
+        event to happen(timers, file io, network io, etc.). */
+        OVERLAPPED_ENTRY entry; 
+        ULONG cnt;
+        bool ret = GetQueuedCompletionStatusEx(iocp, &entry, 1, &cnt, INFINITE, TRUE);
+        if (cnt == 0) {
+            CORO_DEBUG("WHY?");
+            return ERROR_GENERIC;
+        }
+        if (!ret) {
+            CORO_DEBUG("Failed GetQueuedCompletionStatus: %s", get_last_error().c_str());
+            /* here and in linux impl, good place for warning exception? */
+            return ERROR_GENERIC;
+        }
+
+        /* awake the waiter (mark it's state->error and push it onto the ready tasks) */
+        io_data_t *data = (io_data_t *)entry.lpOverlapped;
+        data->state->err = ERROR_OK;
+        ready_tasks.push_back(data->state);
+        waiter_cnt--;
+
+        if (data->prev) data->prev->next = data->next;
+        if (data->next) data->next->prev = data->prev;
+        if (data == head.get()) head = data->prev ? data->prev : data->next;
+
+        return ERROR_OK;
+    }
+
+    /* The order should be: add_waiter, do the request, suspend */
+    error_e add_waiter(state_t *state, const io_desc_t& io_desc) {
+        if (!io_desc.data) {
+            CORO_DEBUG("FAILED Can't await null data");
+            return ERROR_GENERIC;
+        }
+        if (io_desc.data->flags & io_data_t::IO_FLAG_ADDED) {
+            CORO_DEBUG("FAILED Can't add awaiter twice");
+            return ERROR_GENERIC;
+        }
+
+        /* there are two things that must happen here:
+            1. the overlapped structure needs to be linked to the state structure
+            2. the handle of the io thinghy must be aquired by this pool */
+
+        io_desc.data->state = state;
+        if (io_desc.data->flags & io_data_t::IO_FLAG_TIMER) {
+            timer_data_t *timer_data = (timer_data_t *)io_desc.ctx;
+            timer_data->iocp = iocp;
+        }
+        else if (!CreateIoCompletionPort(io_desc.data->fd, iocp, 0, 0)) {
+            CORO_DEBUG("Failed to add descriptor to iocp: %s", get_last_error().c_str());
+            return ERROR_GENERIC;
+        }
+
+        if (io_desc.push_io_request(io_desc.ctx) != ERROR_OK) {
+            CORO_DEBUG("Failed the io request");
+            return ERROR_GENERIC;
+        }
+        io_desc.data->flags = io_data_t::io_flag_e(io_desc.data->flags | io_data_t::IO_FLAG_ADDED);
+        waiter_cnt++;
+
+        if (!head)
+            head = io_desc.data;
+        else {
+            head->prev = io_desc.data;
+            io_desc.data->next = head;
+            head = io_desc.data;
+        }
+
+        return ERROR_OK;
+    }
 
     // the state (singular) that is waiting for io_desc must be awakened
-    error_e force_awake(const io_desc_t& io_desc, error_e retcode) {}
+    error_e force_awake(const io_desc_t& io_desc, error_e retcode) {
+        /* maybe cancelex? */
+
+        waiter_cnt--;
+        if (io_desc.data->flags & io_data_t::IO_FLAG_TIMER) {
+            timer_data_t *timer_data = (timer_data_t *)io_desc.ctx;
+            if (!CloseHandle(timer_data->timer)) {
+                CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
+                return ERROR_GENERIC;
+            }
+            timer_data->timer = NULL;
+        }
+        else if (!CancelIoEx(io_desc.data->fd, &io_desc.data->overlapped)) {
+            CORO_DEBUG("Failed to cancel io: %s", get_last_error().c_str());
+            return ERROR_GENERIC;
+        }
+
+        /* TODO: DO I need to add it to the ready queue or it adds itself when awakened? */
+        // ERROR_OPERATION_ABORTED (TODO: where is this used?)
+        return ERROR_OK;
+    }
 
     // awakes all
-    error_e clear() {}
+    error_e clear() {
+        while (head) {
+            destroy_state(head->state);
+            if (head->flags & io_data_t::IO_FLAG_TIMER) {
+                /* TODO: */
+            }
+            else if (!CancelIoEx(head->fd, &head->overlapped)) {
+                CORO_DEBUG("Failed to cancel io: %s", get_last_error().c_str());
+                return ERROR_GENERIC;
+            }
+            auto aux = head;
+            head = head->next;
+            aux->next = aux->prev = nullptr;
+        }
+        if (!CloseHandle(iocp)) {
+            CORO_DEBUG("Failed to CloseHandle io: %s", get_last_error().c_str());
+            return ERROR_GENERIC;
+        }
+        iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 0);
+        if (!iocp) {
+            CORO_DEBUG("FAILED re-CreateIoCompletionPort err:%s", get_last_error().c_str());
+            return ERROR_GENERIC;
+        }
+        waiter_cnt = 0;
+        return ERROR_OK;
+    }
+
+private:
+    pool_t *pool = nullptr;
+    std::deque<state_t *, allocator_t<state_t *>> &ready_tasks;
+    HANDLE iocp = nullptr;
+    std::shared_ptr<io_data_t> head = nullptr;
+    int waiter_cnt = 0;
 };
 
 struct timer_pool_t {
+    timer_pool_t(pool_t *pool) : pool(pool) {
+        for (int i = 0; i < MAX_TIMER_POOL_SIZE; i++) {
+            free_timers[i] = i;
+        }
+    }
+
     // initialize the io_desc_t class with a timer awaitable, not yet triggering the timer
-    error_e get_timer(io_desc_t& new_timer) {}
+    error_e get_timer(io_desc_t& new_timer) {
+        if (timers_head == 0) {
+            CORO_DEBUG("No more timers left");
+            return ERROR_GENERIC;
+        }
+        int timer_id = free_timers[timers_head];
+        timers_head--;
+        new_timer = io_desc_t {
+            .data = std::shared_ptr<io_data_t>(alloc<io_data_t>(pool),
+                    dealloc_create<io_data_t>(pool), allocator_t<int>{pool}),
+            .push_io_request = [](void *ctx) -> error_e {
+                /* This function will becalled inside the io_pool when this timer is scheduled to
+                start, so practically speaking, the timer starts at that time. The problem is that
+                we need the iocp handle, so we must call this function then */
+
+                timer_data_t *timer_data = (timer_data_t *)ctx;
+                LARGE_INTEGER due_time;
+
+                due_time.LowPart  = (DWORD) ((timer_data->us * -10) & 0xFFFFFFFF);
+                due_time.HighPart = (LONG)  ((timer_data->us * -10) >> 32);
+
+                auto res = SetWaitableTimer(timer_data->timer, &due_time, 0,
+                    [](LPVOID lpArg, DWORD , DWORD ) -> void {
+                        /* This function will be called when the timer expires, awakening the task */
+                        timer_data_t *timer_data = (timer_data_t *)lpArg;
+                        if (!PostQueuedCompletionStatus(
+                                timer_data->iocp, 0, 0, timer_data->overlapped_ptr))
+                        {
+                            CORO_DEBUG("Failed to awake from timer");
+                            /* TODO: find a way to propagate this error */
+                        }
+                    },
+                    ctx,
+                    FALSE /* TODO: check if we want to be able to resume the system */
+                );
+                if (!res) {
+                    CORO_DEBUG("Couldn't start the timer");
+                    return ERROR_OK;
+                }
+            },
+            .ctx = (void *)&timer_data[timer_id]
+        };
+        timer_data[timer_id].overlapped_ptr = &new_timer.data->overlapped;
+
+        if (!timer_data[timer_id].timer) {
+            std::string name = "coro-timer-" + std::to_string(timer_id);
+            timer_data[timer_id].timer = CreateWaitableTimer(NULL, FALSE, TEXT(name.c_str()));
+            if (!timer_data[timer_id].timer) {
+                CORO_DEBUG("Failed to create timer: %s", get_last_error().c_str());
+                return ERROR_GENERIC;
+            }
+        }
+        
+        *new_timer.data = io_data_t {
+            .flags = io_data_t::IO_FLAG_TIMER,
+        };
+
+        return ERROR_OK;
+    }
 
     // start the respective timer with the time_us duration
-    error_e set_timer(const io_desc_t& timer, const std::chrono::microseconds& time_us) {}
+    error_e set_timer(const io_desc_t& timer, const std::chrono::microseconds& time_us) {
+        auto timer_data = (timer_data_t *)timer.ctx;
+        /* TODO: we should better find the time of 'now' and set an absolute time here, so
+        we fix the discrepancy between this set_timer and the actual arming of the timer */
+        timer_data->us = time_us.count();
+        return ERROR_OK;
+    }
 
-    // free the respective timer, this should happen only when there are no tasks waiting for this
-    // timer (for awaking timers the function force_awake is used)
-    error_e free_timer(const io_desc_t& timer) {}
+    error_e free_timer(const io_desc_t& timer) {
+        int timer_id = ((timer_data_t *)timer.ctx - timer_data) / sizeof(timer_data_t);
+        timers_head++;
+        free_timers[timers_head] = timer_id;
+        return ERROR_OK;
+    }
+
+private:
+    pool_t *pool = nullptr;
+    timer_data_t timer_data[MAX_TIMER_POOL_SIZE];
+    int timers_head = MAX_TIMER_POOL_SIZE - 1;
+    int free_timers[MAX_TIMER_POOL_SIZE];
 };
 
 #endif /* CORO_OS_WINDOWS */
@@ -1649,7 +1937,8 @@ struct pool_internal_t {
     :   pool(_pool),
         ready_tasks{allocator_t<state_t *>{_pool}},
         io_pool{_pool, ready_tasks},
-        sem_pool{allocator_t<sem_t *>{_pool}}
+        sem_pool{allocator_t<sem_t *>{_pool}},
+        timer_pool(_pool)
     {}
 
     template <typename T>
