@@ -74,6 +74,7 @@
 #endif
 
 #if CORO_OS_WINDOWS
+# include <winsock2.h>
 # include <windows.h>
 #endif
 
@@ -487,21 +488,20 @@ struct io_data_t {
         IO_FLAG_ADDED = 2,
     };
 
-    OVERLAPPED overlapped = {0};
-    state_t *state = nullptr;
+    OVERLAPPED overlapped = {0};                    /* must be the first member of this struct */
     io_flag_e flags = io_flag_e{0};
-    HANDLE fd = NULL;
-    std::shared_ptr<io_data_t> next = nullptr;
-    std::shared_ptr<io_data_t> prev = nullptr;
+    state_t *state = nullptr;                       /* state of the task */
+
+    std::function<error_e(void *)> io_request;      /* function to be called inside add_waiter */
+    void *ptr = nullptr;                            /* can be context for io_request or timer */
+    HANDLE h = NULL;                                /* same as bellow */
 };
 
-/* This describes the async io op. */
 struct io_desc_t {
     std::shared_ptr<io_data_t> data = nullptr;
-    std::function<error_e(void *)> push_io_request;
-    void *ctx;
+    HANDLE h = NULL;
 
-    bool is_valid() {}
+    bool is_valid() { return h != NULL; }
 };
 
 #endif /* CORO_OS_WINDOWS */
@@ -719,26 +719,120 @@ inline task<ssize_t> write_sz(int fd, const void *buff, size_t len);
 
 #if CORO_OS_WINDOWS
 
-/* TODO: 
-    ConnectEx *
+/* similar to stop_io, but stops all the waiters on a handle */
+inline task_t stop_handle(HANDLE h);
 
-    AcceptEx
-    ConnectNamedPipe
-    DeviceIoControl
-    LockFileEx
-    ReadDirectoryChangesW
-    ReadFile
-    TransactNamedPipe
-    WaitCommEvent
-    WriteFile
-    WSASendMsg
-    WSASendTo
-    WSASend
-    WSARecvFrom
-    LPFN_WSARECVMSG (WSARecvMsg)
-    WSARecv
+/* Those functions are the same as their Windows API equivalent, the difference is that they don't
+expose the overlapped structure, which is used by the coro library. They require a handle that
+is compatible with iocp and they will attach the handle to the iocp instance. Those are the
+functions listed by msdn to work with iocp (and connect, that is part of an extension) */
+inline task<BOOL> ConnectEx(SOCKET  s,
+                            const   sockaddr *name,
+                            int     namelen,
+                            PVOID   lpSendBuffer,
+                            DWORD   dwSendDataLength,
+                            LPDWORD lpdwBytesSent);
 
-*/
+inline task<BOOL> AcceptEx(SOCKET   sListenSocket,
+                           SOCKET   sAcceptSocket,
+                           PVOID    lpOutputBuffer,
+                           DWORD    dwReceiveDataLength,
+                           DWORD    dwLocalAddressLength,
+                           DWORD    dwRemoteAddressLength,
+                           LPDWORD  lpdwBytesReceived);
+
+inline task<BOOL> ConnectNamedPipe(HANDLE hNamedPipe);
+
+inline task<BOOL> DeviceIoControl(HANDLE    hDevice,
+                                  DWORD     dwIoControlCode,
+                                  LPVOID    lpInBuffer,
+                                  DWORD     nInBufferSize,
+                                  LPVOID    lpOutBuffer,
+                                  DWORD     nOutBufferSize,
+                                  LPDWORD   lpBytesReturned);
+
+inline task<BOOL> LockFileEx(HANDLE hFile,
+                             DWORD  dwFlags,
+                             DWORD  dwReserved,
+                             DWORD  nNumberOfBytesToLockLow,
+                             DWORD  nNumberOfBytesToLockHigh);
+
+inline task<BOOL> ReadDirectoryChangesW(HANDLE                              hDirectory,
+                                        LPVOID                              lpBuffer,
+                                        DWORD                               nBufferLength,
+                                        BOOL                                bWatchSubtree,
+                                        DWORD                               dwNotifyFilter,
+                                        LPDWORD                             lpBytesReturned,
+                                        LPWSAOVERLAPPED_COMPLETION_ROUTINE  lpCompletionRoutine);
+
+inline task<BOOL> ReadFile(HANDLE   hFile,
+                           LPVOID   lpBuffer,
+                           DWORD    nNumberOfBytesToRead,
+                           LPDWORD  lpNumberOfBytesRead);
+
+inline task<BOOL> TransactNamedPipe(HANDLE  hNamedPipe,
+                                    LPVOID  lpInBuffer,
+                                    DWORD   nInBufferSize,
+                                    LPVOID  lpOutBuffer,
+                                    DWORD   nOutBufferSize,
+                                    LPDWORD lpBytesRead);
+
+inline task<BOOL> WaitCommEvent(HANDLE  hFile,
+                                LPDWORD lpEvtMask);
+
+inline task<BOOL> WriteFile(HANDLE  hFile,
+                            LPCVOID lpBuffer,
+                            DWORD   nNumberOfBytesToWrite,
+                            LPDWORD lpNumberOfBytesWritten);
+
+inline task<BOOL> WSASendMsg(SOCKET                             Handle,
+                            LPWSAMSG                            lpMsg,
+                            DWORD                               dwFlags,
+                            LPDWORD                             lpNumberOfBytesSent,
+                            LPWSAOVERLAPPED_COMPLETION_ROUTINE  lpCompletionRoutine);
+
+inline task<BOOL> WSASendTo(SOCKET                             s,
+                            LPWSABUF                           lpBuffers,
+                            DWORD                              dwBufferCount,
+                            LPDWORD                            lpNumberOfBytesSent,
+                            DWORD                              dwFlags,
+                            const sockaddr                     *lpTo,
+                            int                                iTolen,
+                            LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+
+inline task<BOOL> WSASend(SOCKET s,
+                          LPWSABUF                           lpBuffers,
+                          DWORD                              dwBufferCount,
+                          LPDWORD                            lpNumberOfBytesSent,
+                          DWORD                              dwFlags,
+                          LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+
+inline task<BOOL> WSARecvFrom(SOCKET                             s,
+                              LPWSABUF                           lpBuffers,
+                              DWORD                              dwBufferCount,
+                              LPDWORD                            lpNumberOfBytesRecvd,
+                              LPDWORD                            lpFlags,
+                              sockaddr                           *lpFrom,
+                              LPINT                              lpFromlen,
+                              LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+
+inline task<BOOL> WSARecvMsg(SOCKET                             s,
+                             LPWSAMSG                           lpMsg,
+                             LPDWORD                            lpdwNumberOfBytesRecvd,
+                             LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+
+inline task<BOOL> WSARecv(SOCKET                             s,
+                          LPWSABUF                           lpBuffers,
+                          DWORD                              dwBufferCount,
+                          LPDWORD                            lpNumberOfBytesRecvd,
+                          LPDWORD                            lpFlags,
+                          LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+
+/* Those are here to increase the compatibility with the linux functions  */
+inline task_t connect(SOCKET s, const sockaddr *sa, int *len);
+inline task_t accept(SOCKET s, sockaddr *sa, int *len);
+inline task_t read_sz(HANDLE fd, void *buff, size_t len);           /* only for sockets on win */
+inline task_t write_sz(HANDLE fd, const void *buff, size_t len);    /* only for sockets on win */
 
 #endif /* CORO_OS_WINDOWS */
 
@@ -1091,20 +1185,20 @@ inline error_e do_unwait_sem_modifs(state_t *state, sem_t *sem, sem_waiter_handl
 }
 
 /* considering you may want to create a modif at runtime this seems to be the best way */
-template <modif_e type, typename Cbk>
+template <modif_e type_id, typename Cbk>
 inline modif_p create_modif(pool_t *pool, modif_flags_e flags, Cbk&& cbk) {
     modif_p ret = modif_p(alloc<modif_t>(pool, modif_t{
-        .type = type,
+        .type = type_id,
         .flags = flags,
     }), dealloc_create<modif_t>(pool), allocator_t<int>{pool});
     
-    ret->cbk = modif_t::variant_t(std::in_place_index_t<type>{}, std::forward<Cbk>(cbk));
+    ret->cbk = modif_t::variant_t(std::in_place_index_t<type_id>{}, std::forward<Cbk>(cbk));
     return ret;
 }
 
-template <modif_e type, typename Cbk>
+template <modif_e type_id, typename Cbk>
 inline modif_p create_modif(pool_p pool, modif_flags_e flags, Cbk&& cbk) {
-    return create_modif<type>(pool.get(), flags, std::forward<Cbk>(cbk));
+    return create_modif<type_id>(pool.get(), flags, std::forward<Cbk>(cbk));
 }
 /* The Task
 ------------------------------------------------------------------------------------------------- */
@@ -1540,7 +1634,7 @@ private:
 The idea is that timers need to be created by some sort of system provided mechanism and waiting
 on it should be compatibile with the io_pool_t and as such, the timer should return a io_desc_t */
 struct timer_pool_t {
-    timer_pool_t(pool_t *pool) {}
+    timer_pool_t(pool_t *, io_pool_t &) {}
 
     error_e get_timer(io_desc_t& new_timer) {
         if (stack_head > 0) {
@@ -1580,7 +1674,7 @@ struct timer_pool_t {
         return ERROR_OK;
     }
 
-    error_e free_timer(const io_desc_t& timer) {
+    error_e free_timer(io_desc_t& timer) {
         if (stack_head + 1 < MAX_TIMER_POOL_SIZE) {
             stack_head++;
             timer_stack[stack_head] = timer.fd;
@@ -1624,16 +1718,22 @@ inline std::string get_last_error() {
     }
 }
 
-struct timer_data_t {
-    uint64_t us;
-    HANDLE timer = NULL;
-    HANDLE iocp = NULL;
-    LPOVERLAPPED overlapped_ptr = NULL;
-};
+struct io_pool_t;
+
+// struct timer_data_t {
+//     HANDLE timer = NULL;
+//     io_pool_t *io_pool;
+//     std::shared_ptr<io_data_t> ev_data;
+// };
 
 struct io_pool_t {
+    using ptr_type = std::shared_ptr<io_data_t>;
+    using set_val_type = std::set<ptr_type>::value_type;
+    using set_type = std::set<ptr_type, std::less<set_val_type>, allocator_t<set_val_type>>;
+    using map_val_type = std::map<HANDLE, set_type>::value_type;
+
     io_pool_t(pool_t *pool, std::deque<state_t *, allocator_t<state_t *>> &ready_tasks)
-    : pool{pool}, ready_tasks{ready_tasks}
+    : pool{pool}, ready_tasks{ready_tasks}, handles{allocator_t<map_val_type>{pool}}
     {
         iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 0);
         if (!iocp) {
@@ -1659,7 +1759,7 @@ struct io_pool_t {
         }
 
         /* TODO: emulate this */
-        if (waiter_cnt == 0) {
+        if (handles.size() == 0) {
             /* we don't have what to wait on, there are no registered awaiters */
             return ERROR_OK;
         }
@@ -1669,25 +1769,25 @@ struct io_pool_t {
         OVERLAPPED_ENTRY entry; 
         ULONG cnt;
         bool ret = GetQueuedCompletionStatusEx(iocp, &entry, 1, &cnt, INFINITE, TRUE);
-        if (cnt == 0) {
-            CORO_DEBUG("WHY?");
-            return ERROR_GENERIC;
-        }
         if (!ret) {
+            if (GetLastError() == WAIT_IO_COMPLETION) {
+                /* Ok, this was handled by the timer calback, or whatever apc */
+                return ERROR_OK;
+            }
             CORO_DEBUG("Failed GetQueuedCompletionStatus: %s", get_last_error().c_str());
             /* here and in linux impl, good place for warning exception? */
+            return ERROR_GENERIC;
+        }
+        if (cnt == 0) {
+            CORO_DEBUG("WHY?");
             return ERROR_GENERIC;
         }
 
         /* awake the waiter (mark it's state->error and push it onto the ready tasks) */
         io_data_t *data = (io_data_t *)entry.lpOverlapped;
         data->state->err = ERROR_OK;
-        ready_tasks.push_back(data->state);
-        waiter_cnt--;
 
-        if (data->prev) data->prev->next = data->next;
-        if (data->next) data->next->prev = data->prev;
-        if (data == head.get()) head = data->prev ? data->prev : data->next;
+        awake_io(data);
 
         return ERROR_OK;
     }
@@ -1698,7 +1798,8 @@ struct io_pool_t {
             CORO_DEBUG("FAILED Can't await null data");
             return ERROR_GENERIC;
         }
-        if (io_desc.data->flags & io_data_t::IO_FLAG_ADDED) {
+        std::shared_ptr<io_data_t> data = io_desc.data;
+        if (data->flags & io_data_t::IO_FLAG_ADDED) {
             CORO_DEBUG("FAILED Can't add awaiter twice");
             return ERROR_GENERIC;
         }
@@ -1707,156 +1808,152 @@ struct io_pool_t {
             1. the overlapped structure needs to be linked to the state structure
             2. the handle of the io thinghy must be aquired by this pool */
 
-        io_desc.data->state = state;
-        if (io_desc.data->flags & io_data_t::IO_FLAG_TIMER) {
-            timer_data_t *timer_data = (timer_data_t *)io_desc.ctx;
-            timer_data->iocp = iocp;
+        data->state = state;
+        if (data->flags & io_data_t::IO_FLAG_TIMER) {
+            // nothing more to do
         }
-        else if (!CreateIoCompletionPort(io_desc.data->fd, iocp, 0, 0)) {
+        else if (!CreateIoCompletionPort(data->h, iocp, 0, 0)) {
             CORO_DEBUG("Failed to add descriptor to iocp: %s", get_last_error().c_str());
             return ERROR_GENERIC;
         }
 
-        if (io_desc.push_io_request(io_desc.ctx) != ERROR_OK) {
+        if (data->io_request(data->ptr) != ERROR_OK) {
             CORO_DEBUG("Failed the io request");
             return ERROR_GENERIC;
         }
-        io_desc.data->flags = io_data_t::io_flag_e(io_desc.data->flags | io_data_t::IO_FLAG_ADDED);
-        waiter_cnt++;
+        data->flags = io_data_t::io_flag_e(data->flags | io_data_t::IO_FLAG_ADDED);
 
-        if (!head)
-            head = io_desc.data;
-        else {
-            head->prev = io_desc.data;
-            io_desc.data->next = head;
-            head = io_desc.data;
-        }
+        enqueue_data(data);
 
         return ERROR_OK;
     }
 
     // the state (singular) that is waiting for io_desc must be awakened
     error_e force_awake(const io_desc_t& io_desc, error_e retcode) {
-        /* maybe cancelex? */
+        auto awake_data = [this, retcode](std::shared_ptr<io_data_t> data) -> error_e {
+            if (data->flags & io_data_t::IO_FLAG_TIMER) {
+                if (!CloseHandle(data->h)) {
+                    CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
+                    return ERROR_GENERIC;
+                }
 
-        waiter_cnt--;
-        if (io_desc.data->flags & io_data_t::IO_FLAG_TIMER) {
-            timer_data_t *timer_data = (timer_data_t *)io_desc.ctx;
-            if (!CloseHandle(timer_data->timer)) {
-                CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
-                return ERROR_GENERIC;
+                data->h = NULL;
             }
-            timer_data->timer = NULL;
-        }
-        else if (!CancelIoEx(io_desc.data->fd, &io_desc.data->overlapped)) {
-            CORO_DEBUG("Failed to cancel io: %s", get_last_error().c_str());
-            return ERROR_GENERIC;
-        }
-
-        /* TODO: DO I need to add it to the ready queue or it adds itself when awakened? */
-        // ERROR_OPERATION_ABORTED (TODO: where is this used?)
-        return ERROR_OK;
-    }
-
-    // awakes all
-    error_e clear() {
-        while (head) {
-            destroy_state(head->state);
-            if (head->flags & io_data_t::IO_FLAG_TIMER) {
-                /* TODO: */
-            }
-            else if (!CancelIoEx(head->fd, &head->overlapped)) {
+            else if (!CancelIoEx(data->h, &data->overlapped)) {
                 CORO_DEBUG("Failed to cancel io: %s", get_last_error().c_str());
                 return ERROR_GENERIC;
             }
-            auto aux = head;
-            head = head->next;
-            aux->next = aux->prev = nullptr;
+
+            data->state->err = retcode;
+            awake_io(data.get());
+
+            return ERROR_OK;
+        };
+        if (!io_desc.data) {
+            if (!has(handles, io_desc.h))
+                return ERROR_OK;
+            std::vector<std::shared_ptr<io_data_t>> datas;
+            auto it = handles.find(io_desc.h);
+            for (auto &data : it->second) {
+                datas.push_back(data);
+            }
+            for (auto data : datas) {
+                error_e err;
+                if ((err = awake_data(data)) != ERROR_OK)
+                    return err;
+            }
         }
-        if (!CloseHandle(iocp)) {
-            CORO_DEBUG("Failed to CloseHandle io: %s", get_last_error().c_str());
-            return ERROR_GENERIC;
+        else {
+            return awake_data(io_desc.data);
         }
-        iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 0);
-        if (!iocp) {
-            CORO_DEBUG("FAILED re-CreateIoCompletionPort err:%s", get_last_error().c_str());
-            return ERROR_GENERIC;
-        }
-        waiter_cnt = 0;
+
+        // TODO: ERROR_OPERATION_ABORTED (TODO: where is this used?)
         return ERROR_OK;
     }
 
+    error_e clear() {
+        for (auto &[_, datas] : handles) {
+            for (auto &data : datas) {
+                if (data->flags & io_data_t::IO_FLAG_TIMER) {
+                    if (data->h && !CloseHandle(data->h)) {
+                        CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
+                        return ERROR_GENERIC;
+                    }
+                    data->h = NULL;
+                }
+                else if (!CancelIoEx(data->h, &data->overlapped)) {
+                    CORO_DEBUG("Failed to cancel io: %s", get_last_error().c_str());
+                    return ERROR_GENERIC;
+                }
+                destroy_state(data->state);
+            }
+        }
+        /* TODO: check if we can't have a case in which the overloaded are queued and respond later
+        on */
+        handles.clear();
+        return ERROR_OK;
+    }
+
+    void awake_io(io_data_t *data) {
+        dequeue_data(data);
+        ready_tasks.push_back(data->state);
+    }
+
 private:
+    void dequeue_data(io_data_t *data) {
+        /* WARNING Be aware to not ever copy this pointer around */
+        std::shared_ptr<io_data_t> only_key_to_set(data, [](io_data_t*){});
+        if (!has(handles, data->h))
+            return ;
+        if (!has(handles.find(data->h)->second, only_key_to_set))
+            return ;
+        handles.find(data->h)->second.erase(only_key_to_set);
+        if (handles.find(data->h)->second.size() == 0)
+            handles.erase(data->h);
+    }
+
+    void enqueue_data(std::shared_ptr<io_data_t> data) {
+        if (has(handles, data->h))
+            handles.find(data->h)->second.insert(data);
+        else
+            handles.insert(map_val_type{data->h, allocator_t<set_val_type>{pool}})
+                    .first->second.insert(data);
+    }
+
     pool_t *pool = nullptr;
     std::deque<state_t *, allocator_t<state_t *>> &ready_tasks;
     HANDLE iocp = nullptr;
-    std::shared_ptr<io_data_t> head = nullptr;
+
+    std::map<HANDLE, set_type, std::less<HANDLE>, allocator_t<map_val_type>> handles;
+
     int waiter_cnt = 0;
 };
 
 struct timer_pool_t {
-    timer_pool_t(pool_t *pool) : pool(pool) {
-        for (int i = 0; i < MAX_TIMER_POOL_SIZE; i++) {
-            free_timers[i] = i;
-        }
-    }
+    timer_pool_t(pool_t *pool, io_pool_t &io_pool) : pool(pool), io_pool(io_pool) {}
 
     // initialize the io_desc_t class with a timer awaitable, not yet triggering the timer
     error_e get_timer(io_desc_t& new_timer) {
-        if (timers_head == 0) {
-            CORO_DEBUG("No more timers left");
-            return ERROR_GENERIC;
-        }
-        int timer_id = free_timers[timers_head];
-        timers_head--;
+        std::string name = "coro-timer-" + std::to_string(timer_id++);
+
         new_timer = io_desc_t {
             .data = std::shared_ptr<io_data_t>(alloc<io_data_t>(pool),
                     dealloc_create<io_data_t>(pool), allocator_t<int>{pool}),
-            .push_io_request = [](void *ctx) -> error_e {
-                /* This function will becalled inside the io_pool when this timer is scheduled to
-                start, so practically speaking, the timer starts at that time. The problem is that
-                we need the iocp handle, so we must call this function then */
-
-                timer_data_t *timer_data = (timer_data_t *)ctx;
-                LARGE_INTEGER due_time;
-
-                due_time.LowPart  = (DWORD) ((timer_data->us * -10) & 0xFFFFFFFF);
-                due_time.HighPart = (LONG)  ((timer_data->us * -10) >> 32);
-
-                auto res = SetWaitableTimer(timer_data->timer, &due_time, 0,
-                    [](LPVOID lpArg, DWORD , DWORD ) -> void {
-                        /* This function will be called when the timer expires, awakening the task */
-                        timer_data_t *timer_data = (timer_data_t *)lpArg;
-                        if (!PostQueuedCompletionStatus(
-                                timer_data->iocp, 0, 0, timer_data->overlapped_ptr))
-                        {
-                            CORO_DEBUG("Failed to awake from timer");
-                            /* TODO: find a way to propagate this error */
-                        }
-                    },
-                    ctx,
-                    FALSE /* TODO: check if we want to be able to resume the system */
-                );
-                if (!res) {
-                    CORO_DEBUG("Couldn't start the timer");
-                    return ERROR_OK;
-                }
-            },
-            .ctx = (void *)&timer_data[timer_id]
+            .h = CreateWaitableTimer(NULL, FALSE, TEXT(name.c_str()))
         };
-        timer_data[timer_id].overlapped_ptr = &new_timer.data->overlapped;
 
-        if (!timer_data[timer_id].timer) {
-            std::string name = "coro-timer-" + std::to_string(timer_id);
-            timer_data[timer_id].timer = CreateWaitableTimer(NULL, FALSE, TEXT(name.c_str()));
-            if (!timer_data[timer_id].timer) {
-                CORO_DEBUG("Failed to create timer: %s", get_last_error().c_str());
-                return ERROR_GENERIC;
-            }
+        if (!new_timer.h) {
+            CORO_DEBUG("Failed to create timer: %s", get_last_error().c_str());
+            new_timer.h = nullptr;
+            return ERROR_GENERIC;
         }
         
         *new_timer.data = io_data_t {
             .flags = io_data_t::IO_FLAG_TIMER,
+            .state = nullptr,
+            .io_request = [](void *) -> error_e { return ERROR_OK; },
+            .ptr = nullptr,
+            .h = new_timer.h
         };
 
         return ERROR_OK;
@@ -1864,28 +1961,188 @@ struct timer_pool_t {
 
     // start the respective timer with the time_us duration
     error_e set_timer(const io_desc_t& timer, const std::chrono::microseconds& time_us) {
-        auto timer_data = (timer_data_t *)timer.ctx;
-        /* TODO: we should better find the time of 'now' and set an absolute time here, so
-        we fix the discrepancy between this set_timer and the actual arming of the timer */
-        timer_data->us = time_us.count();
+        if (!timer.data) {
+            CORO_DEBUG("Invalid timer descriptor!");
+            return ERROR_GENERIC;
+        }
+
+        timer.data->ptr = (void *)&io_pool;
+
+        LARGE_INTEGER due_time = {0};
+        uint64_t us = time_us.count();
+
+        due_time.LowPart  = (DWORD) ((us * -10) & 0xFFFFFFFF);
+        due_time.HighPart = (LONG)  ((us * -10) >> 32);
+
+        bool res = SetWaitableTimer(timer.h, &due_time, 0, [](void *ptr, DWORD, DWORD) {
+                /* This function will be called when the timer expires, awakening the task and
+                my understanding is that this will happen somewhere in the same thread of this pool
+                so this is ok (OBS: This can happen in some random user's SleepEx) */
+                io_data_t *data = (io_data_t *)ptr;
+                io_pool_t *io_pool = (io_pool_t *)data->ptr;
+
+                if (!(data->flags & io_data_t::IO_FLAG_ADDED)) {
+                    CORO_DEBUG("Sanity check, this shouldn't happen");
+                    return ;
+                }
+
+                data->state->err = ERROR_OK;
+                io_pool->awake_io(data);
+
+                // maybe this close can be avoided?
+                if (data->h && !CloseHandle(data->h)) {
+                    CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
+                    /* This is a warning? */
+                }
+                data->h = NULL;
+            },
+            timer.data.get(),
+            FALSE /* TODO: check if we want to be able to resume the system */
+        );
+        if (!res) {
+            CORO_DEBUG("Couldn't start the timer");
+            return ERROR_OK;
+        }
+
         return ERROR_OK;
     }
 
-    error_e free_timer(const io_desc_t& timer) {
-        int timer_id = ((timer_data_t *)timer.ctx - timer_data) / sizeof(timer_data_t);
-        timers_head++;
-        free_timers[timers_head] = timer_id;
+    error_e free_timer(io_desc_t& timer) {
+        if (timer.h && !CloseHandle(timer.h)) {
+            CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
+            return ERROR_GENERIC;
+        }
+        timer.h = NULL;
+        timer.data = nullptr;
         return ERROR_OK;
     }
 
 private:
+    size_t timer_id = 0;
     pool_t *pool = nullptr;
-    timer_data_t timer_data[MAX_TIMER_POOL_SIZE];
-    int timers_head = MAX_TIMER_POOL_SIZE - 1;
-    int free_timers[MAX_TIMER_POOL_SIZE];
+    io_pool_t &io_pool;
 };
 
 #endif /* CORO_OS_WINDOWS */
+
+inline task_t stop_handle(HANDLE h) {
+
+}
+
+/* Those functions are the same as their Windows API equivalent, the difference is that they don't
+expose the overlapped structure, which is used by the coro library. They require a handle that
+is compatible with iocp and they will attach the handle to the iocp instance. Those are the
+functions listed by msdn to work with iocp (and connect, that is part of an extension) */
+inline task<BOOL> ConnectEx(SOCKET  s,
+                            const   sockaddr *name,
+                            int     namelen,
+                            PVOID   lpSendBuffer,
+                            DWORD   dwSendDataLength,
+                            LPDWORD lpdwBytesSent)
+{
+
+}
+
+inline task<BOOL> AcceptEx(SOCKET   sListenSocket,
+                           SOCKET   sAcceptSocket,
+                           PVOID    lpOutputBuffer,
+                           DWORD    dwReceiveDataLength,
+                           DWORD    dwLocalAddressLength,
+                           DWORD    dwRemoteAddressLength,
+                           LPDWORD  lpdwBytesReceived);
+
+inline task<BOOL> ConnectNamedPipe(HANDLE hNamedPipe);
+
+inline task<BOOL> DeviceIoControl(HANDLE    hDevice,
+                                  DWORD     dwIoControlCode,
+                                  LPVOID    lpInBuffer,
+                                  DWORD     nInBufferSize,
+                                  LPVOID    lpOutBuffer,
+                                  DWORD     nOutBufferSize,
+                                  LPDWORD   lpBytesReturned);
+
+inline task<BOOL> LockFileEx(HANDLE hFile,
+                             DWORD  dwFlags,
+                             DWORD  dwReserved,
+                             DWORD  nNumberOfBytesToLockLow,
+                             DWORD  nNumberOfBytesToLockHigh);
+
+inline task<BOOL> ReadDirectoryChangesW(HANDLE                              hDirectory,
+                                        LPVOID                              lpBuffer,
+                                        DWORD                               nBufferLength,
+                                        BOOL                                bWatchSubtree,
+                                        DWORD                               dwNotifyFilter,
+                                        LPDWORD                             lpBytesReturned,
+                                        LPWSAOVERLAPPED_COMPLETION_ROUTINE  lpCompletionRoutine);
+
+inline task<BOOL> ReadFile(HANDLE   hFile,
+                           LPVOID   lpBuffer,
+                           DWORD    nNumberOfBytesToRead,
+                           LPDWORD  lpNumberOfBytesRead);
+
+inline task<BOOL> TransactNamedPipe(HANDLE  hNamedPipe,
+                                    LPVOID  lpInBuffer,
+                                    DWORD   nInBufferSize,
+                                    LPVOID  lpOutBuffer,
+                                    DWORD   nOutBufferSize,
+                                    LPDWORD lpBytesRead);
+
+inline task<BOOL> WaitCommEvent(HANDLE  hFile,
+                                LPDWORD lpEvtMask);
+
+inline task<BOOL> WriteFile(HANDLE  hFile,
+                            LPCVOID lpBuffer,
+                            DWORD   nNumberOfBytesToWrite,
+                            LPDWORD lpNumberOfBytesWritten);
+
+inline task<BOOL> WSASendMsg(SOCKET                             Handle,
+                            LPWSAMSG                            lpMsg,
+                            DWORD                               dwFlags,
+                            LPDWORD                             lpNumberOfBytesSent,
+                            LPWSAOVERLAPPED_COMPLETION_ROUTINE  lpCompletionRoutine);
+
+inline task<BOOL> WSASendTo(SOCKET                             s,
+                            LPWSABUF                           lpBuffers,
+                            DWORD                              dwBufferCount,
+                            LPDWORD                            lpNumberOfBytesSent,
+                            DWORD                              dwFlags,
+                            const sockaddr                     *lpTo,
+                            int                                iTolen,
+                            LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+
+inline task<BOOL> WSASend(SOCKET s,
+                          LPWSABUF                           lpBuffers,
+                          DWORD                              dwBufferCount,
+                          LPDWORD                            lpNumberOfBytesSent,
+                          DWORD                              dwFlags,
+                          LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+
+inline task<BOOL> WSARecvFrom(SOCKET                             s,
+                              LPWSABUF                           lpBuffers,
+                              DWORD                              dwBufferCount,
+                              LPDWORD                            lpNumberOfBytesRecvd,
+                              LPDWORD                            lpFlags,
+                              sockaddr                           *lpFrom,
+                              LPINT                              lpFromlen,
+                              LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+
+inline task<BOOL> WSARecvMsg(SOCKET                             s,
+                             LPWSAMSG                           lpMsg,
+                             LPDWORD                            lpdwNumberOfBytesRecvd,
+                             LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+
+inline task<BOOL> WSARecv(SOCKET                             s,
+                          LPWSABUF                           lpBuffers,
+                          DWORD                              dwBufferCount,
+                          LPDWORD                            lpNumberOfBytesRecvd,
+                          LPDWORD                            lpFlags,
+                          LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+
+/* Those are here to increase the compatibility with the linux functions  */
+inline task_t connect(SOCKET s, const sockaddr *sa, int *len);
+inline task_t accept(SOCKET s, sockaddr *sa, int *len);
+inline task_t read_sz(HANDLE fd, void *buff, size_t len);           /* only for sockets on win */
+inline task_t write_sz(HANDLE fd, const void *buff, size_t len);    /* only for sockets on win */
 
 #if CORO_OS_UNKNOWN
 
@@ -1938,7 +2195,7 @@ struct pool_internal_t {
         ready_tasks{allocator_t<state_t *>{_pool}},
         io_pool{_pool, ready_tasks},
         sem_pool{allocator_t<sem_t *>{_pool}},
-        timer_pool(_pool)
+        timer_pool(_pool, io_pool)
     {}
 
     template <typename T>
@@ -2069,7 +2326,7 @@ struct pool_internal_t {
         return timer_pool.set_timer(timer, time_us);
     }
 
-    error_e free_timer(const io_desc_t& timer) {
+    error_e free_timer(io_desc_t& timer) {
         /* releases the ownership of the timer back to the pool */
         return timer_pool.free_timer(timer);
     }
@@ -2644,7 +2901,7 @@ inline task_t sleep(const std::chrono::microseconds& timeo) {
         co_return err;
     }
 
-    FnScope scope([pool, timer] {
+    FnScope scope([pool, &timer] {
         /* this function can be called on a kill */
         error_e err_err;
         if ((err_err = pool->get_internal()->free_timer(timer)) != ERROR_OK) {
