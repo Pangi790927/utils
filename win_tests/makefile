@@ -21,7 +21,7 @@
 
 CXX := cl
 CXX_FLAGS := /EHsc /await:strict /std:c++20 /Zi
-INCLUDES := /I../../utils
+INCLUDES := /I..
 SRC := main.cpp
 
 all:
