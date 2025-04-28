@@ -285,6 +285,15 @@ enum modif_flags_e : int32_t {
     CO_MODIF_INHERIT_ON_SCHED = 0x2,
 };
 
+/* Not usefull for linux, but for windows it is used to select the handle type for the basic
+read or write */
+enum rw_flags_e : int32_t {
+    CO_RW_NONE = 0,
+    CO_RW_SOCKET = 1,
+    CO_RW_FILE = 2,
+    CO_RW_PIPE = 4
+};
+
 /* all the internal tasks return this, namely error_e but casted to int (a lot of my old code depends
 on this and I also find it in theme, as all the linux functions that I use tend to return ints) */
 using task_t = task<int>;
@@ -710,10 +719,10 @@ inline task_t stop_fd(int fd);
 /* TODO: describe their usage */
 inline task_t        connect(int fd, sockaddr *sa, socklen_t *len);
 inline task_t        accept(int fd, sockaddr *sa, socklen_t *len);
-inline task<ssize_t> read(int fd, void *buff, size_t len);
-inline task<ssize_t> write(int fd, const void *buff, size_t len);
-inline task<ssize_t> read_sz(int fd, void *buff, size_t len);
-inline task<ssize_t> write_sz(int fd, const void *buff, size_t len);
+inline task<ssize_t> read(int fd, void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
+inline task<ssize_t> write(int fd, const void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
+inline task_t        read_sz(int fd, void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
+inline task_t        write_sz(int fd, const void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
 
 #endif /* CORO_OS_LINUX */
 
@@ -833,9 +842,13 @@ inline task<BOOL> WSARecv(SOCKET                             s,
                           LPDWORD                            lpFlags,
                           LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
 
-/* Those are here because I consider them more usual variants  */
-inline task_t connect(SOCKET s, const sockaddr *sa, int *len);
-inline task_t accept(SOCKET s, sockaddr *sa, int *len);
+inline task_t        connect(SOCKET s, const sockaddr *sa, int *len);
+inline task_t        accept(SOCKET s, sockaddr *sa, int *len);
+inline task<SSIZE_T> read(HANDLE fd, void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
+inline task<SSIZE_T> write(HANDLE fd, const void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
+inline task_t        read_sz(HANDLE fd, void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
+inline task_t        write_sz(HANDLE fd, const void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
+
 
 #endif /* CORO_OS_WINDOWS */
 
@@ -2959,7 +2972,7 @@ inline task<ssize_t> read_sz(int fd, void *buff, size_t len) {
             buff = (char *)buff + ret;
         }
     }
-    co_return original_len;
+    co_return ERROR_OK;
 }
 
 inline task<ssize_t> write_sz(int fd, const void *buff, size_t len) {
@@ -2977,7 +2990,7 @@ inline task<ssize_t> write_sz(int fd, const void *buff, size_t len) {
             buff = (char *)buff + ret;
         }
     }
-    co_return original_len;
+    co_return ERROR_OK;
 }
 
 #endif /* CORO_OS_LINUX */ 
@@ -2985,7 +2998,7 @@ inline task<ssize_t> write_sz(int fd, const void *buff, size_t len) {
 #if CORO_OS_WINDOWS
 
 inline task_t stop_handle(HANDLE h) {
-
+    /* TODO: */
 }
 
 inline io_desc_t create_io_desc(pool_t *pool) {
@@ -3758,8 +3771,30 @@ inline task<BOOL> WSARecv(SOCKET                             s,
 }
 
 /* Those are here to increase the compatibility with the linux functions  */
-inline task_t connect(SOCKET s, const sockaddr *sa, int *len);
-inline task_t accept(SOCKET s, sockaddr *sa, int *len);
+inline task_t connect(SOCKET s, const sockaddr *sa, int *len) {
+
+    /* TODO: */
+}
+
+inline task_t accept(SOCKET s, sockaddr *sa, int *len) {
+    /* TODO: */
+}
+
+inline task<SSIZE_T> read(HANDLE h, void *buff, size_t len, rw_flags_e flags) {
+    /* TODO: */
+}
+
+inline task<SSIZE_T> write(HANDLE h, const void *buff, size_t len, rw_flags_e flags) {
+    /* TODO: */
+}
+
+inline task_t read_sz(HANDLE h, void *buff, size_t len, rw_flags_e flags) {
+    /* TODO: */
+}
+
+inline task_t write_sz(HANDLE h, const void *buff, size_t len, rw_flags_e flags) {
+    /* TODO: */
+}
 
 #endif /* CORO_OS_WINDOWS */
 
