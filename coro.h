@@ -1720,12 +1720,6 @@ inline std::string get_last_error() {
 
 struct io_pool_t;
 
-// struct timer_data_t {
-//     HANDLE timer = NULL;
-//     io_pool_t *io_pool;
-//     std::shared_ptr<io_data_t> ev_data;
-// };
-
 struct io_pool_t {
     using ptr_type = std::shared_ptr<io_data_t>;
     using set_val_type = std::set<ptr_type>::value_type;
@@ -1978,6 +1972,7 @@ struct timer_pool_t {
                 /* This function will be called when the timer expires, awakening the task and
                 my understanding is that this will happen somewhere in the same thread of this pool
                 so this is ok (OBS: This can happen in some random user's SleepEx) */
+
                 io_data_t *data = (io_data_t *)ptr;
                 io_pool_t *io_pool = (io_pool_t *)data->ptr;
 
@@ -2008,7 +2003,7 @@ struct timer_pool_t {
     }
 
     error_e free_timer(io_desc_t& timer) {
-        if (timer.h && !CloseHandle(timer.h)) {
+        if (timer.data->h && !CloseHandle(timer.data->h)) {
             CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
             return ERROR_GENERIC;
         }
