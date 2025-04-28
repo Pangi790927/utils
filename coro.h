@@ -833,11 +833,9 @@ inline task<BOOL> WSARecv(SOCKET                             s,
                           LPDWORD                            lpFlags,
                           LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
 
-/* Those are here to increase the compatibility with the linux functions  */
+/* Those are here because I consider them more usual variants  */
 inline task_t connect(SOCKET s, const sockaddr *sa, int *len);
 inline task_t accept(SOCKET s, sockaddr *sa, int *len);
-inline task_t read_sz(HANDLE fd, void *buff, size_t len);           /* only for sockets on win */
-inline task_t write_sz(HANDLE fd, const void *buff, size_t len);    /* only for sockets on win */
 
 #endif /* CORO_OS_WINDOWS */
 
@@ -3762,8 +3760,6 @@ inline task<BOOL> WSARecv(SOCKET                             s,
 /* Those are here to increase the compatibility with the linux functions  */
 inline task_t connect(SOCKET s, const sockaddr *sa, int *len);
 inline task_t accept(SOCKET s, sockaddr *sa, int *len);
-inline task_t read_sz(HANDLE fd, void *buff, size_t len);           /* only for sockets on win */
-inline task_t write_sz(HANDLE fd, const void *buff, size_t len);    /* only for sockets on win */
 
 #endif /* CORO_OS_WINDOWS */
 
