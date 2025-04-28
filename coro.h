@@ -3083,7 +3083,7 @@ inline task<BOOL> ConnectEx(SOCKET  s,
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(_connect_ex, *params);
-        if (!ret && GetLastError() == ERROR_IO_PENDING || GetLastError() == ERROR_PIPE_CONNECTED)
+        if (!ret && GetLastError() == ERROR_IO_PENDING)
             return ERROR_OK;
         else if (!ret) {
             return ERROR_GENERIC;
