@@ -3121,6 +3121,11 @@ inline task<BOOL> AcceptEx(SOCKET   sListenSocket,
             dwLocalAddressLength, dwRemoteAddressLength, lpdwBytesReceived, &desc.data->overlapped};
     using params_t = decltype(params);
 
+    desc.data->overlapped.hEvent = WSACreateEvent();
+    if (!desc.data->overlapped.hEvent) {
+        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        co_return false;
+    }
     desc.data->h = desc.h = (HANDLE)sListenSocket;
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
@@ -3134,6 +3139,10 @@ inline task<BOOL> AcceptEx(SOCKET   sListenSocket,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
@@ -3243,6 +3252,11 @@ inline task<BOOL> LockFileEx(HANDLE hFile,
             nNumberOfBytesToLockHigh, &desc.data->overlapped};
     using params_t = decltype(params);
 
+    desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    if (!desc.data->overlapped.hEvent) {
+        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        co_return false;
+    }
     desc.data->h = desc.h = hFile;
     desc.data->overlapped.hEvent = 0;
     if (offset) {
@@ -3265,6 +3279,10 @@ inline task<BOOL> LockFileEx(HANDLE hFile,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
@@ -3293,6 +3311,11 @@ inline task<BOOL> ReadDirectoryChangesW(HANDLE                              hDir
             lpBytesReturned, &desc.data->overlapped, lpCompletionRoutine};
     using params_t = decltype(params);
 
+    desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    if (!desc.data->overlapped.hEvent) {
+        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        co_return false;
+    }
     desc.data->h = desc.h = hDirectory;
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
@@ -3306,6 +3329,10 @@ inline task<BOOL> ReadDirectoryChangesW(HANDLE                              hDir
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
@@ -3328,6 +3355,11 @@ inline task<BOOL> ReadFile(HANDLE   hFile,
             &desc.data->overlapped};
     using params_t = decltype(params);
 
+    desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    if (!desc.data->overlapped.hEvent) {
+        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        co_return false;
+    }
     desc.data->h = desc.h = hFile;
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
@@ -3341,6 +3373,10 @@ inline task<BOOL> ReadFile(HANDLE   hFile,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
