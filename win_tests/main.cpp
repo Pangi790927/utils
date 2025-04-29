@@ -40,6 +40,7 @@
 #if CORO_OS_WINDOWS
 
 # include <windows.h>
+#pragma comment(lib, "Ws2_32.lib")
 
 # define ASSERT_FN(fn) \
 do { \
@@ -640,15 +641,90 @@ int test8_io() {
 
 #if CORO_OS_WINDOWS
 
-/* TODO: test all */
+co::task_t test8_io_connect_accept() {
+    auto client = []() -> co::task_t {
+        DBG("Create socket");
+        SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+        ASSERT_COFN(CHK_BOOL(sock != INVALID_SOCKET));
+
+        /* ConnectEx requires the socket to be initially bound? */
+        struct sockaddr_in addr;
+        ZeroMemory(&addr, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = INADDR_ANY;
+        addr.sin_port = 0;
+
+        DBG("Bind connecting socket");
+        int rc = bind(sock, (SOCKADDR*) &addr, sizeof(addr));
+        ASSERT_COFN(CHK_BOOL(rc == 0));
+
+        ZeroMemory(&addr, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = inet_addr("142.251.175.102"); // google.com
+        addr.sin_port = htons(80);
+
+        DBG("Connect to remote");
+        BOOL ok = co_await co::ConnectEx(sock, (SOCKADDR*) &addr, sizeof(addr), NULL, 0, NULL);
+        ASSERT_COFN(CHK_BOOL(ok));
+
+        DBG("Shutdown socket");
+        rc = shutdown(sock, SD_BOTH);
+        ASSERT_COFN(CHK_BOOL(rc == 0));
+
+        DBG("DONE Connection");
+        co_return 0;
+    };
+    auto server = []() -> co::task_t {
+        
+        co_return 0;
+    };
+    co_await co::sched(client());
+    co_await co::sched(server());
+    co_return 0;
+}
+
+co::task_t test8_io_pipe() {
+    co_return 0;
+}
+
+co::task_t test8_io_device() {
+    co_return 0;
+}
+
+co::task_t test8_io_lock_file() {
+    co_return 0;
+}
+
+co::task_t test8_io_dir_changes() {
+    co_return 0;
+}
+
+co::task_t test8_io_files() {
+    co_return 0;
+}
+
+co::task_t test8_io_comm_event() {
+    co_return 0;
+}
+
+co::task_t test8_io_event() {
+    co_return 0;
+}
 
 int test8_io() {
     auto pool = co::create_pool();
+    pool->sched(test8_io_connect_accept());
+    pool->sched(test8_io_event());
+    pool->sched(test8_io_comm_event());
+    pool->sched(test8_io_files());
+    pool->sched(test8_io_dir_changes());
+    pool->sched(test8_io_lock_file());
+    pool->sched(test8_io_device());
+    pool->sched(test8_io_pipe());
     co::run_e ret = pool->run();
     ASSERT_FN(CHK_BOOL(ret == co::RUN_OK));
     return 0;
 }
-
 #endif /* CORO_OS_WINDOWS */
 
 /* Test9 - DBG Trace
@@ -824,6 +900,11 @@ int test13_except() {
 ================================================================================================= */
 
 int main(int argc, char const *argv[]) {
+#if CORO_OS_WINDOWS
+    WSADATA wsa_data;
+    ASSERT_FN(CHK_BOOL(WSAStartup(MAKEWORD(2,2), &wsa_data) == 0));
+#endif
+
     std::pair<std::function<int(void)>, std::string> tests[] = {
         { test1_semaphore, "test1_semaphore" },
         { test2_semaphore, "test2_semaphore" },

@@ -844,6 +844,7 @@ inline task<BOOL> WSARecv(SOCKET                             s,
 
 inline task_t        connect(SOCKET s, const sockaddr *sa, int *len);
 inline task_t        accept(SOCKET s, sockaddr *sa, int *len);
+
 inline task<SSIZE_T> read(HANDLE fd, void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
 inline task<SSIZE_T> write(HANDLE fd, const void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
 inline task_t        read_sz(HANDLE fd, void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
@@ -2921,7 +2922,7 @@ inline task_t accept(int fd, sockaddr *sa, socklen_t *len) {
     co_return ::accept(fd, sa, len); 
 }
 
-inline task<ssize_t> read(int fd, void *buff, size_t len) {
+inline task<ssize_t> read(int fd, void *buff, size_t len, rw_flags_e) {
     io_awaiter_t awaiter(io_desc_t{
         .fd = fd,
         .events = EPOLLIN,
@@ -2937,7 +2938,7 @@ inline task<ssize_t> read(int fd, void *buff, size_t len) {
     co_return ::read(fd, buff, len);
 }
 
-inline task<ssize_t> write(int fd, const void *buff, size_t len) {
+inline task<ssize_t> write(int fd, const void *buff, size_t len, rw_flags_e) {
     io_awaiter_t awaiter(io_desc_t{
         .fd = fd,
         .events = EPOLLOUT,
@@ -2953,7 +2954,7 @@ inline task<ssize_t> write(int fd, const void *buff, size_t len) {
     co_return ::write(fd, buff, len);
 }
 
-inline task<ssize_t> read_sz(int fd, void *buff, size_t len) {
+inline task<ssize_t> read_sz(int fd, void *buff, size_t len, rw_flags_e) {
     ssize_t original_len = len;
     while (true) {
         if (!len)
@@ -2975,7 +2976,7 @@ inline task<ssize_t> read_sz(int fd, void *buff, size_t len) {
     co_return ERROR_OK;
 }
 
-inline task<ssize_t> write_sz(int fd, const void *buff, size_t len) {
+inline task<ssize_t> write_sz(int fd, const void *buff, size_t len, rw_flags_e) {
     ssize_t original_len = len;
     while (true) {
         if (!len)
@@ -3808,7 +3809,6 @@ inline task<BOOL> WSARecv(SOCKET                             s,
 
 /* Those are here to increase the compatibility with the linux functions  */
 inline task_t connect(SOCKET s, const sockaddr *sa, int *len) {
-
     /* TODO: */
 }
 
