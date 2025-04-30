@@ -9,7 +9,7 @@
     - check own comments
     - check the review again
     - add the licence
-    - fix noexcept if there are problems
+    - fix noexcept if there are problems (there where)
     + consider implementing exception handling
     + consider implementing co_yield
     + write the fd stuff
@@ -109,11 +109,13 @@ to a callback that will be called from another thread */
 #ifndef CORO_ENABLE_LOGGING
 # define CORO_ENABLE_LOGGING true
 #endif
+
 #if CORO_ENABLE_LOGGING
 # define CORO_DEBUG(fmt, ...) dbg(__FILE__, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #else
 # define CORO_DEBUG(fmt, ...) do {} while (0)
 #endif
+
 /* If set to true, makes names for corutines */
 #ifndef CORO_ENABLE_DEBUG_NAMES
 # define CORO_ENABLE_DEBUG_NAMES false
@@ -155,9 +157,11 @@ unitialized but others are still waiting on it, if an awaitable was created but 
 # define CORO_KILL_DEFAULT_CONSTRUCT true
 # define CORO_KILL_RAISE_EXCEPTION false
 #endif
+
 #if defined(CORO_KILL_RAISE_EXCEPTION) && !defined(CORO_KILL_DEFAULT_CONSTRUCT)
 #define CORO_KILL_DEFAULT_CONSTRUCT false
 #endif
+
 #if defined(CORO_KILL_DEFAULT_CONSTRUCT) && !defined(CORO_KILL_RAISE_EXCEPTION)
 #define CORO_KILL_RAISE_EXCEPTION false
 #endif
@@ -394,7 +398,7 @@ struct deallocator_t { /* This class is part of the allocator implementation and
 /* exception error if the lib is configured to throw exception on modif termination */
 #if CO_EXCEPT_ON_KILL
 /* TODO: the exception that will be thrown by the killing of a courutine */
-#endif
+#endif /* CO_EXCEPT_ON_KILL */
 
 /* having a task be called on two pools or two threads is UB */
 struct pool_t {
@@ -413,7 +417,7 @@ struct pool_t {
 #if CORO_ENABLE_MULTITHREAD_SCHED
     template <typename T>
     void thread_sched(task<T> task);
-#endif
+#endif /* CORO_ENABLE_MULTITHREAD_SCHED */
 
     /* runs the event loop */
     run_e run();
@@ -498,6 +502,7 @@ struct io_data_t {
         IO_FLAG_NONE = 0,
         IO_FLAG_TIMER = 1,
         IO_FLAG_ADDED = 2,
+        IO_FLAG_TIMER_RUN = 4,
     };
 
     OVERLAPPED overlapped = {0};                    /* must be the first member of this struct */
@@ -924,7 +929,7 @@ inline std::function<void(void)> on_call;
 #if CORO_ENABLE_LOGGING
 inline std::function<int(const dbg_string_t&)> log_str =
         [](const dbg_string_t& msg){ return printf("%s", msg.c_str()); };
-#endif
+#endif /* CORO_ENABLE_LOGGING */
 
 /* IMPLEMENTATION 
 =================================================================================================
@@ -1747,7 +1752,7 @@ struct io_pool_t {
     io_pool_t(pool_t *pool, std::deque<state_t *, allocator_t<state_t *>> &ready_tasks)
     : pool{pool}, ready_tasks{ready_tasks}, handles{allocator_t<map_val_type>{pool}}
     {
-        iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 0);
+        iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 1);
         if (!iocp) {
             CORO_DEBUG("FAILED CreateIoCompletionPort err:%s", get_last_error().c_str());
             /* TODO: we can except on this warning if enabled */
@@ -1780,19 +1785,23 @@ struct io_pool_t {
         event to happen(timers, file io, network io, etc.). */
         OVERLAPPED_ENTRY entry; 
         ULONG cnt;
-        bool ret = GetQueuedCompletionStatusEx(iocp, &entry, 1, &cnt, INFINITE, TRUE);
-        if (!ret) {
-            if (GetLastError() == WAIT_IO_COMPLETION) {
-                /* Ok, this was handled by the timer calback, or whatever apc */
-                return ERROR_OK;
+        while (true) {
+            bool ret = GetQueuedCompletionStatusEx(iocp, &entry, 1, &cnt, INFINITE, TRUE);
+            if (!ret) {
+                if (GetLastError() == WAIT_IO_COMPLETION) {
+                    /* Ok, this was signaled by the timer calback, or whatever apc */
+                    continue;
+                }
+                CORO_DEBUG("Failed GetQueuedCompletionStatus: %s", get_last_error().c_str());
+                /* here and in linux impl, good place for warning exception? */
+                return ERROR_GENERIC;
             }
-            CORO_DEBUG("Failed GetQueuedCompletionStatus: %s", get_last_error().c_str());
-            /* here and in linux impl, good place for warning exception? */
-            return ERROR_GENERIC;
-        }
-        if (cnt == 0) {
-            CORO_DEBUG("WHY?");
-            return ERROR_GENERIC;
+            if (cnt == 0) {
+                CORO_DEBUG("WHY?");
+                return ERROR_GENERIC;
+            }
+            CORO_DEBUG("awake");
+            break;
         }
 
         /* awake the waiter (mark it's state->error and push it onto the ready tasks) */
@@ -1817,6 +1826,8 @@ struct io_pool_t {
             return ERROR_GENERIC;
         }
 
+        CORO_DEBUG("Adding awaiter");
+
         /* there are two things that must happen here:
             1. the overlapped structure needs to be linked to the state structure
             2. the handle of the io thinghy must be aquired by this pool */
@@ -1834,7 +1845,7 @@ struct io_pool_t {
         if ((err = data->io_request(data->ptr)) != ERROR_OK) {
             if (err == ERROR_DONE)
                 return err;
-            CORO_DEBUG("Failed the io_request");
+            CORO_DEBUG("Failed the io_request %s", get_last_error().c_str());
             return err;
         }
         data->flags = io_data_t::io_flag_e(data->flags | io_data_t::IO_FLAG_ADDED);
@@ -1847,13 +1858,19 @@ struct io_pool_t {
     // the state (singular) that is waiting for io_desc must be awakened
     error_e force_awake(const io_desc_t& io_desc, error_e retcode) {
         auto awake_data = [this, retcode](std::shared_ptr<io_data_t> data) -> error_e {
-            if (data->flags & io_data_t::IO_FLAG_TIMER) {
+            if ((data->flags & io_data_t::IO_FLAG_TIMER) &&
+                    (data->flags & io_data_t::IO_FLAG_TIMER_RUN))
+            {
+                if (!CancelWaitableTimer(data->h)) {
+                    CORO_DEBUG("Failed to stop timer: %s", get_last_error().c_str());
+                    return ERROR_GENERIC;
+                }
                 if (!CloseHandle(data->h)) {
                     CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
                     return ERROR_GENERIC;
                 }
-
                 data->h = NULL;
+                data->flags = io_data_t::io_flag_e(data->flags & ~io_data_t::IO_FLAG_TIMER_RUN);
             }
             else if (!CancelIoEx(data->h, &data->overlapped)) {
                 CORO_DEBUG("Failed to cancel io: %s", get_last_error().c_str());
@@ -1890,11 +1907,18 @@ struct io_pool_t {
     error_e clear() {
         for (auto &[_, datas] : handles) {
             for (auto &data : datas) {
-                if (data->flags & io_data_t::IO_FLAG_TIMER) {
-                    if (data->h && !CloseHandle(data->h)) {
+                if ((data->flags & io_data_t::IO_FLAG_TIMER) &&
+                        (data->flags & io_data_t::IO_FLAG_TIMER_RUN))
+                {
+                    if (!CancelWaitableTimer(data->h)) {
+                        CORO_DEBUG("Failed to stop timer: %s", get_last_error().c_str());
+                        return ERROR_GENERIC;
+                    }
+                    if (!CloseHandle(data->h)) {
                         CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
                         return ERROR_GENERIC;
                     }
+                    data->flags = io_data_t::io_flag_e(data->flags & ~io_data_t::IO_FLAG_TIMER_RUN);
                     data->h = NULL;
                 }
                 else if (!CancelIoEx(data->h, &data->overlapped)) {
@@ -1905,7 +1929,7 @@ struct io_pool_t {
             }
         }
         /* TODO: check if we can't have a case in which the overloaded are queued and respond later
-        on */
+        on (OBS: we had at least one, the timer) */
         handles.clear();
         return ERROR_OK;
     }
@@ -1913,6 +1937,10 @@ struct io_pool_t {
     void awake_io(io_data_t *data) {
         dequeue_data(data);
         ready_tasks.push_back(data->state);
+    }
+
+    HANDLE get_iocp() {
+        return iocp;
     }
 
 private:
@@ -1988,7 +2016,6 @@ struct timer_pool_t {
         due_time.LowPart  = (DWORD) ((us * -10) & 0xFFFFFFFF);
         due_time.HighPart = (LONG)  ((us * -10) >> 32);
 
-        CORO_DEBUG("TIMER START: %p us: %ld", timer.data.get(), us);
         bool res = SetWaitableTimer(timer.h, &due_time, 0, [](void *ptr, DWORD, DWORD) {
                 /* This function will be called when the timer expires, awakening the task and
                 my understanding is that this will happen somewhere in the same thread of this pool
@@ -1997,21 +2024,14 @@ struct timer_pool_t {
                 io_data_t *data = (io_data_t *)ptr;
                 io_pool_t *io_pool = (io_pool_t *)data->ptr;
 
-                CORO_DEBUG("TIMER END: %p", ptr);
-                if (!(data->flags & io_data_t::IO_FLAG_ADDED)) {
+                if (!data || !io_pool) {
                     CORO_DEBUG("Sanity check, this shouldn't happen");
                     return ;
                 }
-
-                data->state->err = ERROR_OK;
-                io_pool->awake_io(data);
-
-                // maybe this close can be avoided?
-                if (data->h && !CloseHandle(data->h)) {
-                    CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
-                    /* This is a warning? */
+                if (!PostQueuedCompletionStatus(io_pool->get_iocp(), 0, 0, &data->overlapped)) {
+                    CORO_DEBUG("Failed post: %s", get_last_error().c_str());
+                    return ;
                 }
-                data->h = NULL;
             },
             timer.data.get(),
             FALSE /* TODO: check if we want to be able to resume the system */
@@ -2020,17 +2040,24 @@ struct timer_pool_t {
             CORO_DEBUG("Couldn't start the timer");
             return ERROR_OK;
         }
+        timer.data->flags = io_data_t::io_flag_e{timer.data->flags | io_data_t::IO_FLAG_TIMER_RUN};
 
         return ERROR_OK;
     }
 
     error_e free_timer(io_desc_t& timer) {
-        if (timer.data->h && !CloseHandle(timer.data->h)) {
-            CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
-            return ERROR_GENERIC;
+        if (timer.data->flags & io_data_t::IO_FLAG_TIMER_RUN) {
+            if (!CancelWaitableTimer(timer.data->h)) {
+                CORO_DEBUG("Failed to stop timer: %s", get_last_error().c_str());
+                return ERROR_GENERIC;
+            }
+            if (!CloseHandle(timer.data->h)) {
+                CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
+                return ERROR_GENERIC;
+            }
         }
-        timer.h = NULL;
         timer.data = nullptr;
+        timer.h = NULL;
         return ERROR_OK;
     }
 
@@ -2117,7 +2144,7 @@ struct pool_internal_t {
         thread_pushed_new_tasks = true;
         ready_thread_tasks.push_back(&task.h.promise().state);
     }
-#endif
+#endif /* CORO_ENABLE_MULTITHREAD_SCHED */
 
     run_e run() {
         if (!io_pool.is_ok()) {
@@ -2177,7 +2204,7 @@ struct pool_internal_t {
             ready_thread_tasks.clear();
             thread_pushed_new_tasks = false;
         }
-#endif
+#endif /* CORO_ENABLE_MULTITHREAD_SCHED */
 
         if (io_pool.handle_ready() != ERROR_OK) {
             CORO_DEBUG("Failed io pool");
@@ -2257,7 +2284,7 @@ private:
     std::mutex lock;
     std::atomic<bool> thread_pushed_new_tasks = false;
     std::vector<state_t *> ready_thread_tasks;
-#endif
+#endif /* CORO_ENABLE_MULTITHREAD_SCHED */
 };
 
 /* Allocate/deallocate need the definition of pool_internal_t */
@@ -2345,7 +2372,7 @@ template <typename T>
 inline void pool_t::thread_sched(task<T> task) {
     internal->sched(task);
 }
-#endif
+#endif /* CORO_ENABLE_MULTITHREAD_SCHED */
 
 inline run_e pool_t::run() {
     return internal->run();
@@ -2493,11 +2520,11 @@ struct io_awaiter_t {
         state = &h.promise().state;
         /* in case we can't schedule the fd we log the failure and return the same coro */
         do_leave_modifs(state);
-        if (do_wait_io_modifs(state, io_desc) != ERROR_OK) {
+        if ((ret_err = do_wait_io_modifs(state, io_desc)) != ERROR_OK) {
             do_entry_modifs(state);
             return h;
         }
-        if ((err = pool->get_internal()->wait_io(h, io_desc)) != ERROR_OK) {
+        if ((ret_err = pool->get_internal()->wait_io(h, io_desc)) != ERROR_OK) {
             CORO_DEBUG("Failed to register wait: %s on: %s",
                     dbg_enum(err).c_str(), dbg_name(h).c_str());
             do_entry_modifs(state);
@@ -2509,13 +2536,14 @@ struct io_awaiter_t {
     error_e await_resume() {
         do_unwait_io_modifs(state, io_desc);
         do_entry_modifs(state);
-        return state->err;
+        return err;
     }
 
 private:
     /* The state of the corutine that called us. We know it will exist at least as much as the
     suspension */
     state_t *state;
+    error_e ret_err = ERROR_OK;
 };
 
 /* Semaphore
@@ -3013,7 +3041,7 @@ inline io_desc_t create_io_desc(pool_t *pool) {
     };
     
     *new_desc.data = io_data_t {
-        .flags = io_data_t::IO_FLAG_TIMER,
+        .flags = io_data_t::IO_FLAG_NONE,
         .state = nullptr,
         .ptr = nullptr,
         .h = new_desc.h
@@ -3022,10 +3050,10 @@ inline io_desc_t create_io_desc(pool_t *pool) {
     return new_desc;
 }
 
-inline LPFN_ACCEPTEX    _accept_ex = NULL;  
 inline LPFN_CONNECTEX   _connect_ex = NULL;
-inline LPFN_WSARECVMSG  _wsa_recv_msg = NULL;
+inline LPFN_ACCEPTEX    _accept_ex = NULL;  
 inline LPFN_WSASENDMSG  _wsa_send_msg = NULL;
+inline LPFN_WSARECVMSG  _wsa_recv_msg = NULL;
 
 template <typename Fn>
 inline error_e load_win_fn(GUID guid, Fn& fn) {
@@ -3140,12 +3168,17 @@ inline task<BOOL> AcceptEx(SOCKET   sListenSocket,
     desc.data->h = desc.h = (HANDLE)sListenSocket;
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
+        CORO_DEBUG("Called accept");
         bool ret = std::apply(_accept_ex, *params);
-        if (!ret && GetLastError() == ERROR_IO_PENDING)
+        if (!ret && GetLastError() == ERROR_IO_PENDING) {
+            CORO_DEBUG("PENDING");
             return ERROR_OK;
+        }
         else if (!ret) {
+            CORO_DEBUG("FAILED");
             return ERROR_GENERIC;
         }
+        CORO_DEBUG("FAST DONE");
         return ERROR_DONE;
     };
     desc.data->ptr = (void *)&params;
@@ -3850,7 +3883,7 @@ inline task_t write_sz(HANDLE h, const void *buff, size_t len, rw_flags_e flags)
 
 #if CORO_OS_UNKNOWN
 /* you implement your own */
-#endif
+#endif /* CORO_OS_UNKNOWN */
 
 struct task_modifs_getter_t {
     modif_table_p table;

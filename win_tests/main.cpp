@@ -644,7 +644,7 @@ int test8_io() {
 co::task_t test8_io_connect_accept() {
     auto client = []() -> co::task_t {
         DBG("@Client: Create socket");
-        SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+        SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         ASSERT_COFN(CHK_BOOL(sock != INVALID_SOCKET));
 
         /* ConnectEx requires the socket to be initially bound? */
@@ -660,10 +660,10 @@ co::task_t test8_io_connect_accept() {
 
         ZeroMemory(&addr, sizeof(addr));
         addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = inet_addr("142.251.175.102"); // google.com
-        addr.sin_port = htons(80);
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // google.com
+        addr.sin_port = htons(27015);
 
-        DBG("@Client: Connect to remote");
+        DBG("@Client: Connecting to server");
         BOOL ok = co_await co::ConnectEx(sock, (SOCKADDR*) &addr, sizeof(addr), NULL, 0, NULL);
         ASSERT_COFN(CHK_BOOL(ok));
 
@@ -698,7 +698,7 @@ co::task_t test8_io_connect_accept() {
         ASSERT_COFN(CHK_BOOL(listen(server_sock, 100) != SOCKET_ERROR));
 
         while (true) {
-            SOCKET client_sock = socket(AF_INET, SOCK_STREAM, 0);
+            SOCKET client_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
             ASSERT_COFN(CHK_BOOL(client_sock != INVALID_SOCKET));
             FnScope scope_client_sock([&]{ closesocket(server_sock); });
 
