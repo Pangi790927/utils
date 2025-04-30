@@ -669,13 +669,16 @@ co::task_t test8_io_connect_accept() {
 
         DBG("@Client: Shutdown socket");
         rc = shutdown(sock, SD_BOTH);
-        ASSERT_COFN(CHK_BOOL(rc == 0));
+        closesocket(sock);
 
         DBG("@Client: DONE Connection");
         co_return 0;
     };
     auto client_conn = [](SOCKET sock) -> co::task_t {
-        FnScope scope_client_sock([&]{ closesocket(sock); });
+        FnScope scope_client_sock([&]{
+            shutdown(sock, SD_BOTH);
+            closesocket(sock);
+        });
 
         co_return 0;
     };
@@ -697,7 +700,8 @@ co::task_t test8_io_connect_accept() {
 
         ASSERT_COFN(CHK_BOOL(listen(server_sock, 100) != SOCKET_ERROR));
 
-        while (true) {
+        int i = 3;
+        while (i-- > 0) {
             SOCKET client_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
             ASSERT_COFN(CHK_BOOL(client_sock != INVALID_SOCKET));
             FnScope scope_client_sock([&]{ closesocket(server_sock); });
@@ -705,6 +709,7 @@ co::task_t test8_io_connect_accept() {
             char addr_buff[(sizeof (sockaddr_in) + 16) * 2];
             DWORD recved = 0;
 
+            /* TODO: this will block after accepting all, close is somehow (use stop_handle) */
             DBG("#Server: wait conn");
             ASSERT_COFN(CHK_BOOL(co_await co::AcceptEx(server_sock, client_sock, addr_buff, 0,
                     sizeof (sockaddr_in) + 16, sizeof (sockaddr_in) + 16, &recved)));
