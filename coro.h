@@ -289,9 +289,10 @@ enum modif_flags_e : int32_t {
 read or write */
 enum rw_flags_e : int32_t {
     CO_RW_NONE = 0,
-    CO_RW_SOCKET = 1,
-    CO_RW_FILE = 2,
-    CO_RW_PIPE = 4
+    CO_RW_SOCKSTREAM = 1,
+    CO_RW_SOCKRAW = 2,
+    CO_RW_FILE = 4,
+    CO_RW_PIPE = 8
 };
 
 /* all the internal tasks return this, namely error_e but casted to int (a lot of my old code depends
@@ -1987,6 +1988,7 @@ struct timer_pool_t {
         due_time.LowPart  = (DWORD) ((us * -10) & 0xFFFFFFFF);
         due_time.HighPart = (LONG)  ((us * -10) >> 32);
 
+        CORO_DEBUG("TIMER START: %p us: %ld", timer.data.get(), us);
         bool res = SetWaitableTimer(timer.h, &due_time, 0, [](void *ptr, DWORD, DWORD) {
                 /* This function will be called when the timer expires, awakening the task and
                 my understanding is that this will happen somewhere in the same thread of this pool
@@ -1995,6 +1997,7 @@ struct timer_pool_t {
                 io_data_t *data = (io_data_t *)ptr;
                 io_pool_t *io_pool = (io_pool_t *)data->ptr;
 
+                CORO_DEBUG("TIMER END: %p", ptr);
                 if (!(data->flags & io_data_t::IO_FLAG_ADDED)) {
                     CORO_DEBUG("Sanity check, this shouldn't happen");
                     return ;
@@ -3019,8 +3022,10 @@ inline io_desc_t create_io_desc(pool_t *pool) {
     return new_desc;
 }
 
+inline LPFN_ACCEPTEX    _accept_ex = NULL;  
 inline LPFN_CONNECTEX   _connect_ex = NULL;
 inline LPFN_WSARECVMSG  _wsa_recv_msg = NULL;
+inline LPFN_WSASENDMSG  _wsa_send_msg = NULL;
 
 template <typename Fn>
 inline error_e load_win_fn(GUID guid, Fn& fn) {
@@ -3116,6 +3121,11 @@ inline task<BOOL> AcceptEx(SOCKET   sListenSocket,
                            DWORD    dwRemoteAddressLength,
                            LPDWORD  lpdwBytesReceived)
 {
+    if (!_accept_ex && load_win_fn(WSAID_ACCEPTEX, _accept_ex) != ERROR_OK) {
+        CORO_DEBUG("Can't load extension");
+        co_return false;
+    }
+
     auto desc = create_io_desc(co_await get_pool());
 
     auto params = std::tuple{sListenSocket, sAcceptSocket, lpOutputBuffer, dwReceiveDataLength,
@@ -3130,7 +3140,7 @@ inline task<BOOL> AcceptEx(SOCKET   sListenSocket,
     desc.data->h = desc.h = (HANDLE)sListenSocket;
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
-        bool ret = std::apply(::AcceptEx, *params);
+        bool ret = std::apply(_accept_ex, *params);
         if (!ret && GetLastError() == ERROR_IO_PENDING)
             return ERROR_OK;
         else if (!ret) {
@@ -3535,6 +3545,10 @@ inline task<BOOL> WSASendMsg(SOCKET                             handle,
                             LPDWORD                             lpNumberOfBytesSent,
                             LPWSAOVERLAPPED_COMPLETION_ROUTINE  lpCompletionRoutine)
 {
+    if (!_wsa_send_msg && load_win_fn(WSAID_WSASENDMSG, _wsa_send_msg) != ERROR_OK) {
+        CORO_DEBUG("Can't load extension");
+        co_return false;
+    }
     auto desc = create_io_desc(co_await get_pool());
 
     auto params = std::tuple{handle, lpMsg, dwFlags, lpNumberOfBytesSent,
@@ -3549,7 +3563,7 @@ inline task<BOOL> WSASendMsg(SOCKET                             handle,
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
-        bool ret = std::apply(::WSASendMsg, *params);
+        bool ret = std::apply(_wsa_send_msg, *params);
         if (!ret && (GetLastError() == ERROR_IO_PENDING))
             return ERROR_OK;
         else if (!ret) {

@@ -643,7 +643,7 @@ int test8_io() {
 
 co::task_t test8_io_connect_accept() {
     auto client = []() -> co::task_t {
-        DBG("Create socket");
+        DBG("@Client: Create socket");
         SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
         ASSERT_COFN(CHK_BOOL(sock != INVALID_SOCKET));
 
@@ -654,7 +654,7 @@ co::task_t test8_io_connect_accept() {
         addr.sin_addr.s_addr = INADDR_ANY;
         addr.sin_port = 0;
 
-        DBG("Bind connecting socket");
+        DBG("@Client: Bind connecting socket");
         int rc = bind(sock, (SOCKADDR*) &addr, sizeof(addr));
         ASSERT_COFN(CHK_BOOL(rc == 0));
 
@@ -663,23 +663,69 @@ co::task_t test8_io_connect_accept() {
         addr.sin_addr.s_addr = inet_addr("142.251.175.102"); // google.com
         addr.sin_port = htons(80);
 
-        DBG("Connect to remote");
+        DBG("@Client: Connect to remote");
         BOOL ok = co_await co::ConnectEx(sock, (SOCKADDR*) &addr, sizeof(addr), NULL, 0, NULL);
         ASSERT_COFN(CHK_BOOL(ok));
 
-        DBG("Shutdown socket");
+        DBG("@Client: Shutdown socket");
         rc = shutdown(sock, SD_BOTH);
         ASSERT_COFN(CHK_BOOL(rc == 0));
 
-        DBG("DONE Connection");
+        DBG("@Client: DONE Connection");
         co_return 0;
     };
-    auto server = []() -> co::task_t {
-        
+    auto client_conn = [](SOCKET sock) -> co::task_t {
+        FnScope scope_client_sock([&]{ closesocket(sock); });
+
         co_return 0;
     };
-    co_await co::sched(client());
+    auto server = [&client_conn]() -> co::task_t {
+        DBG("#Server: Create socket");
+        SOCKET server_sock = socket(AF_INET, SOCK_STREAM, 0);
+        ASSERT_COFN(CHK_BOOL(server_sock != INVALID_SOCKET));
+        FnScope scope_server_sock([&]{ closesocket(server_sock); });
+
+        struct sockaddr_in server_addr;
+        ZeroMemory(&server_addr, sizeof(server_addr));
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        server_addr.sin_port = htons(27015);
+
+        DBG("#Server: Bind server socket");
+        int rc = bind(server_sock, (SOCKADDR*) &server_addr, sizeof(server_addr));
+        ASSERT_COFN(CHK_BOOL(rc == 0));
+
+        ASSERT_COFN(CHK_BOOL(listen(server_sock, 100) != SOCKET_ERROR));
+
+        while (true) {
+            SOCKET client_sock = socket(AF_INET, SOCK_STREAM, 0);
+            ASSERT_COFN(CHK_BOOL(client_sock != INVALID_SOCKET));
+            FnScope scope_client_sock([&]{ closesocket(server_sock); });
+
+            char addr_buff[(sizeof (sockaddr_in) + 16) * 2];
+            DWORD recved = 0;
+
+            DBG("#Server: wait conn");
+            ASSERT_COFN(CHK_BOOL(co_await co::AcceptEx(server_sock, client_sock, addr_buff, 0,
+                    sizeof (sockaddr_in) + 16, sizeof (sockaddr_in) + 16, &recved)));
+
+            DBG("#Server: Accepted connection");
+
+            scope_client_sock.disable();
+            co_await co::sched(client_conn(client_sock));
+        }
+
+        co_return 0;
+    };
+    /* This is what is nice about those coroutines, in the way they are written, we can be sure
+    that server will call accept first (it's the first co_await and server is scheduled first).
+    Even if it is a bad idea to bet on this order, because things can change in time, it is very
+    usefull for debugging, because things do happen in a much more predictible way. (not completly,
+    because you still have no way, in general, to predict when a io operation will finish) */
     co_await co::sched(server());
+    co_await co::sched(client());
+    co_await co::sched(client());
+    co_await co::sched(client());
     co_return 0;
 }
 
@@ -723,6 +769,7 @@ int test8_io() {
     pool->sched(test8_io_pipe());
     co::run_e ret = pool->run();
     ASSERT_FN(CHK_BOOL(ret == co::RUN_OK));
+    DBG("Run finished");
     return 0;
 }
 #endif /* CORO_OS_WINDOWS */
