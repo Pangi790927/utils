@@ -1800,7 +1800,6 @@ struct io_pool_t {
                 CORO_DEBUG("WHY?");
                 return ERROR_GENERIC;
             }
-            CORO_DEBUG("awake");
             break;
         }
 
@@ -1826,8 +1825,6 @@ struct io_pool_t {
             return ERROR_GENERIC;
         }
 
-        CORO_DEBUG("Adding awaiter");
-
         /* there are two things that must happen here:
             1. the overlapped structure needs to be linked to the state structure
             2. the handle of the io thinghy must be aquired by this pool */
@@ -1836,9 +1833,9 @@ struct io_pool_t {
         if (data->flags & io_data_t::IO_FLAG_TIMER) {
             // nothing more to do
         }
-        else if (!CreateIoCompletionPort(data->h, iocp, 0, 0)) {
-            CORO_DEBUG("Failed to add descriptor to iocp: %s", get_last_error().c_str());
-            return ERROR_GENERIC;
+        else {
+            /* This can fail if the handle was already associated, case in which we don't care */
+            CreateIoCompletionPort(data->h, iocp, 0, 0);
         }
 
         error_e err;
@@ -2504,7 +2501,6 @@ struct get_state_awaiter_t {
 wait_cond and fd and co_await on it. The resulting integer must be positive to not be an error */
 struct io_awaiter_t {
     io_desc_t io_desc;
-    error_e err;
 
     io_awaiter_t(const io_desc_t& io_desc) : io_desc(io_desc) {}
     io_awaiter_t(const io_awaiter_t &oth) = delete;
@@ -2526,7 +2522,7 @@ struct io_awaiter_t {
         }
         if ((ret_err = pool->get_internal()->wait_io(h, io_desc)) != ERROR_OK) {
             CORO_DEBUG("Failed to register wait: %s on: %s",
-                    dbg_enum(err).c_str(), dbg_name(h).c_str());
+                    dbg_enum(ret_err).c_str(), dbg_name(h).c_str());
             do_entry_modifs(state);
             return h;
         }
@@ -2536,7 +2532,7 @@ struct io_awaiter_t {
     error_e await_resume() {
         do_unwait_io_modifs(state, io_desc);
         do_entry_modifs(state);
-        return err;
+        return ret_err;
     }
 
 private:
@@ -3168,17 +3164,13 @@ inline task<BOOL> AcceptEx(SOCKET   sListenSocket,
     desc.data->h = desc.h = (HANDLE)sListenSocket;
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
-        CORO_DEBUG("Called accept");
         bool ret = std::apply(_accept_ex, *params);
         if (!ret && GetLastError() == ERROR_IO_PENDING) {
-            CORO_DEBUG("PENDING");
             return ERROR_OK;
         }
         else if (!ret) {
-            CORO_DEBUG("FAILED");
             return ERROR_GENERIC;
         }
-        CORO_DEBUG("FAST DONE");
         return ERROR_DONE;
     };
     desc.data->ptr = (void *)&params;
@@ -4204,6 +4196,8 @@ inline dbg_string_t dbg_name(handle<P> h) {
 
 inline dbg_string_t dbg_enum(error_e code) {
     switch (code) {
+        case ERROR_YIELDED: return dbg_string_t{"ERROR_YIELDED",   allocator_t<char>{nullptr}};
+        case ERROR_DONE:    return dbg_string_t{"ERROR_DONE",      allocator_t<char>{nullptr}};
         case ERROR_OK:      return dbg_string_t{"ERROR_OK",        allocator_t<char>{nullptr}};
         case ERROR_GENERIC: return dbg_string_t{"ERROR_GENERIC",   allocator_t<char>{nullptr}};
         case ERROR_TIMEO:   return dbg_string_t{"ERROR_TIMEO",     allocator_t<char>{nullptr}};
