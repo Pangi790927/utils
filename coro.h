@@ -2,7 +2,6 @@
 #define CORO_H
 
 /* TODO:
-    - consider porting for windows
     - fix error propagation (error_e) (is there a problem?)
     - tests
     - write the tutorial at the start of this file
@@ -10,6 +9,7 @@
     - check the review again
     - add the licence
     - fix noexcept if there are problems (there where)
+    + consider porting for windows
     + consider implementing exception handling
     + consider implementing co_yield
     + write the fd stuff
