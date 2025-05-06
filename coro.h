@@ -2,8 +2,8 @@
 #define CORO_H
 
 /* TODO:
-    - fix error propagation (error_e) (is there a problem?)
     - tests
+    - fix error propagation (error_e) (is there a problem?)
     - write the tutorial at the start of this file
     - check own comments
     - check the review again
@@ -3027,7 +3027,7 @@ inline task_t write_sz(int fd, const void *buff, size_t len) {
 #if CORO_OS_WINDOWS
 
 inline task_t stop_handle(HANDLE h) {
-    /* TODO: */
+    co_return co_await stop_io(io_desc_t{ .data = nullptr, .h = h });
 }
 
 inline io_desc_t create_io_desc(pool_t *pool) {
