@@ -501,14 +501,6 @@ int test7_clearing() {
 /* Test8 - IO
 ================================================================================================= */
 
-#if CORO_OS_LINUX
-
-int test8_server_fd;
-int test8_pass_cnt = 0;
-int test8_client_done = 0;
-const char *test8_local_ip = "127.0.0.1";
-const int test8_port = 3000;
-
 static void test8_set_msg(uint32_t uints[4]) {
     uints[0] = 2;
     uints[1] = uint32_t(-15);
@@ -523,6 +515,14 @@ static int test8_chk_msg(uint32_t uints[4]) {
     }
     return 0;
 }
+
+#if CORO_OS_LINUX
+
+int test8_server_fd;
+int test8_pass_cnt = 0;
+int test8_client_done = 0;
+const char *test8_local_ip = "127.0.0.1";
+const int test8_port = 3000;
 
 co::task_t test8_server_conn(int fd) {
     uint32_t uints[4] = {0};
@@ -641,9 +641,9 @@ int test8_io() {
 
 #if CORO_OS_WINDOWS
 
-co::task_t test8_io_connect_accept() {
+co::task_t test8_io_connect_accept_ex() {
     auto client = []() -> co::task_t {
-        DBG("@Client: Create socket");
+        DBG("@1 Client: Create socket");
         SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         ASSERT_COFN(CHK_BOOL(sock != INVALID_SOCKET));
 
@@ -654,7 +654,7 @@ co::task_t test8_io_connect_accept() {
         addr.sin_addr.s_addr = INADDR_ANY;
         addr.sin_port = 0;
 
-        DBG("@Client: Bind connecting socket");
+        DBG("@1 Client: Bind connecting socket");
         int rc = bind(sock, (SOCKADDR*) &addr, sizeof(addr));
         ASSERT_COFN(CHK_BOOL(rc == 0));
 
@@ -663,15 +663,15 @@ co::task_t test8_io_connect_accept() {
         addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // google.com
         addr.sin_port = htons(27015);
 
-        DBG("@Client: Connecting to server");
+        DBG("@1 Client: Connecting to server");
         BOOL ok = co_await co::ConnectEx(sock, (SOCKADDR*) &addr, sizeof(addr), NULL, 0, NULL);
         ASSERT_COFN(CHK_BOOL(ok));
 
-        DBG("@Client: Shutdown socket");
+        DBG("@1 Client: Shutdown socket");
         rc = shutdown(sock, SD_BOTH);
         closesocket(sock);
 
-        DBG("@Client: DONE Connection");
+        DBG("@1 Client: DONE Connection");
         co_return 0;
     };
     auto client_conn = [](SOCKET sock) -> co::task_t {
@@ -683,7 +683,7 @@ co::task_t test8_io_connect_accept() {
         co_return 0;
     };
     auto server = [&client_conn]() -> co::task_t {
-        DBG("#Server: Create socket");
+        DBG("#1 Server: Create socket");
         SOCKET server_sock = socket(AF_INET, SOCK_STREAM, 0);
         ASSERT_COFN(CHK_BOOL(server_sock != INVALID_SOCKET));
         FnScope scope_server_sock([&]{ closesocket(server_sock); });
@@ -694,27 +694,27 @@ co::task_t test8_io_connect_accept() {
         server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
         server_addr.sin_port = htons(27015);
 
-        DBG("#Server: Bind server socket");
+        DBG("#1 Server: Bind server socket");
         int rc = bind(server_sock, (SOCKADDR*) &server_addr, sizeof(server_addr));
         ASSERT_COFN(CHK_BOOL(rc == 0));
 
         ASSERT_COFN(CHK_BOOL(listen(server_sock, 100) != SOCKET_ERROR));
 
         int i = 3;
-        while (i-- > 0) {
+        while (i --> 0) {
             SOCKET client_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
             ASSERT_COFN(CHK_BOOL(client_sock != INVALID_SOCKET));
-            FnScope scope_client_sock([&]{ closesocket(server_sock); });
+            FnScope scope_client_sock([&]{ closesocket(client_sock); });
 
             char addr_buff[(sizeof (sockaddr_in) + 16) * 2];
             DWORD recved = 0;
 
             /* TODO: this will block after accepting all, close is somehow (use stop_handle) */
-            DBG("#Server: wait conn");
+            DBG("#1 Server: wait conn");
             ASSERT_COFN(CHK_BOOL(co_await co::AcceptEx(server_sock, client_sock, addr_buff, 0,
                     sizeof (sockaddr_in) + 16, sizeof (sockaddr_in) + 16, &recved)));
 
-            DBG("#Server: Accepted connection");
+            DBG("#1 Server: Accepted connection");
 
             scope_client_sock.disable();
             co_await co::sched(client_conn(client_sock));
@@ -731,6 +731,114 @@ co::task_t test8_io_connect_accept() {
     co_await co::sched(client());
     co_await co::sched(client());
     co_await co::sched(client());
+    co_return 0;
+}
+
+co::task_t test8_io_connect_accept() {
+    auto client = [](int num) -> co::task_t {
+        DBG("@2 Client[%d]: Create socket", num);
+        SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        ASSERT_COFN(CHK_BOOL(sock != INVALID_SOCKET));
+
+        struct sockaddr_in addr;
+        ZeroMemory(&addr, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // google.com
+        addr.sin_port = htons(27016);
+
+        DBG("@2 Client[%d]: Connecting to server", num);
+        ASSERT_COFN(co_await co::connect(sock, (SOCKADDR*) &addr, sizeof(addr)));
+
+        uint32_t uints1[4] = {0};
+        test8_set_msg(uints1);
+        ASSERT_COFN(test8_chk_msg(uints1));
+        ASSERT_COFN(co_await co::write_sz((HANDLE)sock, uints1, sizeof(uints1)));
+
+        uint32_t uints2[4] = {0};
+        DBG("@2 Client[%d]: ptr0: %p", num, uints2);
+        ASSERT_COFN(co_await co::read_sz((HANDLE)sock, uints2, sizeof(uints2)));
+        ASSERT_COFN(test8_chk_msg(uints2));
+
+        uint32_t uints3[4] = {0};
+        DBG("@2 Client[%d]: ptr1: %p", num, uints3);
+        ASSERT_COFN(co_await co::read_sz((HANDLE)sock, uints3, sizeof(uints3[0]) * 2));
+        co_await co::sleep_ms(10);
+        DBG("@2 Client[%d]: ptr2: %p", num, &uints3[2]);
+        ASSERT_COFN(co_await co::read_sz((HANDLE)sock, &uints3[2], sizeof(uints3[2]) * 2));
+        co_await co::sleep_ms(10);
+        ASSERT_COFN(test8_chk_msg(uints3));
+
+        DBG("@2 Client[%d]: Shutdown socket", num);
+        shutdown(sock, SD_BOTH);
+        closesocket(sock);
+
+        DBG("@2 Client[%d]: DONE Connection", num);
+        co_return 0;
+    };
+    auto client_conn = [](SOCKET sock) -> co::task_t {
+        FnScope scope_client_sock([&]{
+            shutdown(sock, SD_BOTH);
+            closesocket(sock);
+        });
+
+        uint32_t uints[4] = {0};
+
+        DBG("#2 Server: ptr3: %p", uints);
+        ASSERT_COFN(co_await co::read_sz((HANDLE)sock, uints, sizeof(uints)));
+        test8_set_msg(uints);
+
+        ASSERT_COFN(co_await co::write_sz((HANDLE)sock, uints, sizeof(uints)));
+        co_await co::sleep_ms(10);
+        ASSERT_COFN(co_await co::write_sz((HANDLE)sock, uints, sizeof(uints[0]) * 3));
+        co_await co::sleep_ms(10);
+        ASSERT_COFN(co_await co::write_sz((HANDLE)sock, &uints[3], sizeof(uints[3]) * 1));
+
+        co_return 0;
+    };
+    auto server = [&client_conn]() -> co::task_t {
+        DBG("#2 Server: Create socket");
+        SOCKET server_sock = socket(AF_INET, SOCK_STREAM, 0);
+        ASSERT_COFN(CHK_BOOL(server_sock != INVALID_SOCKET));
+        FnScope scope_server_sock([&]{ closesocket(server_sock); });
+
+        struct sockaddr_in server_addr;
+        ZeroMemory(&server_addr, sizeof(server_addr));
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        server_addr.sin_port = htons(27016);
+
+        DBG("#2 Server: Bind server socket");
+        int rc = bind(server_sock, (SOCKADDR*) &server_addr, sizeof(server_addr));
+        ASSERT_COFN(CHK_BOOL(rc == 0));
+
+        ASSERT_COFN(CHK_BOOL(listen(server_sock, 100) != SOCKET_ERROR));
+
+        int i = 3;
+        while (i --> 0) {
+            struct sockaddr_in client_addr;
+
+            /* TODO: this will block after accepting all, close is somehow (use stop_handle) */
+            DBG("#2 Server: wait conn");
+            uint32_t addr_len = sizeof(client_addr);
+            SOCKET client_sock = co_await co::accept(server_sock, (SOCKADDR *)&client_addr, &addr_len);
+            ASSERT_COFN(CHK_BOOL(client_sock != INVALID_SOCKET));
+
+            DBG("#2 Server: Accepted connection");
+            co_await co::sched(client_conn(client_sock));
+        }
+
+        co_return 0;
+    };
+    /* This is what is nice about those coroutines, in the way they are written, we can be sure
+    that server will call accept first (it's the first co_await and server is scheduled first).
+    Even if it is a bad idea to bet on this order, because things can change in time, it is very
+    usefull for debugging, because things do happen in a much more predictible way. (not completly,
+    because you still have no way, in general, to predict when a io operation will finish) */
+    co_await co::sched(server());
+    int num = 0;
+    co_await co::sched(client(num++));
+    co_await co::sched(client(num++));
+    co_await co::sched(client(num++));
     co_return 0;
 }
 
@@ -764,6 +872,7 @@ co::task_t test8_io_event() {
 
 int test8_io() {
     auto pool = co::create_pool();
+    pool->sched(test8_io_connect_accept_ex());
     pool->sched(test8_io_connect_accept());
     pool->sched(test8_io_event());
     pool->sched(test8_io_comm_event());

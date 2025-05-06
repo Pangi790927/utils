@@ -15,7 +15,7 @@
 # /external:I <path>      				- location of external headers
 # /Zi									- enable debug info
 
-# C:\'Program Files (x86)\Windows Kits'\10\Debuggers\x64\cdb.exe -o prog.exe
+# C:\'Program Files (x86)\Windows Kits'\10\Debuggers\x64\cdb.exe -o main.exe
 # list of commands: ?
 # list of commands: https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/commands
 

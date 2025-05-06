@@ -296,15 +296,6 @@ enum modif_flags_e : int32_t {
     CO_MODIF_INHERIT_ON_SCHED = 0x2,
 };
 
-/* Not usefull for linux, but for windows it is used to select the handle type for the basic
-read or write */
-enum rw_flags_e : int32_t {
-    CO_RW_NONE = 0,
-    CO_RW_SOCKSTREAM = 1,
-    CO_RW_SOCKRAW = 2,
-    CO_RW_FILE = 4,
-    CO_RW_PIPE = 8
-};
 
 /* all the internal tasks return this, namely error_e but casted to int (a lot of my old code depends
 on this and I also find it in theme, as all the linux functions that I use tend to return ints) */
@@ -513,7 +504,6 @@ struct io_data_t {
     };
 
     OVERLAPPED overlapped = {0};                    /* must be the first member of this struct */
-    DWORD recvlen = 0;
     io_flag_e flags = io_flag_e{0};
     state_t *state = nullptr;                       /* state of the task */
 
@@ -732,10 +722,10 @@ inline task_t stop_fd(int fd);
 /* TODO: describe their usage */
 inline task_t        connect(int fd, sockaddr *sa, socklen_t *len);
 inline task_t        accept(int fd, sockaddr *sa, socklen_t *len);
-inline task<ssize_t> read(int fd, void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
-inline task<ssize_t> write(int fd, const void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
-inline task_t        read_sz(int fd, void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
-inline task_t        write_sz(int fd, const void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
+inline task<ssize_t> read(int fd, void *buff, size_t len);
+inline task<ssize_t> write(int fd, const void *buff, size_t len);
+inline task_t        read_sz(int fd, void *buff, size_t len);
+inline task_t        write_sz(int fd, const void *buff, size_t len);
 
 #endif /* CORO_OS_LINUX */
 
@@ -855,13 +845,12 @@ inline task<BOOL> WSARecv(SOCKET                             s,
                           LPDWORD                            lpFlags,
                           LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
 
-inline task_t        connect(SOCKET s, const sockaddr *sa, int *len);
-inline task_t        accept(SOCKET s, sockaddr *sa, int *len);
-
-inline task<SSIZE_T> read(HANDLE fd, void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
-inline task<SSIZE_T> write(HANDLE fd, const void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
-inline task_t        read_sz(HANDLE fd, void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
-inline task_t        write_sz(HANDLE fd, const void *buff, size_t len, rw_flags_e flags = CO_RW_NONE);
+inline task_t        connect(SOCKET s, const sockaddr *sa, uint32_t len);
+inline task<SOCKET>  accept(SOCKET s, sockaddr *sa, uint32_t *len);
+inline task<SSIZE_T> read(HANDLE h, void *buff, size_t len);
+inline task<SSIZE_T> write(HANDLE h, const void *buff, size_t len, uint64_t *offset = nullptr);
+inline task_t        read_sz(HANDLE h, void *buff, size_t len);
+inline task_t        write_sz(HANDLE h, const void *buff, size_t len, uint64_t *offset = nullptr);
 
 
 #endif /* CORO_OS_WINDOWS */
@@ -1813,7 +1802,6 @@ struct io_pool_t {
         /* awake the waiter (mark it's state->error and push it onto the ready tasks) */
         io_data_t *data = (io_data_t *)entry.lpOverlapped;
         data->state->err = ERROR_OK;
-        data->recvlen = entry.dwNumberOfBytesTransferred;
 
         awake_io(data);
 
@@ -1845,11 +1833,11 @@ struct io_pool_t {
             CreateIoCompletionPort(data->h, iocp, 0, 0);
         }
 
-        error_e err;
-        if ((err = data->io_request(data->ptr)) != ERROR_OK) {
-            if (err == ERROR_DONE)
-                return err;
-            CORO_DEBUG("Failed the io_request %s", get_last_error().c_str());
+        error_e err = data->io_request(data->ptr);
+        if (err == ERROR_DONE)
+            return err;
+        if (err != ERROR_OK) {
+            CORO_DEBUG("Failed the io_request: %s", get_last_error().c_str());
             return err;
         }
         data->flags = io_data_t::io_flag_e(data->flags | io_data_t::IO_FLAG_ADDED);
@@ -2527,7 +2515,13 @@ struct io_awaiter_t {
             do_entry_modifs(state);
             return h;
         }
-        if ((ret_err = pool->get_internal()->wait_io(h, io_desc)) != ERROR_OK) {
+        ret_err = pool->get_internal()->wait_io(h, io_desc);
+        if (ret_err == ERROR_DONE) {
+            do_unwait_io_modifs(state, io_desc);
+            do_entry_modifs(state);
+            return h;
+        }
+        if (ret_err != ERROR_OK) {
             CORO_DEBUG("Failed to register wait: %s on: %s",
                     dbg_enum(ret_err).c_str(), dbg_name(h).c_str());
             do_entry_modifs(state);
@@ -2956,7 +2950,7 @@ inline task_t accept(int fd, sockaddr *sa, socklen_t *len) {
     co_return ::accept(fd, sa, len); 
 }
 
-inline task<ssize_t> read(int fd, void *buff, size_t len, rw_flags_e) {
+inline task<ssize_t> read(int fd, void *buff, size_t len) {
     io_awaiter_t awaiter(io_desc_t{
         .fd = fd,
         .events = EPOLLIN,
@@ -2972,7 +2966,7 @@ inline task<ssize_t> read(int fd, void *buff, size_t len, rw_flags_e) {
     co_return ::read(fd, buff, len);
 }
 
-inline task<ssize_t> write(int fd, const void *buff, size_t len, rw_flags_e) {
+inline task<ssize_t> write(int fd, const void *buff, size_t len) {
     io_awaiter_t awaiter(io_desc_t{
         .fd = fd,
         .events = EPOLLOUT,
@@ -2988,7 +2982,7 @@ inline task<ssize_t> write(int fd, const void *buff, size_t len, rw_flags_e) {
     co_return ::write(fd, buff, len);
 }
 
-inline task<ssize_t> read_sz(int fd, void *buff, size_t len, rw_flags_e) {
+inline task_t read_sz(int fd, void *buff, size_t len) {
     ssize_t original_len = len;
     while (true) {
         if (!len)
@@ -2996,11 +2990,11 @@ inline task<ssize_t> read_sz(int fd, void *buff, size_t len, rw_flags_e) {
         ssize_t ret = co_await read(fd, buff, len);
         if (ret == 0) {
             CORO_DEBUG("Read failed, peer is closed, fd: %d", fd);
-            co_return -1;
+            co_return ERROR_GENERIC;
         }
         else if (ret < 0) {
             CORO_DEBUG("Failed read, fd: %d", fd);
-            co_return ret;
+            co_return ERROR_GENERIC;
         }
         else {
             len -= ret;
@@ -3010,7 +3004,7 @@ inline task<ssize_t> read_sz(int fd, void *buff, size_t len, rw_flags_e) {
     co_return ERROR_OK;
 }
 
-inline task<ssize_t> write_sz(int fd, const void *buff, size_t len, rw_flags_e) {
+inline task_t write_sz(int fd, const void *buff, size_t len) {
     ssize_t original_len = len;
     while (true) {
         if (!len)
@@ -3018,7 +3012,7 @@ inline task<ssize_t> write_sz(int fd, const void *buff, size_t len, rw_flags_e) 
         ssize_t ret = co_await write(fd, buff, len);
         if (ret < 0) {
             CORO_DEBUG("Failed write, fd: %d", fd);
-            co_return ret;
+            co_return ERROR_GENERIC;
         }
         else {
             len -= ret;
@@ -3107,7 +3101,7 @@ inline task<BOOL> ConnectEx(SOCKET  s,
 
     auto desc = create_io_desc(co_await get_pool());
 
-    auto params = std::tuple{s, name, namelen, lpSendBuffer, dwSendDataLength, lpdwBytesSent,
+    auto params = std::tuple{s, name, namelen, lpSendBuffer, dwSendDataLength, (LPDWORD)NULL,
             &desc.data->overlapped};
     using params_t = decltype(params);
 
@@ -3133,14 +3127,16 @@ inline task<BOOL> ConnectEx(SOCKET  s,
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpdwBytesSent, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED ConnectNamedPipe: %s", get_last_error().c_str());
         co_return false;
     }
-    if (lpdwBytesSent)
-        *lpdwBytesSent = desc.data->recvlen;
     co_return true;
 }
 
@@ -3160,7 +3156,7 @@ inline task<BOOL> AcceptEx(SOCKET   sListenSocket,
     auto desc = create_io_desc(co_await get_pool());
 
     auto params = std::tuple{sListenSocket, sAcceptSocket, lpOutputBuffer, dwReceiveDataLength,
-            dwLocalAddressLength, dwRemoteAddressLength, lpdwBytesReceived, &desc.data->overlapped};
+            dwLocalAddressLength, dwRemoteAddressLength, (LPDWORD)NULL, &desc.data->overlapped};
     using params_t = decltype(params);
 
     desc.data->overlapped.hEvent = WSACreateEvent();
@@ -3186,14 +3182,16 @@ inline task<BOOL> AcceptEx(SOCKET   sListenSocket,
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpdwBytesReceived, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED AcceptEx: %s", get_last_error().c_str());
         co_return false;
     }
-    if (lpdwBytesReceived)
-        *lpdwBytesReceived = desc.data->recvlen;
     co_return true;
 }
 
@@ -3245,7 +3243,7 @@ inline task<BOOL> DeviceIoControl(HANDLE    hDevice,
     auto desc = create_io_desc(co_await get_pool());
 
     auto params = std::tuple{hDevice, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer,
-            nOutBufferSize, lpBytesReturned, &desc.data->overlapped};
+            nOutBufferSize, (LPDWORD)NULL, &desc.data->overlapped};
     using params_t = decltype(params);
 
     desc.data->h = desc.h = hDevice;
@@ -3270,14 +3268,16 @@ inline task<BOOL> DeviceIoControl(HANDLE    hDevice,
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpBytesReturned, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED DeviceIoControl: %s", get_last_error().c_str());
         co_return false;
     }
-    if (lpBytesReturned)
-        *lpBytesReturned = desc.data->recvlen;
     co_return true;
 }
 
@@ -3326,16 +3326,16 @@ inline task<BOOL> LockFileEx(HANDLE hFile,
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
+    if (offset) {
+        *offset = 0;
+        *offset |= desc.data->overlapped.Offset;
+        *offset |= (uint64_t(desc.data->overlapped.OffsetHigh) << 32);
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED LockFileEx: %s", get_last_error().c_str());
         co_return false;
-    }
-    if (offset) {
-        *offset = 0;
-        *offset |= desc.data->overlapped.Offset;
-        *offset |= (uint64_t(desc.data->overlapped.OffsetHigh) << 32);
     }
     co_return true;
 }
@@ -3351,7 +3351,7 @@ inline task<BOOL> ReadDirectoryChangesW(HANDLE                              hDir
     auto desc = create_io_desc(co_await get_pool());
 
     auto params = std::tuple{hDirectory, lpBuffer, nBufferLength, bWatchSubtree, dwNotifyFilter,
-            lpBytesReturned, &desc.data->overlapped, lpCompletionRoutine};
+            (LPDWORD)NULL, &desc.data->overlapped, lpCompletionRoutine};
     using params_t = decltype(params);
 
     desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -3376,14 +3376,16 @@ inline task<BOOL> ReadDirectoryChangesW(HANDLE                              hDir
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpBytesReturned, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED ReadDirectoryChangesW: %s", get_last_error().c_str());
         co_return false;
     }
-    if (lpBytesReturned)
-        *lpBytesReturned = desc.data->recvlen;
     co_return true;
 }
 
@@ -3394,7 +3396,7 @@ inline task<BOOL> ReadFile(HANDLE   hFile,
 {
     auto desc = create_io_desc(co_await get_pool());
 
-    auto params = std::tuple{hFile, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead,
+    auto params = std::tuple{hFile, lpBuffer, nNumberOfBytesToRead, (LPDWORD)NULL,
             &desc.data->overlapped};
     using params_t = decltype(params);
 
@@ -3404,6 +3406,7 @@ inline task<BOOL> ReadFile(HANDLE   hFile,
         co_return false;
     }
     desc.data->h = desc.h = hFile;
+    CORO_DEBUG("cptr: %p", lpBuffer);
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::ReadFile, *params);
@@ -3420,14 +3423,16 @@ inline task<BOOL> ReadFile(HANDLE   hFile,
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesRead, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED ReadFile: %s", get_last_error().c_str());
         co_return false;
     }
-    if (lpNumberOfBytesRead)
-        *lpNumberOfBytesRead = desc.data->recvlen;
     co_return true;
 }
 
@@ -3441,7 +3446,7 @@ inline task<BOOL> TransactNamedPipe(HANDLE  hNamedPipe,
     auto desc = create_io_desc(co_await get_pool());
 
     auto params = std::tuple{hNamedPipe, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize,
-            lpBytesRead, &desc.data->overlapped};
+            (LPDWORD)NULL, &desc.data->overlapped};
     using params_t = decltype(params);
 
     desc.data->h = desc.h = hNamedPipe;
@@ -3466,14 +3471,16 @@ inline task<BOOL> TransactNamedPipe(HANDLE  hNamedPipe,
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpBytesRead, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED TransactNamedPipe: %s", get_last_error().c_str());
         co_return false;
     }
-    if (lpBytesRead)
-        *lpBytesRead = desc.data->recvlen;
     co_return true;
 
 }
@@ -3555,10 +3562,8 @@ inline task<BOOL> WriteFile(HANDLE  hFile,
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
-    if (ret == ERROR_DONE)
-        co_return true;
-    if (ret != ERROR_OK) {
-        CORO_DEBUG("FAILED WriteFile: %s", get_last_error().c_str());
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesWritten, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
         co_return false;
     }
     if (offset) {
@@ -3566,8 +3571,12 @@ inline task<BOOL> WriteFile(HANDLE  hFile,
         *offset |= desc.data->overlapped.Offset;
         *offset |= (uint64_t(desc.data->overlapped.OffsetHigh) << 32);
     }
-    if (lpNumberOfBytesWritten)
-        *lpNumberOfBytesWritten = desc.data->recvlen;
+    if (ret == ERROR_DONE)
+        co_return true;
+    if (ret != ERROR_OK) {
+        CORO_DEBUG("FAILED WriteFile: %s", get_last_error().c_str());
+        co_return false;
+    }
     co_return true;
 }
 
@@ -3583,7 +3592,7 @@ inline task<BOOL> WSASendMsg(SOCKET                             handle,
     }
     auto desc = create_io_desc(co_await get_pool());
 
-    auto params = std::tuple{handle, lpMsg, dwFlags, lpNumberOfBytesSent,
+    auto params = std::tuple{handle, lpMsg, dwFlags, (LPDWORD)NULL,
             &desc.data->overlapped, lpCompletionRoutine};
     using params_t = decltype(params);
 
@@ -3605,14 +3614,16 @@ inline task<BOOL> WSASendMsg(SOCKET                             handle,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesSent, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED WSASendMsg: %s", get_last_error().c_str());
         co_return false;
     }
-    if (lpNumberOfBytesSent)
-        *lpNumberOfBytesSent = desc.data->recvlen;
     co_return true;
 }
 
@@ -3627,7 +3638,7 @@ inline task<BOOL> WSASendTo(SOCKET                             s,
 {
     auto desc = create_io_desc(co_await get_pool());
 
-    auto params = std::tuple{s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpTo,
+    auto params = std::tuple{s, lpBuffers, dwBufferCount, (LPDWORD)NULL, dwFlags, lpTo,
             iTolen, &desc.data->overlapped, lpCompletionRoutine};
     using params_t = decltype(params);
 
@@ -3653,14 +3664,16 @@ inline task<BOOL> WSASendTo(SOCKET                             s,
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesSent, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED WSASendTo: %s", get_last_error().c_str());
         co_return false;
     }
-    if (lpNumberOfBytesSent)
-        *lpNumberOfBytesSent = desc.data->recvlen;
     co_return true;
 }
 
@@ -3673,7 +3686,7 @@ inline task<BOOL> WSASend(SOCKET                             s,
 {
     auto desc = create_io_desc(co_await get_pool());
 
-    auto params = std::tuple{s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags,
+    auto params = std::tuple{s, lpBuffers, dwBufferCount, (LPDWORD)NULL, dwFlags,
             &desc.data->overlapped, lpCompletionRoutine};
     using params_t = decltype(params);
 
@@ -3699,14 +3712,16 @@ inline task<BOOL> WSASend(SOCKET                             s,
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesSent, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED WSASend: %s", get_last_error().c_str());
         co_return false;
     }
-    if (lpNumberOfBytesSent)
-        *lpNumberOfBytesSent = desc.data->recvlen;
     co_return true;
 }
 
@@ -3721,7 +3736,7 @@ inline task<BOOL> WSARecvFrom(SOCKET                             s,
 {
     auto desc = create_io_desc(co_await get_pool());
 
-    auto params = std::tuple{s, lpBuffers, dwBufferCount, lpNumberOfBytesRecvd, lpFlags, lpFrom,
+    auto params = std::tuple{s, lpBuffers, dwBufferCount, (LPDWORD)NULL, lpFlags, lpFrom,
             lpFromlen, &desc.data->overlapped, lpCompletionRoutine};
     using params_t = decltype(params);
 
@@ -3747,14 +3762,16 @@ inline task<BOOL> WSARecvFrom(SOCKET                             s,
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesRecvd, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED WSARecvFrom: %s", get_last_error().c_str());
         co_return false;
     }
-    if (lpNumberOfBytesRecvd)
-        *lpNumberOfBytesRecvd = desc.data->recvlen;
     co_return true;
 }
 
@@ -3770,8 +3787,7 @@ inline task<BOOL> WSARecvMsg(SOCKET                             s,
 
     auto desc = create_io_desc(co_await get_pool());
 
-    auto params = std::tuple{s, lpMsg, lpdwNumberOfBytesRecvd,
-            &desc.data->overlapped, lpCompletionRoutine};
+    auto params = std::tuple{s, lpMsg, (LPDWORD)NULL, &desc.data->overlapped, lpCompletionRoutine};
     using params_t = decltype(params);
 
     desc.data->h = desc.h = (HANDLE)s;
@@ -3796,14 +3812,16 @@ inline task<BOOL> WSARecvMsg(SOCKET                             s,
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpdwNumberOfBytesRecvd, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED WSARecvMsg: %s", get_last_error().c_str());
         co_return false;
     }
-    if (lpdwNumberOfBytesRecvd)
-        *lpdwNumberOfBytesRecvd = desc.data->recvlen;
     co_return true;
 }
 
@@ -3816,7 +3834,7 @@ inline task<BOOL> WSARecv(SOCKET                             s,
 {
     auto desc = create_io_desc(co_await get_pool());
 
-    auto params = std::tuple{s, lpBuffers, dwBufferCount, lpNumberOfBytesRecvd, lpFlags,
+    auto params = std::tuple{s, lpBuffers, dwBufferCount, (LPDWORD)NULL, lpFlags,
             &desc.data->overlapped, lpCompletionRoutine};
     using params_t = decltype(params);
 
@@ -3842,40 +3860,119 @@ inline task<BOOL> WSARecv(SOCKET                             s,
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
+    if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesRecvd, FALSE)) {
+        CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
     if (ret == ERROR_DONE)
         co_return true;
     if (ret != ERROR_OK) {
         CORO_DEBUG("FAILED AcceptEx: %s", get_last_error().c_str());
         co_return false;
     }
-    if (lpNumberOfBytesRecvd)
-        *lpNumberOfBytesRecvd = desc.data->recvlen;
     co_return true;
 }
 
 /* Those are here to increase the compatibility with the linux functions  */
-inline task_t connect(SOCKET s, const sockaddr *sa, int *len) {
-    /* TODO: */
+inline task_t connect(SOCKET s, const sockaddr *sa, uint32_t len) {
+    struct sockaddr_in tmp_addr;
+    ZeroMemory(&tmp_addr, sizeof(tmp_addr));
+    tmp_addr.sin_family = AF_INET;
+    tmp_addr.sin_addr.s_addr = INADDR_ANY;
+    tmp_addr.sin_port = 0;
+
+    /* ConnectEx requires the socket to be initially bound */
+    int rc = bind(s, (SOCKADDR*) &tmp_addr, sizeof(tmp_addr));
+    if (rc != 0) {
+        CORO_DEBUG("Failed first bind: %s", get_last_error().c_str());
+        co_return ERROR_GENERIC;
+    }
+
+    BOOL ok = co_await ConnectEx(s, sa, len, NULL, 0, NULL);
+    co_return ok ? ERROR_OK : ERROR_GENERIC;
 }
 
-inline task_t accept(SOCKET s, sockaddr *sa, int *len) {
-    /* TODO: */
+inline task<SOCKET> accept(SOCKET s, sockaddr *sa, uint32_t *len) {
+    SOCKET client_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+    if (client_sock == INVALID_SOCKET) {
+        CORO_DEBUG("Failed to construct client sock: %s", get_last_error().c_str());
+        co_return INVALID_SOCKET;
+    }
+
+    std::vector<uint8_t> addr_buff((*len + 16) * 2);
+    DWORD rlen = 0;
+
+    BOOL ok = co_await AcceptEx(s, client_sock, &addr_buff[0], 0, *len + 16, *len + 16, &rlen);
+    if (!ok) {
+        CORO_DEBUG("Failed accept: %s", get_last_error().c_str());
+        closesocket(client_sock);
+        co_return INVALID_SOCKET;
+    }
+
+    memcpy(sa, &addr_buff[0], *len);
+    co_return client_sock;
 }
 
-inline task<SSIZE_T> read(HANDLE h, void *buff, size_t len, rw_flags_e flags) {
-    /* TODO: */
+inline task<SSIZE_T> read(HANDLE h, void *buff, size_t len) {
+    DWORD nread = 0;
+    BOOL ok = co_await ReadFile(h, buff, len, &nread);
+    if (!ok) {
+        CORO_DEBUG("Failed read");
+        co_return ERROR_GENERIC;
+    }
+    co_return nread;
 }
 
-inline task<SSIZE_T> write(HANDLE h, const void *buff, size_t len, rw_flags_e flags) {
-    /* TODO: */
+inline task<SSIZE_T> write(HANDLE h, const void *buff, size_t len, uint64_t *offset) {
+    DWORD nwrite = 0;
+    BOOL ok = co_await WriteFile(h, buff, len, &nwrite, offset);
+    if (!ok) {
+        CORO_DEBUG("Failed write");
+        co_return ERROR_GENERIC;
+    }
+    co_return nwrite;
 }
 
-inline task_t read_sz(HANDLE h, void *buff, size_t len, rw_flags_e flags) {
-    /* TODO: */
+inline task_t read_sz(HANDLE h, void *buff, size_t len) {
+    SSIZE_T original_len = len;
+    while (true) {
+        if (!len)
+            break ;
+        SSIZE_T ret = co_await read(h, buff, len);
+        if (ret == 0) {
+            CORO_DEBUG("Read failed, peer is closed");
+            co_return ERROR_GENERIC;
+        }
+        else if (ret < 0) {
+            CORO_DEBUG("Failed read");
+            co_return ERROR_GENERIC;
+        }
+        else {
+            len -= ret;
+            CORO_DEBUG("ret: %lld len: %llu", ret, len);
+            buff = (char *)buff + ret;
+        }
+    }
+    co_return ERROR_OK;
 }
 
-inline task_t write_sz(HANDLE h, const void *buff, size_t len, rw_flags_e flags) {
-    /* TODO: */
+inline task_t write_sz(HANDLE h, const void *buff, size_t len, uint64_t *offset) {
+    SSIZE_T original_len = len;
+    while (true) {
+        if (!len)
+            break ;
+        SSIZE_T ret = co_await write(h, buff, len, offset);
+        if (ret < 0) {
+            CORO_DEBUG("Failed write");
+            co_return ERROR_GENERIC;
+        }
+        else {
+            len -= ret;
+            buff = (char *)buff + ret;
+        }
+    }
+    co_return ERROR_OK;
 }
 
 #endif /* CORO_OS_WINDOWS */
