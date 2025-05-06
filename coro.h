@@ -3123,12 +3123,12 @@ inline task<BOOL> ConnectEx(SOCKET  s,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
-    if (!CloseHandle(desc.data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
-        co_return false;
-    }
     if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpdwBytesSent, FALSE)) {
         CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
     if (ret == ERROR_DONE)
@@ -3178,12 +3178,12 @@ inline task<BOOL> AcceptEx(SOCKET   sListenSocket,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
-    if (!CloseHandle(desc.data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
-        co_return false;
-    }
     if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpdwBytesReceived, FALSE)) {
         CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
     if (ret == ERROR_DONE)
@@ -3264,12 +3264,12 @@ inline task<BOOL> DeviceIoControl(HANDLE    hDevice,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
-    if (!CloseHandle(desc.data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
-        co_return false;
-    }
     if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpBytesReturned, FALSE)) {
         CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
     if (ret == ERROR_DONE)
@@ -3372,12 +3372,12 @@ inline task<BOOL> ReadDirectoryChangesW(HANDLE                              hDir
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
-    if (!CloseHandle(desc.data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
-        co_return false;
-    }
     if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpBytesReturned, FALSE)) {
         CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
     if (ret == ERROR_DONE)
@@ -3419,12 +3419,12 @@ inline task<BOOL> ReadFile(HANDLE   hFile,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
-    if (!CloseHandle(desc.data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
-        co_return false;
-    }
     if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesRead, FALSE)) {
         CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
     if (ret == ERROR_DONE)
@@ -3467,12 +3467,12 @@ inline task<BOOL> TransactNamedPipe(HANDLE  hNamedPipe,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
-    if (!CloseHandle(desc.data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
-        co_return false;
-    }
     if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpBytesRead, FALSE)) {
         CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
     if (ret == ERROR_DONE)
@@ -3558,12 +3558,12 @@ inline task<BOOL> WriteFile(HANDLE  hFile,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
-    if (!CloseHandle(desc.data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
-        co_return false;
-    }
     if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesWritten, FALSE)) {
         CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
     if (offset) {
@@ -3660,12 +3660,12 @@ inline task<BOOL> WSASendTo(SOCKET                             s,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
-    if (!CloseHandle(desc.data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
-        co_return false;
-    }
     if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesSent, FALSE)) {
         CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
     if (ret == ERROR_DONE)
@@ -3708,12 +3708,12 @@ inline task<BOOL> WSASend(SOCKET                             s,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
-    if (!CloseHandle(desc.data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
-        co_return false;
-    }
     if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesSent, FALSE)) {
         CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
     if (ret == ERROR_DONE)
@@ -3758,12 +3758,12 @@ inline task<BOOL> WSARecvFrom(SOCKET                             s,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
-    if (!CloseHandle(desc.data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
-        co_return false;
-    }
     if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesRecvd, FALSE)) {
         CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
     if (ret == ERROR_DONE)
@@ -3808,12 +3808,12 @@ inline task<BOOL> WSARecvMsg(SOCKET                             s,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
-    if (!CloseHandle(desc.data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
-        co_return false;
-    }
     if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpdwNumberOfBytesRecvd, FALSE)) {
         CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
     if (ret == ERROR_DONE)
@@ -3856,12 +3856,12 @@ inline task<BOOL> WSARecv(SOCKET                             s,
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
-    if (!CloseHandle(desc.data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
-        co_return false;
-    }
     if (!GetOverlappedResult(desc.data->h, &desc.data->overlapped, lpNumberOfBytesRecvd, FALSE)) {
         CORO_DEBUG("Failed to get result: %s", get_last_error().c_str());
+        co_return false;
+    }
+    if (!CloseHandle(desc.data->overlapped.hEvent)) {
+        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         co_return false;
     }
     if (ret == ERROR_DONE)
