@@ -1,4 +1,5 @@
 #define CORO_ENABLE_DEBUG_NAMES true
+#define CORO_ENABLE_DEBUG_TRACE_ALL true
 
 #include <string.h>
 #include <stdexcept>
@@ -143,6 +144,7 @@ co::task_t test1_co_even(co::sem_p a, co::sem_p b) {
             break;
         }
     }
+    DBG("Ending even");
     co_return 0;
 }
 
@@ -153,6 +155,7 @@ co::task_t test1_co_odd(co::sem_p a, co::sem_p b) {
             break;
         a->signal();
     }
+    DBG("Ending odd");
     co_return 0;
 }
 
@@ -161,10 +164,14 @@ int test1_semaphore() {
     auto a = co::create_sem(pool, 1);
     auto b = co::create_sem(pool, 0);
 
-    pool->sched(test1_co_odd(a, b));
-    pool->sched(test1_co_even(a, b));
+    pool->sched(CORO_REGNAME(test1_co_odd(a, b)));
+    pool->sched(CORO_REGNAME(test1_co_even(a, b)));
+
+    DBG("Run");
 
     ASSERT_FN(pool->run());
+
+    DBG("Stop Run");
 
     return 0;
 }
@@ -768,9 +775,15 @@ co::task_t test8_io_connect_accept() {
         co_await co::sleep_ms(10);
         ASSERT_COFN(test8_chk_msg(uints3));
 
-        DBG("@2 Client[%d]: Shutdown socket", num);
-        shutdown(sock, SD_BOTH);
-        closesocket(sock);
+        DBG("@2 Client[%d]: ??? wait for disconnect", num);
+        /* Wait for peer to also finish and disconnect */
+        shutdown(sock, SD_SEND);
+        while (true) {
+            int nread = 0;
+            ASSERT_COFN(nread = co_await co::read((HANDLE)sock, &uints1[0], sizeof(uints1[0])));
+            if (nread == 0)
+                break;
+        }
 
         DBG("@2 Client[%d]: DONE Connection", num);
         co_return 0;
@@ -793,6 +806,17 @@ co::task_t test8_io_connect_accept() {
         co_await co::sleep_ms(10);
         ASSERT_COFN(co_await co::write_sz((HANDLE)sock, &uints[3], sizeof(uints[3]) * 1));
 
+        DBG("#2 Server: !!!!! wait for disconnect");
+        /* Wait for peer to also finish and disconnect */
+        shutdown(sock, SD_SEND);
+        while (true) {
+            int nread = 0;
+            ASSERT_COFN(nread = co_await co::read((HANDLE)sock, &uints[0], sizeof(uints[0])));
+            if (nread == 0)
+                break;
+        }
+
+        DBG("#2 Server: peer done, closing socket");
         co_return 0;
     };
     auto server = [&client_conn]() -> co::task_t {
