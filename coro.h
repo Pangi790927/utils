@@ -237,7 +237,6 @@ using modif_pack_t = std::vector<modif_p>;
 
 /* Tasks errors */
 enum error_e : int32_t {
-    ERROR_DONE    =  2,
     ERROR_YIELDED =  1, /* not really an error, but used to signal that the coro yielded */
     ERROR_OK      =  0,
     ERROR_GENERIC = -1, /* generic error, can use log_str to find the error, or sometimes errno */
@@ -506,7 +505,7 @@ struct io_data_t {
     OVERLAPPED overlapped = {0};                    /* must be the first member of this struct */
     io_flag_e flags = io_flag_e{0};
     state_t *state = nullptr;                       /* state of the task */
-    DWORD recvlen;
+    DWORD recvlen = 0;
 
     std::function<error_e(void *)> io_request;      /* function to be called inside add_waiter */
     void *ptr = nullptr;                            /* can be context for io_request or timer */
@@ -1837,8 +1836,6 @@ struct io_pool_t {
         }
 
         error_e err = data->io_request(data->ptr);
-        if (err == ERROR_DONE)
-            return err;
         if (err != ERROR_OK) {
             CORO_DEBUG("Failed the io_request: %s", get_last_error().c_str());
             return err;
@@ -2519,11 +2516,6 @@ struct io_awaiter_t {
             return h;
         }
         ret_err = pool->get_internal()->wait_io(h, io_desc);
-        if (ret_err == ERROR_DONE) {
-            do_unwait_io_modifs(state, io_desc);
-            do_entry_modifs(state);
-            return h;
-        }
         if (ret_err != ERROR_OK) {
             CORO_DEBUG("Failed to register wait: %s on: %s",
                     dbg_enum(ret_err).c_str(), dbg_name(h).c_str());
@@ -3083,15 +3075,13 @@ inline error_e load_win_fn(GUID guid, Fn& fn) {
 }
 
 inline error_e handle_done_req(io_data_t *data, error_e err, DWORD *len, uint64_t *offset) {
-    if (err != ERROR_OK && err != ERROR_DONE) {
+    if (err != ERROR_OK) {
         CloseHandle(data->overlapped.hEvent);
         CORO_DEBUG("FAILED: %s", get_last_error().c_str());
         return ERROR_GENERIC;
     }
-    if (len && !GetOverlappedResult(data->h, &data->overlapped, len, FALSE)) {
-        CORO_DEBUG("Failed to get result: %s lenptr: %p", get_last_error().c_str(), len);
-        return ERROR_GENERIC;
-    }
+    if (len)
+        *len = data->recvlen;
     if (!CloseHandle(data->overlapped.hEvent)) {
         CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
         return ERROR_GENERIC;
@@ -3135,12 +3125,9 @@ inline task<BOOL> ConnectEx(SOCKET  s, const sockaddr *name, int namelen, PVOID 
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(_connect_ex, *params);
-        if (!ret && GetLastError() == ERROR_IO_PENDING)
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3175,13 +3162,9 @@ inline task<BOOL> AcceptEx( SOCKET sListenSocket, SOCKET sAcceptSocket, PVOID lp
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(_accept_ex, *params);
-        if (!ret && GetLastError() == ERROR_IO_PENDING) {
-            return ERROR_OK;
-        }
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3207,12 +3190,9 @@ inline task<BOOL> ConnectNamedPipe(HANDLE hNamedPipe) {
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::ConnectNamedPipe, *params);
-        if (!ret && GetLastError() == ERROR_IO_PENDING || GetLastError() == ERROR_PIPE_CONNECTED)
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && (GetLastError() != ERROR_IO_PENDING || GetLastError() == ERROR_PIPE_CONNECTED))
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3241,12 +3221,9 @@ inline task<BOOL> DeviceIoControl(HANDLE hDevice, DWORD dwIoControlCode, LPVOID 
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::DeviceIoControl, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3285,12 +3262,9 @@ inline task<BOOL> LockFileEx(HANDLE hFile, DWORD dwFlags, DWORD dwReserved,
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::LockFileEx, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3320,12 +3294,9 @@ inline task<BOOL> ReadDirectoryChangesW(HANDLE hDirectory, LPVOID lpBuffer, DWOR
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::ReadDirectoryChangesW, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3345,7 +3316,6 @@ inline task<BOOL> ReadFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesTo
             &desc.data->overlapped};
     using params_t = decltype(params);
 
-    CORO_DEBUG("cptr: %p, to_read: %d", lpNumberOfBytesRead, nNumberOfBytesToRead);
     desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!desc.data->overlapped.hEvent) {
         CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
@@ -3355,12 +3325,9 @@ inline task<BOOL> ReadFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesTo
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::ReadFile, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3389,12 +3356,9 @@ inline task<BOOL> TransactNamedPipe(HANDLE hNamedPipe, LPVOID lpInBuffer, DWORD 
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::TransactNamedPipe, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3421,12 +3385,9 @@ inline task<BOOL> WaitCommEvent(HANDLE  hFile, LPDWORD lpEvtMask) {
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::WaitCommEvent, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3459,12 +3420,9 @@ inline task<BOOL> WriteFile(HANDLE  hFile, LPCVOID lpBuffer, DWORD nNumberOfByte
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::WriteFile, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3497,12 +3455,9 @@ inline task<BOOL> WSASendMsg(SOCKET handle, LPWSAMSG lpMsg, DWORD dwFlags,
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(_wsa_send_msg, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3532,12 +3487,9 @@ inline task<BOOL> WSASendTo(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::WSASendTo, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3567,12 +3519,9 @@ inline task<BOOL> WSASend(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::WSASend, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3602,12 +3551,9 @@ inline task<BOOL> WSARecvFrom(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::WSARecvFrom, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3641,12 +3587,9 @@ inline task<BOOL> WSARecvMsg(SOCKET s, LPWSAMSG lpMsg, LPDWORD lpdwNumberOfBytes
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(_wsa_recv_msg, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3676,12 +3619,9 @@ inline task<BOOL> WSARecv(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
         bool ret = std::apply(::WSARecv, *params);
-        if (!ret && (GetLastError() == ERROR_IO_PENDING))
-            return ERROR_OK;
-        else if (!ret) {
+        if (!ret && GetLastError() != ERROR_IO_PENDING)
             return ERROR_GENERIC;
-        }
-        return ERROR_DONE;
+        return ERROR_OK;
     };
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
@@ -3735,7 +3675,6 @@ inline task<SOCKET> accept(SOCKET s, sockaddr *sa, uint32_t *len) {
 
 inline task<SSIZE_T> read(HANDLE h, void *buff, size_t len) {
     DWORD nread = 0;
-    CORO_DEBUG("read len: %lld buff: %p lenptr: %p", len, buff, &nread);
     BOOL ok = co_await ReadFile(h, buff, (DWORD)len, &nread);
     if (!ok) {
         CORO_DEBUG("Failed read");
@@ -3755,13 +3694,10 @@ inline task<SSIZE_T> write(HANDLE h, const void *buff, size_t len, uint64_t *off
 }
 
 inline task_t read_sz(HANDLE h, void *buff, size_t len) {
-    static int callcnt = 0;
     SSIZE_T original_len = len;
-    int call_cnt = callcnt++;
     while (true) {
         if (!len)
             break ;
-        CORO_DEBUG("[#%d] read cmd: %lld buff: %p", call_cnt, len, buff);
         SSIZE_T ret = co_await read(h, buff, len);
         if (ret == 0) {
             CORO_DEBUG("Read failed, peer is closed");
@@ -3772,9 +3708,7 @@ inline task_t read_sz(HANDLE h, void *buff, size_t len) {
             co_return ERROR_GENERIC;
         }
         else {
-            CORO_DEBUG("[#%d] pre  ret: %lld len: %llu", call_cnt, ret, len);
             len -= ret;
-            CORO_DEBUG("[#%d] post ret: %lld len: %llu", call_cnt, ret, len);
             buff = (char *)buff + ret;
         }
     }
@@ -4125,7 +4059,6 @@ inline dbg_string_t dbg_name(handle<P> h) {
 inline dbg_string_t dbg_enum(error_e code) {
     switch (code) {
         case ERROR_YIELDED: return dbg_string_t{"ERROR_YIELDED",   allocator_t<char>{nullptr}};
-        case ERROR_DONE:    return dbg_string_t{"ERROR_DONE",      allocator_t<char>{nullptr}};
         case ERROR_OK:      return dbg_string_t{"ERROR_OK",        allocator_t<char>{nullptr}};
         case ERROR_GENERIC: return dbg_string_t{"ERROR_GENERIC",   allocator_t<char>{nullptr}};
         case ERROR_TIMEO:   return dbg_string_t{"ERROR_TIMEO",     allocator_t<char>{nullptr}};

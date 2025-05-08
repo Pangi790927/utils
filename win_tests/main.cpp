@@ -144,7 +144,6 @@ co::task_t test1_co_even(co::sem_p a, co::sem_p b) {
             break;
         }
     }
-    DBG("Ending even");
     co_return 0;
 }
 
@@ -155,7 +154,6 @@ co::task_t test1_co_odd(co::sem_p a, co::sem_p b) {
             break;
         a->signal();
     }
-    DBG("Ending odd");
     co_return 0;
 }
 
@@ -170,8 +168,6 @@ int test1_semaphore() {
     DBG("Run");
 
     ASSERT_FN(pool->run());
-
-    DBG("Stop Run");
 
     return 0;
 }
@@ -497,7 +493,6 @@ int test7_clearing() {
     pool->sched(test7_stopper(done));
 
     auto ret = pool->run();
-    DBG("ret: %s", co::dbg_enum(ret).c_str());
     ASSERT_FN(CHK_BOOL(ret == co::RUN_STOPPED));
     ASSERT_FN(CHK_BOOL(test7_destruct_cnt == 0));
     ASSERT_FN(pool->clear());
@@ -648,9 +643,11 @@ int test8_io() {
 
 #if CORO_OS_WINDOWS
 
+int test8_io_connect_accept_ex_cnt = 0;
+int test8_io_connect_accept_cnt = 0;
+
 co::task_t test8_io_connect_accept_ex() {
     auto client = []() -> co::task_t {
-        DBG("@1 Client: Create socket");
         SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         ASSERT_COFN(CHK_BOOL(sock != INVALID_SOCKET));
 
@@ -661,7 +658,6 @@ co::task_t test8_io_connect_accept_ex() {
         addr.sin_addr.s_addr = INADDR_ANY;
         addr.sin_port = 0;
 
-        DBG("@1 Client: Bind connecting socket");
         int rc = bind(sock, (SOCKADDR*) &addr, sizeof(addr));
         ASSERT_COFN(CHK_BOOL(rc == 0));
 
@@ -670,15 +666,14 @@ co::task_t test8_io_connect_accept_ex() {
         addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // google.com
         addr.sin_port = htons(27015);
 
-        DBG("@1 Client: Connecting to server");
         BOOL ok = co_await co::ConnectEx(sock, (SOCKADDR*) &addr, sizeof(addr), NULL, 0, NULL);
         ASSERT_COFN(CHK_BOOL(ok));
 
-        DBG("@1 Client: Shutdown socket");
         rc = shutdown(sock, SD_BOTH);
         closesocket(sock);
 
-        DBG("@1 Client: DONE Connection");
+        test8_io_connect_accept_ex_cnt++;
+
         co_return 0;
     };
     auto client_conn = [](SOCKET sock) -> co::task_t {
@@ -687,10 +682,11 @@ co::task_t test8_io_connect_accept_ex() {
             closesocket(sock);
         });
 
+        test8_io_connect_accept_ex_cnt++;
+
         co_return 0;
     };
     auto server = [&client_conn]() -> co::task_t {
-        DBG("#1 Server: Create socket");
         SOCKET server_sock = socket(AF_INET, SOCK_STREAM, 0);
         ASSERT_COFN(CHK_BOOL(server_sock != INVALID_SOCKET));
         FnScope scope_server_sock([&]{ closesocket(server_sock); });
@@ -701,7 +697,6 @@ co::task_t test8_io_connect_accept_ex() {
         server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
         server_addr.sin_port = htons(27015);
 
-        DBG("#1 Server: Bind server socket");
         int rc = bind(server_sock, (SOCKADDR*) &server_addr, sizeof(server_addr));
         ASSERT_COFN(CHK_BOOL(rc == 0));
 
@@ -716,16 +711,14 @@ co::task_t test8_io_connect_accept_ex() {
             char addr_buff[(sizeof (sockaddr_in) + 16) * 2];
             DWORD recved = 0;
 
-            /* TODO: this will block after accepting all, close is somehow (use stop_handle) */
-            DBG("#1 Server: wait conn");
             ASSERT_COFN(CHK_BOOL(co_await co::AcceptEx(server_sock, client_sock, addr_buff, 0,
                     sizeof (sockaddr_in) + 16, sizeof (sockaddr_in) + 16, &recved)));
-
-            DBG("#1 Server: Accepted connection");
 
             scope_client_sock.disable();
             co_await co::sched(client_conn(client_sock));
         }
+
+        test8_io_connect_accept_ex_cnt++;
 
         co_return 0;
     };
@@ -742,10 +735,13 @@ co::task_t test8_io_connect_accept_ex() {
 }
 
 co::task_t test8_io_connect_accept() {
-    auto client = [](int num) -> co::task_t {
-        DBG("@2 Client[%d]: Create socket", num);
+    auto client = []() -> co::task_t {
         SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         ASSERT_COFN(CHK_BOOL(sock != INVALID_SOCKET));
+        FnScope scope_sock([&]{
+            shutdown(sock, SD_BOTH);
+            closesocket(sock);
+        });
 
         struct sockaddr_in addr;
         ZeroMemory(&addr, sizeof(addr));
@@ -753,7 +749,6 @@ co::task_t test8_io_connect_accept() {
         addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // google.com
         addr.sin_port = htons(27016);
 
-        DBG("@2 Client[%d]: Connecting to server", num);
         ASSERT_COFN(co_await co::connect(sock, (SOCKADDR*) &addr, sizeof(addr)));
 
         uint32_t uints1[4] = {0};
@@ -762,30 +757,16 @@ co::task_t test8_io_connect_accept() {
         ASSERT_COFN(co_await co::write_sz((HANDLE)sock, uints1, sizeof(uints1)));
 
         uint32_t uints2[4] = {0};
-        DBG("@2 Client[%d]: ptr0: %p", num, uints2);
         ASSERT_COFN(co_await co::read_sz((HANDLE)sock, uints2, sizeof(uints2)));
         ASSERT_COFN(test8_chk_msg(uints2));
 
         uint32_t uints3[4] = {0};
-        DBG("@2 Client[%d]: ptr1: %p", num, uints3);
         ASSERT_COFN(co_await co::read_sz((HANDLE)sock, uints3, sizeof(uints3[0]) * 2));
         co_await co::sleep_ms(10);
-        DBG("@2 Client[%d]: ptr2: %p", num, &uints3[2]);
         ASSERT_COFN(co_await co::read_sz((HANDLE)sock, &uints3[2], sizeof(uints3[2]) * 2));
         co_await co::sleep_ms(10);
         ASSERT_COFN(test8_chk_msg(uints3));
 
-        DBG("@2 Client[%d]: ??? wait for disconnect", num);
-        /* Wait for peer to also finish and disconnect */
-        shutdown(sock, SD_SEND);
-        while (true) {
-            int nread = 0;
-            ASSERT_COFN(nread = co_await co::read((HANDLE)sock, &uints1[0], sizeof(uints1[0])));
-            if (nread == 0)
-                break;
-        }
-
-        DBG("@2 Client[%d]: DONE Connection", num);
         co_return 0;
     };
     auto client_conn = [](SOCKET sock) -> co::task_t {
@@ -796,7 +777,6 @@ co::task_t test8_io_connect_accept() {
 
         uint32_t uints[4] = {0};
 
-        DBG("#2 Server: ptr3: %p", uints);
         ASSERT_COFN(co_await co::read_sz((HANDLE)sock, uints, sizeof(uints)));
         test8_set_msg(uints);
 
@@ -806,21 +786,9 @@ co::task_t test8_io_connect_accept() {
         co_await co::sleep_ms(10);
         ASSERT_COFN(co_await co::write_sz((HANDLE)sock, &uints[3], sizeof(uints[3]) * 1));
 
-        DBG("#2 Server: !!!!! wait for disconnect");
-        /* Wait for peer to also finish and disconnect */
-        shutdown(sock, SD_SEND);
-        while (true) {
-            int nread = 0;
-            ASSERT_COFN(nread = co_await co::read((HANDLE)sock, &uints[0], sizeof(uints[0])));
-            if (nread == 0)
-                break;
-        }
-
-        DBG("#2 Server: peer done, closing socket");
         co_return 0;
     };
     auto server = [&client_conn]() -> co::task_t {
-        DBG("#2 Server: Create socket");
         SOCKET server_sock = socket(AF_INET, SOCK_STREAM, 0);
         ASSERT_COFN(CHK_BOOL(server_sock != INVALID_SOCKET));
         FnScope scope_server_sock([&]{ closesocket(server_sock); });
@@ -831,7 +799,6 @@ co::task_t test8_io_connect_accept() {
         server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
         server_addr.sin_port = htons(27016);
 
-        DBG("#2 Server: Bind server socket");
         int rc = bind(server_sock, (SOCKADDR*) &server_addr, sizeof(server_addr));
         ASSERT_COFN(CHK_BOOL(rc == 0));
 
@@ -842,12 +809,10 @@ co::task_t test8_io_connect_accept() {
             struct sockaddr_in client_addr;
 
             /* TODO: this will block after accepting all, close is somehow (use stop_handle) */
-            DBG("#2 Server: wait conn");
             uint32_t addr_len = sizeof(client_addr);
             SOCKET client_sock = co_await co::accept(server_sock, (SOCKADDR *)&client_addr, &addr_len);
             ASSERT_COFN(CHK_BOOL(client_sock != INVALID_SOCKET));
 
-            DBG("#2 Server: Accepted connection");
             co_await co::sched(client_conn(client_sock));
         }
 
@@ -859,10 +824,9 @@ co::task_t test8_io_connect_accept() {
     usefull for debugging, because things do happen in a much more predictible way. (not completly,
     because you still have no way, in general, to predict when a io operation will finish) */
     co_await co::sched(server());
-    int num = 0;
-    co_await co::sched(client(num++));
-    co_await co::sched(client(num++));
-    co_await co::sched(client(num++));
+    co_await co::sched(client());
+    co_await co::sched(client());
+    co_await co::sched(client());
     co_return 0;
 }
 
@@ -907,7 +871,6 @@ int test8_io() {
     pool->sched(test8_io_pipe());
     co::run_e ret = pool->run();
     ASSERT_FN(CHK_BOOL(ret == co::RUN_OK));
-    DBG("Run finished");
     return 0;
 }
 #endif /* CORO_OS_WINDOWS */
