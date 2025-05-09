@@ -644,7 +644,6 @@ int test8_io() {
 #if CORO_OS_WINDOWS
 
 int test8_io_connect_accept_ex_cnt = 0;
-int test8_io_connect_accept_cnt = 0;
 
 co::task_t test8_io_connect_accept_ex() {
     auto client = []() -> co::task_t {
@@ -734,6 +733,8 @@ co::task_t test8_io_connect_accept_ex() {
     co_return 0;
 }
 
+int test8_io_connect_accept_cnt = 0;
+
 co::task_t test8_io_connect_accept() {
     auto client = []() -> co::task_t {
         SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -767,6 +768,7 @@ co::task_t test8_io_connect_accept() {
         co_await co::sleep_ms(10);
         ASSERT_COFN(test8_chk_msg(uints3));
 
+        test8_io_connect_accept_cnt++;
         co_return 0;
     };
     auto client_conn = [](SOCKET sock) -> co::task_t {
@@ -786,6 +788,7 @@ co::task_t test8_io_connect_accept() {
         co_await co::sleep_ms(10);
         ASSERT_COFN(co_await co::write_sz((HANDLE)sock, &uints[3], sizeof(uints[3]) * 1));
 
+        test8_io_connect_accept_cnt++;
         co_return 0;
     };
     auto server = [&client_conn]() -> co::task_t {
@@ -810,12 +813,14 @@ co::task_t test8_io_connect_accept() {
 
             /* TODO: this will block after accepting all, close is somehow (use stop_handle) */
             uint32_t addr_len = sizeof(client_addr);
-            SOCKET client_sock = co_await co::accept(server_sock, (SOCKADDR *)&client_addr, &addr_len);
+            SOCKET client_sock = co_await co::accept(
+                    server_sock, (SOCKADDR *)&client_addr, &addr_len);
             ASSERT_COFN(CHK_BOOL(client_sock != INVALID_SOCKET));
 
             co_await co::sched(client_conn(client_sock));
         }
 
+        test8_io_connect_accept_cnt++;
         co_return 0;
     };
     /* This is what is nice about those coroutines, in the way they are written, we can be sure
@@ -830,11 +835,118 @@ co::task_t test8_io_connect_accept() {
     co_return 0;
 }
 
-co::task_t test8_io_pipe() {
+co::task_t test8_io_send_recv() {
+    /* TODO: WSASend */
+    /* TODO: WSASendTo */
+    /* TODO: WSASendMsg */
+    /* TODO: WSARecv */
+    /* TODO: WSARecvFrom */
+    /* TODO: WSARecvMsg */
     co_return 0;
 }
 
+int test8_io_pipe_cnt = 0;
+
+co::task_t test8_io_pipe() {
+    const char *pipe_name = "\\\\.\\pipe\\TestCoroNamedPipe";
+    const int buff_sz = 1024;
+
+    char message[] = "This is the pipe message";
+    char message2[] = "This is the returning message";
+
+    HANDLE pipe = CreateNamedPipeA(
+            pipe_name,
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | PIPE_READMODE_MESSAGE,
+            PIPE_TYPE_MESSAGE,
+            PIPE_UNLIMITED_INSTANCES,
+            buff_sz,
+            buff_sz,
+            NMPWAIT_USE_DEFAULT_WAIT,
+            NULL);
+    ASSERT_COFN(CHK_PTR(pipe));
+    FnScope pipe_scope([pipe]{ CloseHandle(pipe); });
+
+    auto pipe_client = [&pipe_name, &message, &message2]() -> co::task_t {
+        HANDLE client_pipe = CreateFileA(
+                pipe_name,
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                NULL,
+                OPEN_EXISTING,
+                FILE_FLAG_OVERLAPPED,
+                NULL);
+        ASSERT_COFN(CHK_PTR(client_pipe));
+        FnScope pipe_scope([client_pipe]{ CloseHandle(client_pipe); });
+
+        DWORD flags = PIPE_READMODE_MESSAGE;
+        ASSERT_COFN(CHK_BOOL(SetNamedPipeHandleState(client_pipe, &flags, NULL, NULL)));
+
+        char buff[1024] = {0};
+        DWORD recved = 0;
+        ASSERT_COFN(CHK_BOOL(co_await co::TransactNamedPipe(client_pipe,
+                message2, sizeof(message2), buff, sizeof(message), &recved)));
+
+        ASSERT_COFN(CHK_BOOL(recved == sizeof(message)));
+        ASSERT_COFN(CHK_BOOL(memcmp(buff, message, recved) == 0));
+
+        test8_io_pipe_cnt++;
+        co_return 0;
+    };
+
+    co_await co::sched(pipe_client());
+   
+    ASSERT_COFN(CHK_BOOL(co_await co::ConnectNamedPipe(pipe)));
+
+    char buff[1024] = {0};
+    DWORD recved = 0;
+    ASSERT_COFN(CHK_BOOL(co_await co::ReadFile(pipe, buff, sizeof(message2), &recved)));
+
+    DWORD sent = 0;
+    ASSERT_COFN(CHK_BOOL(co_await co::WriteFile(pipe, message, sizeof(message), &sent, NULL)));
+
+    ASSERT_COFN(CHK_BOOL(sent == sizeof(message)));
+    ASSERT_COFN(CHK_BOOL(recved == sizeof(message2)));
+    ASSERT_COFN(CHK_BOOL(memcmp(buff, message2, recved) == 0));
+    
+    test8_io_pipe_cnt++;
+
+    co_return 0;
+}
+
+int test8_io_device_cnt = 0;
 co::task_t test8_io_device() {
+    HANDLE dev = CreateFileA(
+            "\\\\.\\PhysicalDrive0",
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL,
+            OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED,
+            NULL);
+    ASSERT_COFN(CHK_PTR(dev));
+
+    DWORD junk;
+    DISK_GEOMETRY geometry;
+    ASSERT_COFN(CHK_BOOL(co_await co::DeviceIoControl(
+            dev,
+            IOCTL_DISK_GET_DRIVE_GEOMETRY,
+            NULL,
+            0,
+            &geometry,
+            sizeof(geometry),
+            &junk)));
+
+    uint64_t disk_sz = 0;
+
+    DBG("Cylinders       = %I64d", geometry.Cylinders);
+    DBG("Tracks/cylinder = %ld",   (ULONG) geometry.TracksPerCylinder);
+    DBG("Sectors/track   = %ld",   (ULONG) geometry.SectorsPerTrack);
+    DBG("Bytes/sector    = %ld",   (ULONG) geometry.BytesPerSector);
+
+    disk_sz = geometry.Cylinders.QuadPart * (ULONG)geometry.TracksPerCylinder *
+               (ULONG)geometry.SectorsPerTrack * (ULONG)geometry.BytesPerSector;
+    DBG("Disk size       = %I64d (Bytes) = %.2f (Gb)", 
+            disk_sz, (double) disk_sz / (1024 * 1024 * 1024));
     co_return 0;
 }
 
@@ -843,10 +955,6 @@ co::task_t test8_io_lock_file() {
 }
 
 co::task_t test8_io_dir_changes() {
-    co_return 0;
-}
-
-co::task_t test8_io_files() {
     co_return 0;
 }
 
@@ -864,13 +972,15 @@ int test8_io() {
     pool->sched(test8_io_connect_accept());
     pool->sched(test8_io_event());
     pool->sched(test8_io_comm_event());
-    pool->sched(test8_io_files());
     pool->sched(test8_io_dir_changes());
     pool->sched(test8_io_lock_file());
     pool->sched(test8_io_device());
     pool->sched(test8_io_pipe());
     co::run_e ret = pool->run();
     ASSERT_FN(CHK_BOOL(ret == co::RUN_OK));
+    ASSERT_FN(CHK_BOOL(test8_io_connect_accept_cnt == 7));
+    ASSERT_FN(CHK_BOOL(test8_io_connect_accept_ex_cnt == 7));
+    ASSERT_FN(CHK_BOOL(test8_io_pipe_cnt == 2));
     return 0;
 }
 #endif /* CORO_OS_WINDOWS */

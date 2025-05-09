@@ -667,9 +667,9 @@ type is error_e).
 */
 
 /* Creates semaphores, those need the pool to exist */
-inline sem_p create_sem(pool_t *pool, int64_t val = 0);
-inline sem_p create_sem(pool_p  pool, int64_t val = 0);
-inline task<sem_p> create_sem(int64_t val = 0);
+inline sem_p create_sem(pool_t *pool, int64_t val);
+inline sem_p create_sem(pool_p  pool, int64_t val);
+inline task<sem_p> create_sem(int64_t val);
 
 /* modifier that, once signaled, will awake the corutine and make it return ERROR_WAKEUP. If the
 corutine is not waiting it will return as soon as it reaches any co_await ?or co_yield? */
