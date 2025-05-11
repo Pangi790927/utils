@@ -2,4 +2,5 @@
 *.ilk
 *.obj
 *.pdb
+*.exe
 test8_io_lock_file
