@@ -950,19 +950,42 @@ co::task_t test8_io_device() {
     co_return 0;
 }
 
+int test8_io_lock_file_cnt;
+
 co::task_t test8_io_lock_file() {
+    HANDLE file = CreateFileA(
+            "./test8_io_lock_file",
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            NULL,
+            OPEN_ALWAYS,
+            FILE_FLAG_OVERLAPPED,
+            NULL);
+    ASSERT_COFN(CHK_PTR(file));
+    FnScope file_scope([file]{ CloseHandle(file); });
+
+    char buff[1024] = {0};
+    ASSERT_COFN(CHK_BOOL(co_await co::WriteFile(file, buff, sizeof(buff), nullptr, nullptr)));
+
+    ASSERT_COFN(CHK_BOOL(co_await co::LockFileEx(
+            file,
+            LOCKFILE_EXCLUSIVE_LOCK,
+            0,
+            1024,
+            0,
+            nullptr)));
+
+    test8_io_lock_file_cnt++;
     co_return 0;
 }
 
 co::task_t test8_io_dir_changes() {
+    /* TODO */
     co_return 0;
 }
 
 co::task_t test8_io_comm_event() {
-    co_return 0;
-}
-
-co::task_t test8_io_event() {
+    /* TODO */
     co_return 0;
 }
 
@@ -970,7 +993,6 @@ int test8_io() {
     auto pool = co::create_pool();
     pool->sched(test8_io_connect_accept_ex());
     pool->sched(test8_io_connect_accept());
-    pool->sched(test8_io_event());
     pool->sched(test8_io_comm_event());
     pool->sched(test8_io_dir_changes());
     pool->sched(test8_io_lock_file());
@@ -981,6 +1003,7 @@ int test8_io() {
     ASSERT_FN(CHK_BOOL(test8_io_connect_accept_cnt == 7));
     ASSERT_FN(CHK_BOOL(test8_io_connect_accept_ex_cnt == 7));
     ASSERT_FN(CHK_BOOL(test8_io_pipe_cnt == 2));
+    ASSERT_FN(CHK_BOOL(test8_io_lock_file_cnt == 1));
     return 0;
 }
 #endif /* CORO_OS_WINDOWS */

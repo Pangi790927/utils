@@ -3250,14 +3250,9 @@ inline task<BOOL> LockFileEx(HANDLE hFile, DWORD dwFlags, DWORD dwReserved,
         co_return false;
     }
     desc.data->h = desc.h = hFile;
-    desc.data->overlapped.hEvent = 0;
     if (offset) {
         desc.data->overlapped.Offset = (*offset) & 0xffffffff;
         desc.data->overlapped.OffsetHigh = (*offset) >> 32;
-    }
-    if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
-        co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
         params_t *params = (params_t *)ptr;
