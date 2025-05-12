@@ -966,6 +966,7 @@ co::task_t test8_io_lock_file() {
 
     char buff[1024] = {0};
     ASSERT_COFN(CHK_BOOL(co_await co::WriteFile(file, buff, sizeof(buff), nullptr, nullptr)));
+    ASSERT_COFN(CHK_BOOL(co_await co::ReadFile(file, buff, sizeof(buff), nullptr)));
 
     ASSERT_COFN(CHK_BOOL(co_await co::LockFileEx(
             file,
@@ -975,17 +976,71 @@ co::task_t test8_io_lock_file() {
             0,
             nullptr)));
 
+    /* TODO: Don't really know how to further check this function */
+
     test8_io_lock_file_cnt++;
     co_return 0;
 }
 
+int test8_io_dir_changes_cnt = 0;
 co::task_t test8_io_dir_changes() {
-    /* TODO */
+    HANDLE dir = CreateFile("./", GENERIC_READ,
+            FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, NULL);
+    ASSERT_COFN(CHK_PTR(dir));
+
+    auto add_rm_file = []() -> co::task_t {
+        const char *filename = "./test8_io_dir_changes";
+        HANDLE file = CreateFileA(
+                filename,
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                NULL,
+                OPEN_ALWAYS,
+                FILE_FLAG_OVERLAPPED,
+                NULL);
+        ASSERT_COFN(CHK_PTR(file));
+        CloseHandle(file);
+        ASSERT_COFN(remove(filename));
+
+        test8_io_dir_changes_cnt++;
+        co_return 0;
+    };
+
+    /* OBS: the CreateFile inside add_rm_file will be called after ReadDirectoryChangesW,
+    that is because co::sched does not change the running coroutine */
+    co_await co::sched(add_rm_file());
+
+    char buff[1024*10];
+    DWORD nread;
+    uint32_t action = 0;
+    while (true) {
+        ASSERT_COFN(CHK_BOOL(co_await co::ReadDirectoryChangesW(dir, buff, sizeof(buff), FALSE,
+                FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_FILE_NAME, &nread, nullptr)));
+        ASSERT_COFN(CHK_BOOL(nread != 0));
+
+        DWORD off = 0;
+        do {
+            auto fi = (FILE_NOTIFY_INFORMATION *)(buff + off);
+            switch (fi->Action) {
+                case FILE_ACTION_ADDED:   action |= 1; break;
+                case FILE_ACTION_REMOVED: action |= 2; break;
+                default: DBG("Unknown action");
+            }
+            off = fi->NextEntryOffset;
+        } while (off);
+
+        if (action == 3)
+            break;
+    }
+
+    test8_io_dir_changes_cnt++;
     co_return 0;
 }
 
+
 co::task_t test8_io_comm_event() {
-    /* TODO */
+    /* TODO: no idea how to test this one */
     co_return 0;
 }
 
@@ -1004,6 +1059,7 @@ int test8_io() {
     ASSERT_FN(CHK_BOOL(test8_io_connect_accept_ex_cnt == 7));
     ASSERT_FN(CHK_BOOL(test8_io_pipe_cnt == 2));
     ASSERT_FN(CHK_BOOL(test8_io_lock_file_cnt == 1));
+    ASSERT_FN(CHK_BOOL(test8_io_dir_changes_cnt == 2));
     return 0;
 }
 #endif /* CORO_OS_WINDOWS */
