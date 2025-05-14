@@ -30,10 +30,270 @@
 ====================================================================================================
 ====================================================================================================
 
-TODO: tutorial
-*/
+2. Task
+=======
 
-/*  HEADER
+As explained, each coroutine has an internal state. This state remembers the return value of the
+function, its local variables, and some other coroutine-specific information. All of these are
+remembered inside the coroutine promise. Each coroutine has, inside its promise, a state_t state
+that remembers important information for its scheduling within this library. You can obtain this
+state by (await get_state()) inside the respective coroutine for which you want to obtain the state
+pointer. This state will live for as long as the coroutine lives, but you would usually ignore
+its existence. The single instance for which you would use the state is if you are using
+modifications (see below).
+
+To each such promise (state, return value, local variables, etc.), the language assigns a handle in
+the form of std::coroutine_handle<PromiseType>. These handles are further managed by tasks inside
+this library. So, for a coroutine, you will get a task as a handle. The task further specifies the
+type of the promise and implicitly the return value of the coroutine, but you don't need to bother
+with those details.
+
+A task is also an awaitable. As such, when you await it, it calls or resumes the awaited coroutine,
+depending on the state it was left in. The await operation will resume the caller either on a
+co_yield (the C++ yield; coro::yield does something else) or on a co_return of the callee. In the
+latter case, the awaited coroutine is also destroyed, and further awaits on its task are undefined
+behavior.
+
+The task type as in coro::task<Type> is the type of the return value of the coroutine.
+
+3. Pool
+=======
+
+For a task, the pool is its running space. A task runs on a pool along with other tasks. This pool
+can be run only on one thread, i.e., there are no thread synchronization primitives used, except in
+the case of CORO_ENABLE_MULTITHREAD_SCHED.
+
+The pool remembers the coroutines that are ready and resumes them when the currently running
+coroutine yields to wait for some event (as in coro::yield). The pool also holds the allocator
+used internally and the io_pool and timers, which are explained below and are responsible for
+managing the asynchronous waits in the library.
+
+A task remembers the pool it was scheduled on while either (co_await coro::sched(task)) or
+pool_t::sched(task) are used on the respective task.
+
+There are many instances where there are two variants of a function: one where the function has
+the pool as an argument and another where that argument is omitted, but the function is in fact a
+coroutine that needs to be awaited. Inside a coroutine, using await on a function, the pool is
+deduced automatically from the running coroutine.
+
+From inside a running coroutine, you can use (co_await coro::get_pool()) to get the pool of the
+running coroutine.
+
+4. Semaphores
+=============
+
+5. IO Pool
+==========
+
+Inside the pool, there is an Input/Output event pool that implements the operating system-specific
+asynchronous mechanism within this library. It offers a way to notify a single function for
+multiple requested events to either be ready or completed in conjunction with a state_t *.
+In other words, we add pairs of the form (io_desc_t, state_t *) and wait on a function for any of
+the operations described by io_desc_t to be completed. We do this in a single place to wait for all
+events at once.
+
+On Linux, the epoll_* functions are used, and on Windows, the IO Completion Port mechanism is used.
+
+Of course, all these operations are done internally.
+
+6. Allocator
+============
+
+Another internal component of the pool is the allocator. Because many of the internals of coroutines
+have the same small memory footprint and are allocated and deallocated many times, an allocator was
+implemented that keeps the allocated objects together and also ignores some costs associated with
+new or malloc. This allocator can be configured (CORO_ALLOCATOR_SCALE) to hold more or less memory,
+as needed, or ignored completely (CORO_DISABLE_ALLOCATOR), with malloc being used as an alternative.
+If the memory given to the allocator is used up, malloc is used for further allocations.
+
+7. Timers
+=========
+
+Another internal component of the pool is the timer_pool_t. This component is responsible
+for implementing and managing OS-dependent timers that can run with the IO pool. There are a limited
+number of these timers allocated, which limits the maximum number of concurrent sleeps. This number
+can be increased by changing CORO_MAX_TIMER_POOL_SIZE.
+
+8. Modifs
+=========
+
+Modifications are callbacks attached to coroutines that are called in specific cases:
+on suspend/resume, on call/sched (after a valid state_t is created), on IO wait (on both wait and
+finish wait), and on semaphore wait and unwait.
+
+These callbacks can be used to monitor the coroutines, to acquire resources before re-entering a
+coroutine, etc. (Internally, these are used for some functions; be aware while replacing existing
+ones not to break the library's modifications).
+
+Modifications can be inherited by coroutines in two cases: on call and on sched. More precisely,
+each modification can be inherited by a coroutine scheduled from this one or called from this one.
+You can modify the modifications for each coroutine using its task to get/add/remove modifications
+or awaiters from inside the current coroutine.
+
+9. Debugging
+============
+
+Some times unwanted behaviour can occour, if that happens, it may be debugged using the internal
+helpers, those are:
+    dbg_enum            - get the description of a library enum code
+    dbg_name            - when CORO_ENABLE_DEBUG_NAMES is true, it can be used to get the name
+                          associated with a task, a corutine handle or a corutine promise address,
+                          those can be registered
+                          with CORO_REGNAME or dbg_register_name
+    dbg_create_tracer   - creates a modif_pack_t that can be attached to a coroutine to debug all
+                          the coroutine that it calls or schedules
+    log_str             - the function that is used to print a logging string (user can change it)
+    dbg                 - the function used to log a formated string
+    dbg_format          - the function used to format a string
+
+All those are enabled by CORO_ENABLE_LOGGING true, else those are disabled.
+
+10. Config Macros
+=================
+
+Bellow are the macros used for inside the library. Their default value (in case those are not
+declared) are in brackets.
+
+CORO_OS_LINUX                   BOOL(true)
+    If true, the library provided Linux implementation will be used to implement the io pool and
+    timers.
+
+CORO_OS_WINDOWS                 BOOL(false)
+    If true, the library provided Windows implementation will be used to implement the io pool and
+    timers.
+
+CORO_OS_UNKNOWN                 BOOL(false)
+    If true, the user provided implementation will be used to implement the io pool and timers. In
+    this case CORO_OS_UNKNOWN_IO_DESC and CORO_OS_UNKNOWN_IMPLEMENTATION must be defined.
+
+CORO_OS_UNKNOWN_IO_DESC         CODE(undefined)
+    This define must be filled with the code necesary for the struct io_desc_t, use the
+    Linux/Windows implementations as examples.
+
+CORO_OS_UNKNOWN_IMPLEMENTATION  CODE(undefined)
+    This define must be filled with the code necesary for the structs timer_pool_t and
+    io_pool_t, use the Linux/Windows implementations as examples.
+
+CORO_MAX_TIMER_POOL_SIZE        INT(64)
+    The maximum number of concomitent sleeps. (Only for Linux)
+
+CORO_MAX_FAST_FD_CACHE          INT(1024)
+    The maximum file descriptor number to hold in a fast access path, the rest will be held in a
+    map. Only for Linux, on Windows all are held in a map.
+
+CORO_ENABLE_MULTITHREAD_SCHED   BOOL(false)
+    If true, pool_t::thread_sched can be used from another thread to schedule a coroutine in the
+    same way pool_t::sched is used, except, modifs can't be added from that schedule point.
+
+CORO_ENABLE_LOGGING             BOOL(true)
+    If true, coroutines will use log_str to print/log error strings.
+
+CORO_ENABLE_DEBUG_TRACE_ALL     BOOL(false)
+    TODO: If true, all corutines will have debug tracer modifs.
+
+CORO_DISABLE_ALLOCATOR          BOOL(false)
+    If true, the allocator will be disabled and malloc will be used insted.
+
+CORO_ALLOCATOR_SCALE            INT(16)
+    Scales all memory buckets inside the allocator.
+
+CORO_ALLOCATOR_REPLACE          BOOL(false)
+    If true, CORO_ALLOCATOR_REPLACE_IMPL_1 and CORO_ALLOCATOR_REPLACE_IMPL_2 must be defined. As a
+    result, the allocator will be replaced with the provided implementation
+
+CORO_ALLOCATOR_REPLACE_IMPL_1   CODE(undefined)
+    This define must be filled with the code necesary for the struct allocator_memory_t and
+    alloc, dealloc_create functions, use the provided implementations as examples.
+
+CORO_ALLOCATOR_REPLACE_IMPL_2   CODE(undefined)
+    This define must be filled with the code necesary for the allocate/deallocate functions use the
+    provided implementations as examples.
+
+CORO_ENABLE_WARNING_EXCEPTIONS  BOOL(false)
+    If true, some exception will manifest faster in constructors or in other 
+
+11. API
+=======
+
+pool_p
+sem_p
+modif_p
+modif_pack_t
+task<T>
+
+pool_t::sched
+pool_t::run
+pool_t::clear
+pool_t::stop_io
+pool_t::user_ptr
+pool_t::thread_sched
+
+sem_t::wait
+sem_t::signal
+sem_t::try_dec
+sem_t::unlocker_t
+
+struct io_desc_t
+struct state_t
+
+enum error_e
+enum run_e
+
+create_pool();
+get_pool();
+get_state();
+sched
+yield
+create_modif
+create_modif
+task_modifs
+add_modifs
+rm_modifs
+task_modifs()
+add_modifs 
+rm_modifs
+await
+create_timeo
+sleep_us
+sleep_ms
+sleep_s
+sleep
+create_sem
+create_killer(pool_t *pool, error_e e);
+create_future(pool_t *pool, task<T> t)
+wait_all(task<ret_v>... tasks)
+force_stop
+wait_event(io_desc)
+stop_io
+connect
+accept
+read
+write
+read_sz
+write_sz
+
+Linux -
+    stop_fd
+Windows -
+    stop_handle
+    ConnectEx
+    WSARecv
+    WSARecvMsg
+    WSARecvFrom
+    WSASend
+    WSASendTo
+    WSASendMsg
+    WriteFile
+    WaitCommEvent
+    TransactNamedPipe
+    ReadFile
+    ReadDirectoryChangesW
+    LockFileEx
+    DeviceIoControl
+    ConnectNamedPipe
+    AcceptEx
+
+    HEADER
 ====================================================================================================
 ====================================================================================================
 ====================================================================================================
@@ -107,11 +367,6 @@ to a callback that will be called from another thread */
 # define CORO_ENABLE_MULTITHREAD_SCHED false
 #endif
 
-/* Enable the corutines to catch and throw exceptions */
-#ifndef CORO_ENABLE_EXCEPTIONS
-# define CORO_ENABLE_EXCEPTIONS false
-#endif
-
 /* If set to true, will enable the logging callback */
 #ifndef CORO_ENABLE_LOGGING
 # define CORO_ENABLE_LOGGING true
@@ -149,6 +404,8 @@ to a callback that will be called from another thread */
 one will be removed */
 #ifndef CORO_ALLOCATOR_REPLACE
 #define CORO_ALLOCATOR_REPLACE false
+#define CORO_ALLOCATOR_REPLACE_IMPL_1
+#define CORO_ALLOCATOR_REPLACE_IMPL_2
 #endif
 
 /* TODO: make this a thing */
@@ -175,14 +432,6 @@ unitialized but others are still waiting on it, if an awaitable was created but 
 
 #if CORO_KILL_DEFAULT_CONSTRUCT && CORO_KILL_RAISE_EXCEPTION
 # error "Don't choose both"
-#endif
-
-#if CO_KILL_RAISE_EXCEPTION && !CORO_ENABLE_EXCEPTIONS
-# error "Can't have CO_KILL_RAISE_EXCEPTION without CORO_ENABLE_EXCEPTIONS"
-#endif
-
-#if CORO_ENABLE_WARNING_EXCEPTIONS && !CORO_ENABLE_EXCEPTIONS
-# error "Can't have CORO_ENABLE_WARNING_EXCEPTIONS without CORO_ENABLE_EXCEPTIONS"
 #endif
 
 /* If CORO_ENABLE_DEBUG_NAMES you can also define CORO_REGNAME and use it to register a
@@ -972,6 +1221,12 @@ struct FnScope {
 /* Allocator
 ------------------------------------------------------------------------------------------------- */
 
+#if CORO_ALLOCATOR_REPLACE
+
+CORO_ALLOCATOR_REPLACE_IMPL_1
+
+#else /* CORO_ALLOCATOR_REPLACE */
+
 struct allocator_memory_t {
     constexpr static int buckets_cnt =
             sizeof(allocator_bucket_sizes)/sizeof(allocator_bucket_sizes[0]);
@@ -1073,6 +1328,8 @@ template <typename T>
 inline auto dealloc_create(pool_t *pool) {
     return deallocator_t<T>{ .pool = pool };
 }
+
+#endif /* CORO_ALLOCATOR_REPLACE */
 
 /* Modifs Part
 ------------------------------------------------------------------------------------------------- */
@@ -2279,6 +2536,12 @@ private:
 #endif /* CORO_ENABLE_MULTITHREAD_SCHED */
 };
 
+#if CORO_ALLOCATOR_REPLACE
+
+CORO_ALLOCATOR_REPLACE_IMPL_2
+
+#else /* CORO_ALLOCATOR_REPLACE */
+
 /* Allocate/deallocate need the definition of pool_internal_t */
 template <typename T>
 inline T* allocator_t<T>::allocate(size_t n) {
@@ -2307,6 +2570,8 @@ inline void allocator_t<T>::deallocate(T* _p, std::size_t) noexcept {
 
     pool->allocator_memory->free(p);
 }
+
+#endif /* CORO_ALLOCATOR_REPLACE */
 
 inline handle<void> cpp_yield_awaiter(state_t *yielding_task_state) {
     /* bassicaly the same as bellow, except we don't destroy the corutine */
