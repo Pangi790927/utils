@@ -412,7 +412,6 @@ Windows -
     DeviceIoControl
     ConnectNamedPipe
     AcceptEx
->>>>>>> 6788b038d27ea9c1da94d4c00e5b3bccf5f175b5
 
     HEADER
 ====================================================================================================
