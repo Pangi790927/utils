@@ -2,13 +2,13 @@
 #define CORO_H
 
 /* TODO:
-    - tests
-    - fix error propagation (error_e) (is there a problem?)
     - write the tutorial at the start of this file
     - check own comments
     - check the review again
     - add the licence
     - fix noexcept if there are problems (there where)
+    + fix error propagation (error_e) (is there a problem?)
+    + tests
     + consider porting for windows
     + consider implementing exception handling
     + consider implementing co_yield
@@ -17,12 +17,28 @@
     + speed optimizations [added allocator]
 */
 
-/* rewrite of co_utils.h ->
-    - CPP library over the CPP corutines
-    - Built around epoll (ie, epoll is the only blocking function)
-    - Meant to have one pool/thread or enable mutexes on pool (this will allow callbacks and pool
-    sharing)
-    - Meant to have modifs (callbacks on corutine execution)
+/*
+MIT License
+
+Copyright (c) 2025, Andrei Pangratie
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 */
 
 /*  TUTORIAL
@@ -30,10 +46,123 @@
 ====================================================================================================
 ====================================================================================================
 
-TODO: tutorial
-*/
+1. Introduction
 
-/*  HEADER
+In C++20 a new feature was added, namely coroutines. This feature allows the creation of a kind of
+special function named a coroutine that can have it's execution suspended and resumed later on.
+Classical functions also do this to a degree, but they only suspend for the duration of the call of
+functions that run inside them. Classical functions form a stack of data with their frames, where
+coroutines have heap allocated frames without a clear stack-like order. A classical function is
+suspended when it calls another function and resumed when the called function returns. It's frame,
+or state if you will, is created when the function is called and destroyed when the function returns.
+A coroutine has more suspension points, normal functions can be called but there are two more
+suspension points added: co_await and co_yield, in both, the state is left in the coroutine frame
+and the execution is continued outside the coroutine. In the case of this library co_await suspends
+the curent corutine until the 'called' awaiter is complete and the co_yield suspends the current
+corutine, letting the 'calling' coroutine to continue. The main point of coroutines is that while
+a corutine waits to be resumed another one can be executed, obtaining an asynchron execution
+similar to threads but on a single thread (Those can also be usually run on multiple threads,
+but that is not supported by this library), this almost eliminates the need to use synchronization
+mechanisms.
+
+Let's take an example of a coroutine calling another coroutine:
+
+14: co::task<int32_t> get_messages() {
+15:     int value;
+16: 
+17:     while (true) {
+18:         value = co_await get_message();
+19:         if (value == 0)
+20:             break;
+21:         co_yield value;
+22:     }
+22:     co_return 0;
+23: }
+
+At line 11 the corutine is declared, as you can see, corutines need to declare their return value
+of the type of their handler object, namely co::task<Type>. That is because the coroutine holds the
+return value inside the state of the coroutine and the user only gets the handler to the coroutine.
+
+At line 15 another awaiter, in this case another coroutine, is awaited with the use of co_await,
+this will suspend the get_messages coroutine at that point, letting other coroutines on the system
+to run if there are any that need to do work, or block until a coroutine gets work to do. Finnaly,
+this coroutine continues to line 16 when a message becomes available. Note that this continuation
+will happen if a. there are no things to do or b. if another coroutine awaits something and this
+one is the next that waits for execution.
+
+Assuming value is not 0 the corutine yields at line 18, returning the value, but keeping it's state.
+This state contains the variable value and some other internals of coroutines.
+
+When the message 0 is received, the coroutine returns 0, free-ing it's internal state. You shouldn't
+call the coroutine anymore after this point.
+
+24: co::task<int32_t> co_main() {
+25:     co::task<int32_t> coro = get_messages();
+26:     for (int32_t value = co_await coro; value; value = co_await coro) {
+27:         printf("main: %d\n", value);
+28:         if (!value)
+29:             break;
+30:     }
+31:     co_return 0;
+32: }
+
+The coroutine that calls the above coroutine is co_main. You can observe the creation of the corutine
+at line 25, what looks like a call of the corutine in fact allocates the corutine state and returns
+the handle that can be further awaited, as you can see in the for at line 26.
+
+The corutine will be called until value is 0, case in which we know that the corutine has ended (from
+it's code) and we break from the for.
+
+We observe that at line 31 we co_return 0, that is because the co_return is mandatory at the end of
+coroutines. (mandated by the language)
+
+ 0: int cnt = 3;
+ 1: co::task<int32_t> get_message() {
+ 2:     co_await co::sleep_s(1);
+ 3:     co_return cnt--;
+ 4: }
+ 5: 
+ 6: co::task<int32_t> co_timer() {
+ 7:     int x = 50;
+ 8:     while (x > 0) {
+ 9:         printf("timer: %d\n", x--);
+10:         co_await co::sleep_ms(100);
+11:     }
+12:     co_return 0;
+13: }
+
+Now we can look at an example for get_message at line 1, of course in a real case we would await for
+a message from a socket, for some device, etc. but here we simply wait for a timer of 1 second to finish.
+
+As for an example of something that can happen between awaits we can look at co_timer, at line 6. This is
+another coroutine, that prints x and waits 100 ms, 50 times. If you copy and run the message yourself, you
+will see that the prints from the co_timer are more frequent and in-between the ones from co_main.
+
+33: int main() {
+34:     co::pool_p pool = co::create_pool();
+35:     pool->sched(co_main());
+36:     pool->sched(co_timer());
+37:     pool->run();
+38: }
+
+Finally, we can look at main, as you can see, we create the pool at line 34, schedule the main coroutine and
+the timer one and we wait on the pool. The run won't exit unless there are no more coroutines to run or, as
+we will see later on, if a force_awake is called, or if an error occurs.
+
+
+
+
+
+
+
+
+
+
+
+
+TODO: tutorial
+
+    HEADER
 ====================================================================================================
 ====================================================================================================
 ====================================================================================================
@@ -219,7 +348,6 @@ struct modif_t;
 /* This is a private table that holds the modifications inside the corutine state */
 struct modif_table_t;
 
-/* TODO: think this better this time, including better lifetime */
 /* This is a semaphore working on a pool. It can be awaited to decrement it's count and .rel()
 increments it's count from wherever. More bellow. */
 struct sem_t;
@@ -227,7 +355,7 @@ struct sem_t;
 /* Internal state of corutines that is independent of the return value of the corutine. */
 struct state_t;
 
-/* used pointers, so _p marks a shared_pointer and a _wp marks a weak pointer. */
+/* used pointers, _p marks a shared_pointer */
 using sem_p = std::shared_ptr<sem_t>;
 using pool_p = std::shared_ptr<pool_t>;
 using modif_p = std::shared_ptr<modif_t>;
@@ -546,7 +674,6 @@ struct state_t {
 
 /* This is mostly internal, but you can also use it to be able to check if someone is still waiting
 on a semaphore (TODO) */
-/* TODO: will no longer use weak_ptr's on the important path, I think it allways breaks performance */
 using sem_waiter_handle_p =
         std::shared_ptr<                        /* if this pointer is not available, the waiter was
                                                    evicted from the waiters list */
@@ -1155,9 +1282,7 @@ inline error_e do_generic_modifs(state_t *state, Args&& ...args) {
         for (auto &modif : modif_table->table[cbk_id]) {
             error_e ret = std::get<cbk_id>(modif->cbk)(state, args...);
             if (ret != ERROR_OK) {
-                /* If any callback returned an error, we stop their execution and return the error.
-                We also set in the task that the respective error happened. */
-                state->err = ret;
+                /* If any callback returned an error, we stop their execution and return the error. */
                 return ret;
             }
         }
@@ -1827,6 +1952,7 @@ struct io_pool_t {
             2. the handle of the io thinghy must be aquired by this pool */
 
         data->state = state;
+        state->err = ERROR_GENERIC;
         if (data->flags & io_data_t::IO_FLAG_TIMER) {
             // nothing more to do
         }
@@ -2528,7 +2654,10 @@ struct io_awaiter_t {
     error_e await_resume() {
         do_unwait_io_modifs(state, io_desc);
         do_entry_modifs(state);
-        return ret_err;
+        if (ret_err != ERROR_OK)
+            return ret_err;
+        else
+            return state->err;
     }
 
 private:
@@ -3872,7 +4001,7 @@ inline task<std::pair<T, error_e>> create_timeo(
         std::function<error_e(void)> timer_sig;
         sem_p sem;
         uint64_t duration;
-        error_e err;
+        error_e tstate_err;
         task<T> t;
         T ret;
     };
@@ -3887,25 +4016,25 @@ inline task<std::pair<T, error_e>> create_timeo(
     tstate->timer_elapsed_sig = timer_elapsed_sig;
     tstate->timer_sig = timer_sig;
     tstate->duration = timeo.count();
-    tstate->err = ERROR_OK;
+    tstate->tstate_err = ERROR_OK;
     tstate->t = t;
 
     auto exec_coro = [](std::shared_ptr<timer_state_t> tstate) -> task_t {
         tstate->ret = co_await tstate->t;
         tstate->timer_sig();
         tstate->sem->signal();
-        tstate->err = ERROR_OK;
+        tstate->tstate_err = ERROR_OK;
         co_return ERROR_OK;
     }(tstate);
 
     auto timer_coro = [](std::shared_ptr<timer_state_t> tstate) -> task_t {
         error_e err;
         if ((err = co_await sleep_us(tstate->duration)) != ERROR_OK) {
-            tstate->err = err;
+            tstate->tstate_err = err;
             tstate->timer_elapsed_sig();
             co_return ERROR_GENERIC;
         }
-        tstate->err = ERROR_TIMEO;
+        tstate->tstate_err = ERROR_TIMEO;
         tstate->timer_elapsed_sig();
         tstate->sem->signal();
         co_return ERROR_OK;
@@ -3919,7 +4048,7 @@ inline task<std::pair<T, error_e>> create_timeo(
 
     return [](std::shared_ptr<timer_state_t> tstate) -> task<std::pair<T, error_e>>{
         co_await tstate->sem->wait();
-        co_return {tstate->ret, tstate->err};
+        co_return {tstate->ret, tstate->tstate_err};
     }(tstate);
 }
 

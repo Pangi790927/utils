@@ -976,7 +976,7 @@ co::task_t test8_io_lock_file() {
             0,
             nullptr)));
 
-    /* TODO: Don't really know how to further check this function */
+    /* TODO: Don't really know how to further check this function, I need a different proc? */
 
     test8_io_lock_file_cnt++;
     co_return 0;
@@ -1040,7 +1040,7 @@ co::task_t test8_io_dir_changes() {
 
 
 co::task_t test8_io_comm_event() {
-    /* TODO: no idea how to test this one */
+    /* TODO: no idea how to test this one (WaitCommEvent), do I need some some usb dev? */
     co_return 0;
 }
 
