@@ -28,8 +28,8 @@ SOFTWARE.
 /* TODO:
     - check own comments
     - check the review again
-    - add the licence
     - fix noexcept if there are problems (there where)
+    + add the licence
     + write the tutorial at the start of this file
     + fix error propagation (error_e) (is there a problem?)
     + tests
