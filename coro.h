@@ -26,9 +26,10 @@ SOFTWARE.
 #define CORO_H
 
 /* TODO:
-    - check own comments
+    - add tests for all the functions that are documented (in progress)
     - check the review again
-    - fix noexcept if there are problems (there where)
+    + fix noexcept if there are problems (there where)
+    + check own comments
     + add the licence
     + write the tutorial at the start of this file
     + fix error propagation (error_e) (is there a problem?)
@@ -153,7 +154,16 @@ coroutine and the timer one, and we wait on the pool. The run function won't exi
 no more coroutines to run or, as we will see later on, if a force_awake is called, or if an
 error occurs.
 
-2. Task
+2. Library Layout
+=================
+
+The library is split in four main sections:
+    1. The documentation
+    2. Macros and structs/types
+    3. Function definitions
+    4. Implementation
+
+3. Task
 =======
 
 As explained, each coroutine has an internal state. This state remembers the return value of the
@@ -179,7 +189,7 @@ behavior.
 
 The task type, as in coro::task<Type>, is the type of the return value of the coroutine.
 
-3. Pool
+4. Pool
 =======
 
 For a task, the pool is its running space. A task runs on a pool along with other tasks. This pool
@@ -202,7 +212,7 @@ deduced automatically from the running coroutine.
 From inside a running coroutine, you can use (co_await coro::get_pool()) to get the pool of the
 running coroutine.
 
-4. Semaphores
+5. Semaphores
 =============
 
 Semaphores are created by using the function/coroutine create_sem and are handled by using
@@ -212,7 +222,7 @@ function blocks until the semaphore is signaled. In this library, semaphores are
 they can be initialized to a value that is less than 0 so that multiple awaiters can wait for a
 task to finish.
 
-5. IO Pool
+6. IO Pool
 ==========
 
 Inside the pool, there is an Input/Output event pool that implements the operating system-specific
@@ -226,7 +236,7 @@ On Linux, the epoll_* functions are used, and on Windows, the IO Completion Port
 
 Of course, all these operations are done internally.
 
-6. Allocator
+7. Allocator
 ============
 
 Another internal component of the pool is the allocator. Because many of the internals of coroutines
@@ -236,7 +246,7 @@ new or malloc. This allocator can be configured (CORO_ALLOCATOR_SCALE) to hold m
 as needed, or ignored completely (CORO_DISABLE_ALLOCATOR), with malloc being used as an alternative.
 If the memory given to the allocator is used up, malloc is used for further allocations.
 
-7. Timers
+8. Timers
 =========
 
 Another internal component of the pool is the timer_pool_t. This component is responsible
@@ -244,7 +254,7 @@ for implementing and managing OS-dependent timers that can run with the IO pool.
 number of these timers allocated, which limits the maximum number of concurrent sleeps. This number
 can be increased by changing CORO_MAX_TIMER_POOL_SIZE.
 
-8. Modifs
+9. Modifs
 =========
 
 Modifications are callbacks attached to coroutines that are called in specific cases:
@@ -260,7 +270,7 @@ each modification can be inherited by a coroutine scheduled from this one or cal
 You can modify the modifications for each coroutine using its task to get/add/remove modifications
 or awaiters from inside the current coroutine.
 
-9. Debugging
+10. Debugging
 ============
 
 Sometimes unwanted behavior can occur. If that happens, it may be debugged using the internal
@@ -277,7 +287,7 @@ helpers, those are:
 
 All those are enabled by CORO_ENABLE_LOGGING true, else those are disabled.
 
-10. Config Macros
+11. Config Macros
 =================
 
 |--------------------------------|------|---------------|------------------------------------------|
@@ -352,14 +362,16 @@ All those are enabled by CORO_ENABLE_LOGGING true, else those are disabled.
 |                                |      |               | functions, use the provided              |
 |                                |      |               | implementations as examples.             |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_ENABLE_WARNING_EXCEPTIONS | BOOL | false         | If true, some exceptions will manifest   |
-|                                |      |               | in constructors or in otherplaces.       |
+| CORO_WIN_ENABLE_SLEEP_AWAKE    | BOOL | false         | Sets the last parameter of the function  |
+|                                |      |               | SetWaitableTimer to true or false,       |
+|                                |      |               | depending on the value. This function is |
+|                                |      |               | used for timers on Windows.              |
 |--------------------------------|------|---------------|------------------------------------------|
 
-11. API
+12. API
 =======
 
-11.1 Object types
+12.1 Object types
 -----------------
 
 pool_p
@@ -380,7 +392,7 @@ modif_pack_t
 task<T>
     The task handle of a coroutine, T is the return type of the respective coroutine.
 
-11.2 Enums and structs
+12.2 Enums and structs
 ----------------------
 
 struct io_desc_t
@@ -425,7 +437,7 @@ enum modif_e
 enum modif_flags_e
     This selects the inheritance mode of the modification; values can be OR-ed together.
 
-11.3 Member functions and vars
+12.3 Member functions and vars
 ------------------------------
 
 pool_t::sched(task<T> task, const modif_pack_t& v) -> void
@@ -469,7 +481,7 @@ sem_t::try_dec() -> bool
     Non-blocking; if the semaphore counter is positive, decrements the counter and returns true,
     else returns false.
 
-11.4 Function and coroutines/awaitables
+12.4 Function and coroutines/awaitables
 ---------------------------------------
 
 Here -> T denotes the returned value T of a function and ~> T the return value T of a coroutine or
@@ -521,8 +533,6 @@ create_killer(pool_t *pool, error_e e) -> std::pair<modif_pack_t, std::function<
     the given pool. The second parameter e will be the error value of the coroutine. The
     returned function can be called to kill the given coroutine and it's entire call stack (does
     not kill sched stack).
-
-    TODO: small example
 
 create_future(pool_t *pool, task<T> t) -> task<T>
     Takes a task and adds the requred modifications to it such that the returned object will be
@@ -708,17 +718,13 @@ AcceptEx(...) ~> BOOL
 #endif
 
 #ifndef CORO_ALLOCATOR_REPLACE
-#define CORO_ALLOCATOR_REPLACE false
-#define CORO_ALLOCATOR_REPLACE_IMPL_1
-#define CORO_ALLOCATOR_REPLACE_IMPL_2
+# define CORO_ALLOCATOR_REPLACE false
+# define CORO_ALLOCATOR_REPLACE_IMPL_1
+# define CORO_ALLOCATOR_REPLACE_IMPL_2
 #endif
 
-/* TODO: make this a thing */
-/* If set, will throw exceptions wherever only a warning would be logged. This would throw if the
-pool no longer exists, if a semaphore is signaled after it was uninitialized, if a semaphore was
-unitialized but others are still waiting on it, if an awaitable was created but never awaited, etc. */
-#ifndef CORO_ENABLE_WARNING_EXCEPTIONS
-# define CORO_ENABLE_WARNING_EXCEPTIONS false
+#ifndef CORO_WIN_ENABLE_SLEEP_AWAKE
+# define CORO_WIN_ENABLE_SLEEP_AWAKE FALSE
 #endif
 
 /* If CORO_ENABLE_DEBUG_NAMES you can also define CORO_REGNAME and use it to register a
@@ -1075,8 +1081,7 @@ struct state_t {
                                             he feels like. This library will not touch this pointer */
 };
 
-/* This is mostly internal, but you can also use it to be able to check if someone is still waiting
-on a semaphore (TODO) */
+/* This is mostly internal */
 using sem_waiter_handle_p =
         std::shared_ptr<                        /* if this pointer is not available, the waiter was
                                                    evicted from the waiters list */
@@ -1411,14 +1416,6 @@ snprintf+std::format, in the version of g++ that I'm using std::format is not av
 template <typename... Args>
 inline dbg_string_t dbg_format(const char *fmt, Args&& ...args);
 
-/* corutine callbacks for diverse points in the code, if in a multithreaded environment, you must
-take all the locks before rewriting those. The pool locks are held when those callbacks are called
-*/
-#if CO_ENABLE_CALLBACKS
-/* add callbacks here */
-inline std::function<void(void)> on_call;
-#endif /* CO_ENABLE_CALLBACKS */
-
 /* calls log_str to save the log string */
 #if CORO_ENABLE_LOGGING
 inline std::function<int(const dbg_string_t&)> log_str =
@@ -1508,10 +1505,6 @@ struct allocator_memory_t {
             if (!stack_head)
                 return NULL;
 
-            // if (stack_head > cnt) {
-                // CORO_DEBUG("alloc bytes[%ld] stack_head[%d] obj_sz[%ld], cnt[%ld]",
-                //         bytes, stack_head, obj_sz, cnt);
-            // }
             void *ret = &objects[free_stack[stack_head]];
             stack_head--;
             return ret;
@@ -1806,8 +1799,6 @@ struct task_state_t {
 
     template <typename R>
     void return_value(R&& ret) {
-        /* TODO: maybe if this coro is of our type it should also take into consideration the
-        return value of the state.err? (or maybe better -> think more about that error thing) */
         this->ret.template emplace<T>(std::forward<R>(ret));
     }
 
@@ -1838,7 +1829,7 @@ inline T task<T>::await_resume() {
     ever_called = true;
     do_entry_modifs(h.promise().state.caller_state);
 
-    // propagate coroutine exception in called context
+    /* propagate coroutine exception in called context */
     std::exception_ptr exc_ptr = h.promise().state.exception;
     if (exc_ptr) {
         h.destroy();
@@ -1868,10 +1859,10 @@ inline state_t *task<T>::get_state() {
 
 #if CORO_OS_LINUX
 
-/* This is a component of the pool_internal that is somehow prepared to be replaced in case this lib
-will be ported to other systems. In theory, to change the waiting mechanism you want to change this
-struct and io_desc_t and otherwise this whole library should be ignorant to the system async
-mechanisms until the endpoint functions like accept, connect, write, etc. */
+/* This is a component of the pool_internal that is somehow prepared to be replaced in caseyou need
+it to be.To change the waiting mechanism you want to change this struct and io_desc_t and otherwise
+this whole library should be ignorant to the system async mechanisms until the endpoint functions
+like accept, connect, write, etc. */
 struct io_pool_t {
     struct fd_data_t {
         struct waiter_t {
@@ -1893,7 +1884,6 @@ struct io_pool_t {
         if (epoll_fd < 0) {
             CORO_DEBUG("FAILED epoll_create1 err:%s[%d] -> ret:%d",
                     strerror(errno), errno, epoll_fd);
-            /* TODO: we can except on this warning if enabled */
         }
     }
 
@@ -1943,7 +1933,6 @@ struct io_pool_t {
             if (~data->mask & events) {
                 CORO_DEBUG("WARNING: unexpected events[%s] on fd[%d] with mask[%s]",
                         dbg_epoll_events(events).c_str(), fd, dbg_epoll_events(data->mask).c_str());
-                /* TODO: figure it out (probably throw) */
             }
 
             uint32_t remove_mask = 0;
@@ -2256,7 +2245,6 @@ struct io_pool_t {
         iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 1);
         if (!iocp) {
             CORO_DEBUG("FAILED CreateIoCompletionPort err:%s", get_last_error().c_str());
-            /* TODO: we can except on this warning if enabled */
         }
     }
 
@@ -2276,7 +2264,6 @@ struct io_pool_t {
             return ERROR_OK;
         }
 
-        /* TODO: emulate this */
         if (handles.size() == 0) {
             /* we don't have what to wait on, there are no registered awaiters */
             return ERROR_OK;
@@ -2333,7 +2320,7 @@ struct io_pool_t {
         data->state = state;
         state->err = ERROR_GENERIC;
         if (data->flags & io_data_t::IO_FLAG_TIMER) {
-            // nothing more to do
+            /* nothing more to do */
         }
         else {
             /* This can fail if the handle was already associated, case in which we don't care */
@@ -2352,7 +2339,7 @@ struct io_pool_t {
         return ERROR_OK;
     }
 
-    // the state (singular) that is waiting for io_desc must be awakened
+    /* the state (singular) that is waiting for io_desc must be awakened */
     error_e force_awake(const io_desc_t& io_desc, error_e retcode) {
         auto awake_data = [this, retcode](std::shared_ptr<io_data_t> data) -> error_e {
             if ((data->flags & io_data_t::IO_FLAG_TIMER) &&
@@ -2397,7 +2384,6 @@ struct io_pool_t {
             return awake_data(io_desc.data);
         }
 
-        // TODO: ERROR_OPERATION_ABORTED (TODO: where is this used?)
         return ERROR_OK;
     }
 
@@ -2425,8 +2411,6 @@ struct io_pool_t {
                 destroy_state(data->state);
             }
         }
-        /* TODO: check if we can't have a case in which the overloaded are queued and respond later
-        on (OBS: we had at least one, the timer) */
         handles.clear();
         return ERROR_OK;
     }
@@ -2473,7 +2457,7 @@ private:
 struct timer_pool_t {
     timer_pool_t(pool_t *pool, io_pool_t &io_pool) : pool(pool), io_pool(io_pool) {}
 
-    // initialize the io_desc_t class with a timer awaitable, not yet triggering the timer
+    /* initialize the io_desc_t class with a timer awaitable, not yet triggering the timer */
     error_e get_timer(io_desc_t& new_timer) {
         new_timer = io_desc_t {
             .data = std::shared_ptr<io_data_t>(alloc<io_data_t>(pool),
@@ -2498,7 +2482,7 @@ struct timer_pool_t {
         return ERROR_OK;
     }
 
-    // start the respective timer with the time_us duration
+    /* start the respective timer with the time_us duration */
     error_e set_timer(const io_desc_t& timer, const std::chrono::microseconds& time_us) {
         if (!timer.data) {
             CORO_DEBUG("Invalid timer descriptor!");
@@ -2531,7 +2515,7 @@ struct timer_pool_t {
                 }
             },
             timer.data.get(),
-            FALSE /* TODO: check if we want to be able to resume the system */
+            (CORO_WIN_ENABLE_SLEEP_AWAKE) ? TRUE : FALSE
         );
         if (!res) {
             CORO_DEBUG("Couldn't start the timer");
@@ -2610,7 +2594,6 @@ struct timer_pool_t {
 
 #endif /* CORO_OS_UNKNOWN */
 
-/* If this is not really needed here we move it bellow */
 struct pool_internal_t {
     pool_internal_t(pool_t *_pool)
     :   pool(_pool),
@@ -2693,7 +2676,6 @@ struct pool_internal_t {
     state_t *next_task_state() {
 #if CORO_ENABLE_MULTITHREAD_SCHED
         /* First move the tasks comming from another thread, that is if there are any */
-        /* TODO: check if the if bellow does something for speed (i.e. if the atomic is usefull) */
         if (thread_pushed_new_tasks) {
             std::lock_guard guard(lock);
             for (auto &s : ready_thread_tasks)
@@ -2851,8 +2833,6 @@ inline handle<void> final_awaiter_cleanup(state_t *ending_task_state) {
     auto pool = ending_task_state->pool;
     /* If the task that we are final_awaiting has no caller, then it is the moment to destroy it,
     no one needs it's return value. Else it will be destroyed by the caller. */
-    /* TODO: maybe the future can just simply create a task and set it's coro as the continuation
-    here? Such that the future continues in the caller_state branch? */
     if (ending_task_state->exception) {
         pool->get_internal()->set_exception(ending_task_state->exception);
         ending_task_state->self.destroy();
@@ -3116,13 +3096,6 @@ protected:
     friend inline sem_p create_sem(pool_t *pool, int64_t val);
 
     sem_waiter_handle_p push_waiter(state_t *state) {
-        /* TODO: explanation no longer true, search other solution */
-        /* Don't know another way to fix this mess, so, yeah... The problem is that the awaiter
-        bellow needs a way to register the waiter on this list so it may potentialy awake it (via the
-        modif callbacks). Now the problem is that this semaphore may also want to awake the waiter,
-        wich would invalidate the iterator inside the callback. So we give both the callback and
-        the awaiter bellow a weak pointer to a pointer held at the same place with the corutine,
-        so that if the corutine awakes, the pointer dies and the weak_pointer locks to null. */
         auto p = std::shared_ptr<sem_wait_list_it>(
                 alloc<sem_wait_list_it>(pool), dealloc_create<sem_wait_list_it>(pool),
                 allocator_t<int>{pool});
@@ -3167,7 +3140,6 @@ inline error_e pool_internal_t::clear() {
     return ERROR_OK;
 }
 
-/* TODO: find a way for sem_waiter_handle_p to make sense */
 struct sem_awaiter_t {
     sem_awaiter_t(sem_t *sem) : sem(sem) {}
     sem_awaiter_t(const sem_awaiter_t &oth) = delete;
@@ -3336,12 +3308,12 @@ inline task_t sleep(const std::chrono::microseconds& timeo) {
     }
 
     FnScope scope([pool, &timer] {
-        /* this function can be called on a kill */
+        /* this function can be called on a kill, it needs to be able to be called inside the
+        destructor */
         error_e err_err;
         if ((err_err = pool->get_internal()->free_timer(timer)) != ERROR_OK) {
             CORO_DEBUG("FAILED to free(on error: %s) the timer %s",
                     dbg_enum(err_err).c_str());
-            /* good place for an exception warning */
         }
     });
     io_awaiter_t awaiter(timer);
@@ -3452,8 +3424,6 @@ inline task_t accept(int fd, sockaddr *sa, socklen_t *len) {
     });
     error_e err = co_await awaiter;
     if (err != ERROR_OK) {
-        // CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
-        //         fd, dbg_enum(err).c_str(), strerror(errno), errno);
         co_return err;
     }
     /* OBS: those functions are a bit special, they return the result of the operation, not only
@@ -3468,8 +3438,6 @@ inline task<ssize_t> read(int fd, void *buff, size_t len) {
     });
     error_e err = co_await awaiter;
     if (err != ERROR_OK) {
-        // CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
-        //         fd, dbg_enum(err).c_str(), strerror(errno), errno);
         co_return err;
     }
     /* OBS: those functions are a bit special, they return the result of the operation, not only
@@ -3484,8 +3452,6 @@ inline task<ssize_t> write(int fd, const void *buff, size_t len) {
     });
     error_e err = co_await awaiter;
     if (err != ERROR_OK) {
-        // CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
-        //         fd, dbg_enum(err).c_str(), strerror(errno), errno);
         co_return err;
     }
     /* OBS: those functions are a bit special, they return the result of the operation, not only
@@ -3750,7 +3716,6 @@ inline task<BOOL> DeviceIoControl(HANDLE hDevice, DWORD dwIoControlCode, LPVOID 
     co_return true;
 }
 
-/* TODO: add the file offset here */
 inline task<BOOL> LockFileEx(HANDLE hFile, DWORD dwFlags, DWORD dwReserved,
         DWORD nNumberOfBytesToLockLow, DWORD nNumberOfBytesToLockHigh, uint64_t *offset)
 {
@@ -4381,8 +4346,6 @@ template <typename T>
 inline task<std::pair<T, error_e>> create_timeo(
         task<T> t, pool_t *pool, const std::chrono::microseconds& timeo)
 {
-    /* TODO: create the 'modif packet' that will kill the corutines in the call-path when the
-    timer expires */
     struct timer_state_t {
         std::function<error_e(void)> timer_elapsed_sig;
         std::function<error_e(void)> timer_sig;
@@ -4439,8 +4402,6 @@ inline task<std::pair<T, error_e>> create_timeo(
     }(tstate);
 }
 
-/* TODO: link the kill-fn to the pack on a 1 to 1 basis (you can't use one pack for multiple
-call-stacks) */
 /* CAUTION: this doesn't kill sched paths (for example 'futures' or 'wait_all') */
 /* this is inherited by-call and it must kill all coros in the call path and also stop all waiters
 (io and sem) */
@@ -4468,7 +4429,7 @@ inline std::pair<modif_pack_t, std::function<error_e(void)>> create_killer(pool_
         auto pool = kstate->call_stack.top()->pool;
 
         /* if we are waiting for something in the top level we will first try to see if the last
-        pushed state is ready for resuming, case in witch we remove it from the ready queue. Else
+        pushed state is ready for resuming, case in which we remove it from the ready queue. Else
         we remove it from the io or semaphore waiting queue, whichever was holding the awaiter. */
         if ((kstate->sem || kstate->io_desc.is_valid()) &&
                 pool->get_internal()->remove_ready(kstate->call_stack.top()))
@@ -4526,7 +4487,6 @@ inline std::pair<modif_pack_t, std::function<error_e(void)>> create_killer(pool_
     ));
     pack.push_back(create_modif<CO_MODIF_WAIT_SEM_CBK>(pool, flags,
         [kstate](state_t *s, sem_t *sem, sem_waiter_handle_p it) -> error_e {
-            /* TODO: save semaphore here */
             kstate->sem = sem;
             kstate->it = it;
             return ERROR_OK;
@@ -4681,7 +4641,6 @@ inline uint64_t dbg_get_time() {
 
 #if CORO_ENABLE_DEBUG_NAMES
 
-/* TODO: mutex it if needed by multi-threads */
 using dbg_val_type = std::map<void *, std::pair<dbg_string_t, int>>::value_type;
 inline std::map<void *,std::pair<dbg_string_t, int>, std::less<void *>, allocator_t<dbg_val_type>>
         dbg_names{allocator_t<dbg_val_type> {nullptr}};
