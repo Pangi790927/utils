@@ -22,25 +22,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#ifndef CORO_H
-#define CORO_H
-
-/* TODO:
-    - add tests for all the functions that are documented (in progress)
-    - check the review again
-    + fix noexcept if there are problems (there where)
-    + check own comments
-    + add the licence
-    + write the tutorial at the start of this file
-    + fix error propagation (error_e) (is there a problem?)
-    + tests
-    + consider porting for windows
-    + consider implementing exception handling
-    + consider implementing co_yield
-    + write the fd stuff
-    + add debug modifs, things are already breaking and I don't know why
-    + speed optimizations [added allocator]
-*/
+#ifndef COLIB_H
+#define COLIB_H
 
 /*  DOCUMENTATION
 ====================================================================================================
@@ -69,7 +52,7 @@ mechanisms.
 
 Let's consider an example of a coroutine calling another coroutine:
 
-14: co::task<int32_t> get_messages() {
+14: colib::task<int32_t> get_messages() {
 15:     int value;
 16: 
 17:     while (true) {
@@ -82,7 +65,7 @@ Let's consider an example of a coroutine calling another coroutine:
 23: }
 
 At line 11, the coroutine is declared. As you can see, coroutines need to declare their return value
-of the type of their handler object, namely co::task<Type>. That is because the coroutine holds the
+of the type of their handler object, namely colib::task<Type>. That is because the coroutine holds the
 return value inside the state of the coroutine, and the user only gets the handler to the coroutine.
 
 At line 15, another awaiter, in this case another coroutine, is awaited with the use of co_await.
@@ -98,8 +81,8 @@ This state contains the variable value and some other internals of coroutines.
 When the message 0 is received, the coroutine returns 0, freeing its internal state. You shouldn't
 call the coroutine anymore after this point.
 
-24: co::task<int32_t> co_main() {
-25:     co::task<int32_t> coro = get_messages();
+24: colib::task<int32_t> co_main() {
+25:     colib::task<int32_t> coro = get_messages();
 26:     for (int32_t value = co_await coro; value; value = co_await coro) {
 27:         printf("main: %d\n", value);
 28:         if (!value)
@@ -119,16 +102,16 @@ We observe that at line 31 we co_return 0; that is because the co_return is mand
 coroutines (as mandated by the language).
 
  0: int cnt = 3;
- 1: co::task<int32_t> get_message() {
- 2:     co_await co::sleep_s(1);
+ 1: colib::task<int32_t> get_message() {
+ 2:     co_await colib::sleep_s(1);
  3:     co_return cnt--;
  4: }
  5: 
- 6: co::task<int32_t> co_timer() {
+ 6: colib::task<int32_t> co_timer() {
  7:     int x = 50;
  8:     while (x > 0) {
  9:         printf("timer: %d\n", x--);
-10:         co_await co::sleep_ms(100);
+10:         co_await colib::sleep_ms(100);
 11:     }
 12:     co_return 0;
 13: }
@@ -143,7 +126,7 @@ yourself, you will see that the prints from the co_timer are more frequent and i
 from co_main.
 
 33: int main() {
-34:     co::pool_p pool = co::create_pool();
+34:     colib::pool_p pool = colib::create_pool();
 35:     pool->sched(co_main());
 36:     pool->sched(co_timer());
 37:     pool->run();
@@ -183,25 +166,25 @@ with those details.
 
 A task is also an awaitable. As such, when you await it, it calls or resumes the awaited coroutine,
 depending on the state it was left in. The await operation will resume the caller either on a
-co_yield (the C++ yield; coro::yield does something else) or on a co_return of the callee. In the
+co_yield (the C++ yield; colib::yield does something else) or on a co_return of the callee. In the
 latter case, the awaited coroutine is also destroyed, and further awaits on its task are undefined
 behavior.
 
-The task type, as in coro::task<Type>, is the type of the return value of the coroutine.
+The task type, as in colib::task<Type>, is the type of the return value of the coroutine.
 
 4. Pool
 =======
 
 For a task, the pool is its running space. A task runs on a pool along with other tasks. This pool
 can be run only on one thread, i.e., there are no thread synchronization primitives used, except in
-the case of CORO_ENABLE_MULTITHREAD_SCHED.
+the case of COLIB_ENABLE_MULTITHREAD_SCHED.
 
 The pool remembers the coroutines that are ready and resumes them when the currently running
-coroutine yields to wait for some event (as in coro::yield). The pool also holds the allocator
+coroutine yields to wait for some event (as in colib::yield). The pool also holds the allocator
 used internally and the io_pool and timers, which are explained below and are responsible for
 managing the asynchronous waits in the library.
 
-A task remembers the pool it was scheduled on while either (co_await coro::sched(task)) or
+A task remembers the pool it was scheduled on while either (co_await colib::sched(task)) or
 pool_t::sched(task) are used on the respective task.
 
 There are many instances where there are two variants of a function: one where the function has
@@ -209,7 +192,7 @@ the pool as an argument and another where that argument is omitted, but the func
 coroutine that needs to be awaited. Inside a coroutine, using await on a function, the pool is
 deduced automatically from the running coroutine.
 
-From inside a running coroutine, you can use (co_await coro::get_pool()) to get the pool of the
+From inside a running coroutine, you can use (co_await colib::get_pool()) to get the pool of the
 running coroutine.
 
 5. Semaphores
@@ -242,8 +225,8 @@ Of course, all these operations are done internally.
 Another internal component of the pool is the allocator. Because many of the internals of coroutines
 have the same small memory footprint and are allocated and deallocated many times, an allocator was
 implemented that keeps the allocated objects together and also ignores some costs associated with
-new or malloc. This allocator can be configured (CORO_ALLOCATOR_SCALE) to hold more or less memory,
-as needed, or ignored completely (CORO_DISABLE_ALLOCATOR), with malloc being used as an alternative.
+new or malloc. This allocator can be configured (COLIB_ALLOCATOR_SCALE) to hold more or less memory,
+as needed, or ignored completely (COLIB_DISABLE_ALLOCATOR), with malloc being used as an alternative.
 If the memory given to the allocator is used up, malloc is used for further allocations.
 
 8. Timers
@@ -252,7 +235,7 @@ If the memory given to the allocator is used up, malloc is used for further allo
 Another internal component of the pool is the timer_pool_t. This component is responsible
 for implementing and managing OS-dependent timers that can run with the IO pool. There are a limited
 number of these timers allocated, which limits the maximum number of concurrent sleeps. This number
-can be increased by changing CORO_MAX_TIMER_POOL_SIZE.
+can be increased by changing COLIB_MAX_TIMER_POOL_SIZE.
 
 9. Modifs
 =========
@@ -276,16 +259,16 @@ or awaiters from inside the current coroutine.
 Sometimes unwanted behavior can occur. If that happens, it may be debugged using the internal
 helpers, those are:
     dbg_enum            - get the description of a library enum code
-    dbg_name            - when CORO_ENABLE_DEBUG_NAMES is true, it can be used to get the name
+    dbg_name            - when COLIB_ENABLE_DEBUG_NAMES is true, it can be used to get the name
                           associated with a task, a coroutine handle or a coroutine promise address,
-                          those can be registered with CORO_REGNAME or dbg_register_name
+                          those can be registered with COLIB_REGNAME or dbg_register_name
     dbg_create_tracer   - creates a modif_pack_t that can be attached to a coroutine to debug all
                           the coroutine that it calls or schedules
     log_str             - the function that is used to print a logging string (user can change it)
     dbg                 - the function used to log a formatted string
     dbg_format          - the function used to format a string
 
-All those are enabled by CORO_ENABLE_LOGGING true, else those are disabled.
+All those are enabled by COLIB_ENABLE_LOGGING true, else those are disabled.
 
 11. Config Macros
 =================
@@ -293,76 +276,76 @@ All those are enabled by CORO_ENABLE_LOGGING true, else those are disabled.
 |--------------------------------|------|---------------|------------------------------------------|
 | Macro Name                     | Type | Default Value | Description                              |
 |================================|======|===============|==========================================|
-| CORO_OS_LINUX                  | BOOL | true          | If true, the library provided Linux      |
+| COLIB_OS_LINUX                 | BOOL | true          | If true, the library provided Linux      |
 |                                |      |               | implementation will be used to implement |
 |                                |      |               | the IO pool and timers.                  |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_OS_WINDOWS                | BOOL | false         | If true, the library provided Windows    |
+| COLIB_OS_WINDOWS               | BOOL | false         | If true, the library provided Windows    |
 |                                |      |               | implementation will be used to implement |
 |                                |      |               | the IO pool and timers.                  |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_OS_UNKNOWN                | BOOL | false         | If true, the user provided implementation|
+| COLIB_OS_UNKNOWN               | BOOL | false         | If true, the user provided implementation|
 |                                |      |               | will be used to implement the IO pool and|
 |                                |      |               | timers. In this case                     |
-|                                |      |               | CORO_OS_UNKNOWN_IO_DESC and              |
-|                                |      |               | CORO_OS_UNKNOWN_IMPLEMENTATION must be   |
+|                                |      |               | COLIB_OS_UNKNOWN_IO_DESC and             |
+|                                |      |               | COLIB_OS_UNKNOWN_IMPLEMENTATION must be  |
 |                                |      |               | defined.                                 |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_OS_UNKNOWN_IO_DESC        | CODE | undefined     | This define must be filled with the code |
+| COLIB_OS_UNKNOWN_IO_DESC       | CODE | undefined     | This define must be filled with the code |
 |                                |      |               | necessary for the struct io_desc_t, use  |
 |                                |      |               | the Linux/Windows implementations as     |
 |                                |      |               | examples.                                |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_OS_UNKNOWN_IMPLEMENTATION | CODE | undefined     | This define must be filled with the code |
+| COLIB_OS_UNKNOWN_IMPLEMENTATION| CODE | undefined     | This define must be filled with the code |
 |                                |      |               | necessary for the structs timer_pool_t   |
 |                                |      |               | and io_pool_t, use the Linux/Windows     |
 |                                |      |               | implementations as examples.             |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_MAX_TIMER_POOL_SIZE       | INT  | 64            | The maximum number of concurrent sleeps. |
+| COLIB_MAX_TIMER_POOL_SIZE      | INT  | 64            | The maximum number of concurrent sleeps. |
 |                                |      |               | (Only for Linux)                         |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_MAX_FAST_FD_CACHE         | INT  | 1024          | The maximum file descriptor number to    |
+| COLIB_MAX_FAST_FD_CACHE        | INT  | 1024          | The maximum file descriptor number to    |
 |                                |      |               | hold in a fast access path, the rest will|
 |                                |      |               | be held in a map. Only for Linux, on     |
 |                                |      |               | Windows all are held in a map.           |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_ENABLE_MULTITHREAD_SCHED  | BOOL | false         | If true, pool_t::thread_sched can be used|
+| COLIB_ENABLE_MULTITHREAD_SCHED | BOOL | false         | If true, pool_t::thread_sched can be used|
 |                                |      |               | from another thread to schedule a        |
 |                                |      |               | coroutine in the same way pool_t::sched  |
 |                                |      |               | is used, except, modifications can't be  |
 |                                |      |               | added from that schedule point.          |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_ENABLE_LOGGING            | BOOL | true          | If true, coroutines will use log_str to  |
+| COLIB_ENABLE_LOGGING           | BOOL | true          | If true, coroutines will use log_str to  |
 |                                |      |               | print/log error strings.                 |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_ENABLE_DEBUG_TRACE_ALL    | BOOL | false         | TODO: If true, all coroutines will have a|
+| COLIB_ENABLE_DEBUG_TRACE_ALL   | BOOL | false         | TODO: If true, all coroutines will have a|
 |                                |      |               | debug tracer modification that would     |
 |                                |      |               | print on the given modif points          |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_DISABLE_ALLOCATOR         | BOOL | false         | If true, the allocator will be disabled  |
+| COLIB_DISABLE_ALLOCATOR        | BOOL | false         | If true, the allocator will be disabled  |
 |                                |      |               | and malloc will be used instead.         |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_ALLOCATOR_SCALE           | INT  | 16            | Scales all memory buckets inside the     |
+| COLIB_ALLOCATOR_SCALE          | INT  | 16            | Scales all memory buckets inside the     |
 |                                |      |               | allocator.                               |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_ALLOCATOR_REPLACE         | BOOL | false         | If true, CORO_ALLOCATOR_REPLACE_IMPL_1   |
-|                                |      |               | and CORO_ALLOCATOR_REPLACE_IMPL_2 must be|
-|                                |      |               | defined. As a result, the allocator will |
-|                                |      |               | be replaced with the provided            |
+| COLIB_ALLOCATOR_REPLACE        | BOOL | false         | If true, COLIB_ALLOCATOR_REPLACE_IMPL_1  |
+|                                |      |               | and COLIB_ALLOCATOR_REPLACE_IMPL_2 must  |
+|                                |      |               | be defined. As a result, the allocator   |
+|                                |      |               | will be replaced with the provided       |
 |                                |      |               | implementation.                          |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_ALLOCATOR_REPLACE_IMPL_1  | CODE | undefined     | This define must be filled with the code |
+| COLIB_ALLOCATOR_REPLACE_IMPL_1 | CODE | undefined     | This define must be filled with the code |
 |                                |      |               | necessary for the struct                 |
 |                                |      |               | allocator_memory_t and alloc,            |
 |                                |      |               | dealloc_create functions, use the        |
 |                                |      |               | provided implementations as examples.    |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_ALLOCATOR_REPLACE_IMPL_2  | CODE | undefined     | This define must be filled with the code |
+| COLIB_ALLOCATOR_REPLACE_IMPL_2 | CODE | undefined     | This define must be filled with the code |
 |                                |      |               | necessary for the allocate/deallocate    |
 |                                |      |               | functions, use the provided              |
 |                                |      |               | implementations as examples.             |
 |--------------------------------|------|---------------|------------------------------------------|
-| CORO_WIN_ENABLE_SLEEP_AWAKE    | BOOL | false         | Sets the last parameter of the function  |
+| COLIB_WIN_ENABLE_SLEEP_AWAKE   | BOOL | false         | Sets the last parameter of the function  |
 |                                |      |               | SetWaitableTimer to true or false,       |
 |                                |      |               | depending on the value. This function is |
 |                                |      |               | used for timers on Windows.              |
@@ -460,7 +443,7 @@ pool_t::stop_io(const io_desc_t&) -> error_e
 
 pool_t::thread_sched
     Similar to pool_t::sched, can't add modifications with it. Must have
-    CORO_ENABLE_MULTITHREAD_SCHED set to true and can be used from other threads.
+    COLIB_ENABLE_MULTITHREAD_SCHED set to true and can be used from other threads.
 
 pool_t::user_ptr
     This is a pointer that you can use however you want.
@@ -539,8 +522,8 @@ create_future(pool_t *pool, task<T> t) -> task<T>
     returned once the return value of the task is available so:
     
     1: auto t = co_task();
-    2: auto fut = coro::create_future(t)
-    3: co_await coro::sched(t);
+    2: auto fut = colib::create_future(t)
+    3: co_await colib::sched(t);
     4: // ...
     5: co_await fut; // returns the value of co_task once it has finished executing 
 
@@ -629,118 +612,118 @@ AcceptEx(...) ~> BOOL
 ====================================================================================================
 */
 
-#include <memory>
-#include <vector>
+#include <array>
 #include <chrono>
+#include <cinttypes>
 #include <coroutine>
-#include <functional>
-#include <variant>
-#include <unordered_set>
-#include <map>
 #include <deque>
+#include <functional>
+#include <list>
+#include <map>
+#include <memory>
 #include <set>
 #include <source_location>
-#include <cinttypes>
-#include <list>
-#include <utility>
-#include <array>
 #include <stack>
 #include <string.h>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#ifndef CORO_OS_LINUX
-# define CORO_OS_LINUX false
+#ifndef COLIB_OS_LINUX
+# define COLIB_OS_LINUX true
 #endif
 
-#ifndef CORO_OS_WINDOWS
-# define CORO_OS_WINDOWS true
+#ifndef COLIB_OS_WINDOWS
+# define COLIB_OS_WINDOWS false
 #endif
 
-#ifndef CORO_OS_UNKNOWN
-# define CORO_OS_UNKNOWN false
-# define CORO_OS_UNKNOWN_IMPLEMENTATION ;
-# define CORO_OS_UNKNOWN_IO_DESC ;
+#ifndef COLIB_OS_UNKNOWN
+# define COLIB_OS_UNKNOWN false
+# define COLIB_OS_UNKNOWN_IMPLEMENTATION ;
+# define COLIB_OS_UNKNOWN_IO_DESC ;
 #endif
 
-#if CORO_OS_LINUX
-# include <unistd.h>
-# include <sys/socket.h>
-# include <sys/epoll.h>
-# include <sys/timerfd.h>
+#if COLIB_OS_LINUX
 # include <fcntl.h>
+# include <unistd.h>
+# include <sys/epoll.h>
+# include <sys/socket.h>
+# include <sys/timerfd.h>
 #endif
 
-#if CORO_OS_WINDOWS
+#if COLIB_OS_WINDOWS
 # include <winsock2.h>
 # include <mswsock.h>
 # include <windows.h>
 #endif
 
-#if CORO_OS_UNKNOWN
+#if COLIB_OS_UNKNOWN
 /* you should include your needed files before including this file */
 #endif
 
-#ifndef CORO_MAX_TIMER_POOL_SIZE
-# define CORO_MAX_TIMER_POOL_SIZE 64
+#ifndef COLIB_MAX_TIMER_POOL_SIZE
+# define COLIB_MAX_TIMER_POOL_SIZE 64
 #endif
 
-#ifndef CORO_MAX_FAST_FD_CACHE
-# define CORO_MAX_FAST_FD_CACHE 1024
+#ifndef COLIB_MAX_FAST_FD_CACHE
+# define COLIB_MAX_FAST_FD_CACHE 1024
 #endif
 
-#ifndef CORO_ENABLE_MULTITHREAD_SCHED
-# define CORO_ENABLE_MULTITHREAD_SCHED false
+#ifndef COLIB_ENABLE_MULTITHREAD_SCHED
+# define COLIB_ENABLE_MULTITHREAD_SCHED false
 #endif
 
-#ifndef CORO_ENABLE_LOGGING
-# define CORO_ENABLE_LOGGING true
+#ifndef COLIB_ENABLE_LOGGING
+# define COLIB_ENABLE_LOGGING true
 #endif
 
-#if CORO_ENABLE_LOGGING
-# define CORO_DEBUG(fmt, ...) dbg(__FILE__, __func__, __LINE__, fmt, ##__VA_ARGS__)
+#if COLIB_ENABLE_LOGGING
+# define COLIB_DEBUG(fmt, ...) dbg(__FILE__, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #else
-# define CORO_DEBUG(fmt, ...) do {} while (0)
+# define COLIB_DEBUG(fmt, ...) do {} while (0)
 #endif
 
-#ifndef CORO_ENABLE_DEBUG_NAMES
-# define CORO_ENABLE_DEBUG_NAMES false
+#ifndef COLIB_ENABLE_DEBUG_NAMES
+# define COLIB_ENABLE_DEBUG_NAMES false
 #endif
 
-#ifndef CORO_ENABLE_DEBUG_TRACE_ALL
-# define CORO_ENABLE_DEBUG_TRACE_ALL false
+#ifndef COLIB_ENABLE_DEBUG_TRACE_ALL
+# define COLIB_ENABLE_DEBUG_TRACE_ALL false
 #endif
 
-#ifndef CORO_DISABLE_ALLOCATOR
-# define CORO_DISABLE_ALLOCATOR false
+#ifndef COLIB_DISABLE_ALLOCATOR
+# define COLIB_DISABLE_ALLOCATOR false
 #endif
 
-#ifndef CORO_ALLOCATOR_SCALE
-# define CORO_ALLOCATOR_SCALE 16
+#ifndef COLIB_ALLOCATOR_SCALE
+# define COLIB_ALLOCATOR_SCALE 16
 #endif
 
-#ifndef CORO_ALLOCATOR_REPLACE
-# define CORO_ALLOCATOR_REPLACE false
-# define CORO_ALLOCATOR_REPLACE_IMPL_1
-# define CORO_ALLOCATOR_REPLACE_IMPL_2
+#ifndef COLIB_ALLOCATOR_REPLACE
+# define COLIB_ALLOCATOR_REPLACE false
+# define COLIB_ALLOCATOR_REPLACE_IMPL_1
+# define COLIB_ALLOCATOR_REPLACE_IMPL_2
 #endif
 
-#ifndef CORO_WIN_ENABLE_SLEEP_AWAKE
-# define CORO_WIN_ENABLE_SLEEP_AWAKE FALSE
+#ifndef COLIB_WIN_ENABLE_SLEEP_AWAKE
+# define COLIB_WIN_ENABLE_SLEEP_AWAKE FALSE
 #endif
 
-/* If CORO_ENABLE_DEBUG_NAMES you can also define CORO_REGNAME and use it to register a
-coroutine's name (a coro::task<T>, std::coroutine_handle or void *) */
-#if CORO_ENABLE_DEBUG_NAMES
-# ifndef CORO_REGNAME
-#  define CORO_REGNAME(thv)   coro::dbg_register_name((thv), "%20s:%5d:%s", __FILE__, __LINE__, #thv)
+/* If COLIB_ENABLE_DEBUG_NAMES you can also define COLIB_REGNAME and use it to register a
+coroutine's name (a colib::task<T>, std::coroutine_handle or void *) */
+#if COLIB_ENABLE_DEBUG_NAMES
+# ifndef COLIB_REGNAME
+#  define COLIB_REGNAME(thv)   colib::dbg_register_name((thv), "%20s:%5d:%s", __FILE__, __LINE__, #thv)
 # endif
 #else
-# define CORO_REGNAME(thv)    thv
-#endif /* CORO_ENABLE_DEBUG_NAMES */
+# define COLIB_REGNAME(thv)    thv
+#endif /* COLIB_ENABLE_DEBUG_NAMES */
 
-namespace coro {
+namespace colib {
 
-constexpr int MAX_TIMER_POOL_SIZE = CORO_MAX_TIMER_POOL_SIZE;
-constexpr int MAX_FAST_FD_CACHE = CORO_MAX_FAST_FD_CACHE;
+constexpr int MAX_TIMER_POOL_SIZE = COLIB_MAX_TIMER_POOL_SIZE;
+constexpr int MAX_FAST_FD_CACHE = COLIB_MAX_FAST_FD_CACHE;
 
 /* coroutine return type, this is the result of creating a coroutine, you can await it and also pass
 it around (practically holds a std::coroutine_handle and can be awaited call the coro and to get the
@@ -890,11 +873,11 @@ The improvement from malloc, as a guess, (I used a profiler to see if it does so
 least my test go smoother now) */
 /* array of {element size, bucket size} */
 constexpr std::pair<int, int> allocator_bucket_sizes[] = {
-    {32,    CORO_ALLOCATOR_SCALE * 1024},
-    {64,    CORO_ALLOCATOR_SCALE * 512},
-    {128,   CORO_ALLOCATOR_SCALE * 256},
-    {512,   CORO_ALLOCATOR_SCALE * 64},
-    {2048,  CORO_ALLOCATOR_SCALE * 16}
+    {32,    COLIB_ALLOCATOR_SCALE * 1024},
+    {64,    COLIB_ALLOCATOR_SCALE * 512},
+    {128,   COLIB_ALLOCATOR_SCALE * 256},
+    {512,   COLIB_ALLOCATOR_SCALE * 64},
+    {2048,  COLIB_ALLOCATOR_SCALE * 16}
 };
 template <typename T>
 struct allocator_t {
@@ -944,14 +927,14 @@ struct pool_t {
 
     ~pool_t() { clear(); }
 
-    /* Same as coro::sched, but used outside of a corutine, based on the pool */
+    /* Same as colib::sched, but used outside of a corutine, based on the pool */
     template <typename T>
     void sched(task<T> task, const modif_pack_t& v = {}); /* ignores return type */
 
-#if CORO_ENABLE_MULTITHREAD_SCHED
+#if COLIB_ENABLE_MULTITHREAD_SCHED
     template <typename T>
     void thread_sched(task<T> task);
-#endif /* CORO_ENABLE_MULTITHREAD_SCHED */
+#endif /* COLIB_ENABLE_MULTITHREAD_SCHED */
 
     /* runs the event loop */
     run_e run();
@@ -1018,7 +1001,7 @@ private:
 };
 
 
-#if CORO_OS_LINUX
+#if COLIB_OS_LINUX
 
 /* This describes the async io op. */
 struct io_desc_t {
@@ -1028,8 +1011,8 @@ struct io_desc_t {
     bool is_valid() { return fd > 0; }
 };
 
-#endif /* CORO_OS_LINUX */
-#if CORO_OS_WINDOWS
+#endif /* COLIB_OS_LINUX */
+#if COLIB_OS_WINDOWS
 
 struct io_data_t {
     enum io_flag_e : int32_t {
@@ -1056,13 +1039,13 @@ struct io_desc_t {
     bool is_valid() { return h != NULL; }
 };
 
-#endif /* CORO_OS_WINDOWS */
-#if CORO_OS_UNKNOWN
+#endif /* COLIB_OS_WINDOWS */
+#if COLIB_OS_UNKNOWN
 
 /* This describes the async io op. */
-CORO_OS_UNKNOWN_IO_DESC
+COLIB_OS_UNKNOWN_IO_DESC
 
-#endif /* CORO_OS_UNKNOWN */
+#endif /* COLIB_OS_UNKNOWN */
 
 /* This is the state struct that each corutine has */
 struct state_t {
@@ -1210,12 +1193,12 @@ inline task_t wait_event(const io_desc_t& io_desc);
 so you must use stop_fd on the file descriptor before you close it. This makes sure the fd is
 awakened and ejected from the system before closing it. For example:
 
-    co_await coro::stop_fd(fd);
+    co_await colib::stop_fd(fd);
     close(fd);
 */
 inline task_t stop_io(const io_desc_t& io_desc);
 
-#if CORO_OS_LINUX
+#if COLIB_OS_LINUX
 
 /* Linux Specific:
 ------------------------------------------------------------------------------------------------  */
@@ -1229,12 +1212,12 @@ inline task<ssize_t> write(int fd, const void *buff, size_t len);
 inline task_t        read_sz(int fd, void *buff, size_t len);
 inline task_t        write_sz(int fd, const void *buff, size_t len);
 
-#endif /* CORO_OS_LINUX */
+#endif /* COLIB_OS_LINUX */
 
 /* Windows Specific:
 ------------------------------------------------------------------------------------------------  */
 
-#if CORO_OS_WINDOWS
+#if COLIB_OS_WINDOWS
 
 /* similar to stop_io, but stops all the waiters on a handle */
 inline task_t stop_handle(HANDLE h);
@@ -1356,16 +1339,16 @@ inline task_t        read_sz(HANDLE h, void *buff, size_t len);
 inline task_t        write_sz(HANDLE h, const void *buff, size_t len, uint64_t *offset = nullptr);
 
 
-#endif /* CORO_OS_WINDOWS */
+#endif /* COLIB_OS_WINDOWS */
 
 /* Unknown Specific:
 ------------------------------------------------------------------------------------------------  */
 
-#if CORO_OS_UNKNOWN
+#if COLIB_OS_UNKNOWN
 
 /* You implement your own */
 
-#endif /* CORO_OS_UNKNOWN */
+#endif /* COLIB_OS_UNKNOWN */
 
 /* Debug Interfaces:
 ------------------------------------------------------------------------------------------------  */
@@ -1407,9 +1390,9 @@ inline dbg_string_t dbg_name(void *v);
 inline dbg_string_t dbg_enum(error_e code);
 inline dbg_string_t dbg_enum(run_e code);
 
-#if CORO_OS_LINUX
+#if COLIB_OS_LINUX
 inline dbg_string_t dbg_epoll_events(uint32_t events);
-#endif /* CORO_OS_LINUX */
+#endif /* COLIB_OS_LINUX */
 
 /* formats a string using the C snprintf, similar in functionality to a combination of
 snprintf+std::format, in the version of g++ that I'm using std::format is not available  */
@@ -1417,10 +1400,10 @@ template <typename... Args>
 inline dbg_string_t dbg_format(const char *fmt, Args&& ...args);
 
 /* calls log_str to save the log string */
-#if CORO_ENABLE_LOGGING
+#if COLIB_ENABLE_LOGGING
 inline std::function<int(const dbg_string_t&)> log_str =
         [](const dbg_string_t& msg){ return printf("%s", msg.c_str()); };
-#endif /* CORO_ENABLE_LOGGING */
+#endif /* COLIB_ENABLE_LOGGING */
 
 /* IMPLEMENTATION 
 =================================================================================================
@@ -1467,11 +1450,11 @@ struct FnScope {
 /* Allocator
 ------------------------------------------------------------------------------------------------- */
 
-#if CORO_ALLOCATOR_REPLACE
+#if COLIB_ALLOCATOR_REPLACE
 
-CORO_ALLOCATOR_REPLACE_IMPL_1
+COLIB_ALLOCATOR_REPLACE_IMPL_1
 
-#else /* CORO_ALLOCATOR_REPLACE */
+#else /* COLIB_ALLOCATOR_REPLACE */
 
 struct allocator_memory_t {
     constexpr static int buckets_cnt =
@@ -1571,7 +1554,7 @@ inline auto dealloc_create(pool_t *pool) {
     return deallocator_t<T>{ .pool = pool };
 }
 
-#endif /* CORO_ALLOCATOR_REPLACE */
+#endif /* COLIB_ALLOCATOR_REPLACE */
 
 /* Modifs Part
 ------------------------------------------------------------------------------------------------- */
@@ -1857,7 +1840,7 @@ inline state_t *task<T>::get_state() {
 /* The Pool & Epoll engine
 ------------------------------------------------------------------------------------------------- */
 
-#if CORO_OS_LINUX
+#if COLIB_OS_LINUX
 
 /* This is a component of the pool_internal that is somehow prepared to be replaced in caseyou need
 it to be.To change the waiting mechanism you want to change this struct and io_desc_t and otherwise
@@ -1882,7 +1865,7 @@ struct io_pool_t {
     {
         epoll_fd = epoll_create1(EPOLL_CLOEXEC);
         if (epoll_fd < 0) {
-            CORO_DEBUG("FAILED epoll_create1 err:%s[%d] -> ret:%d",
+            COLIB_DEBUG("FAILED epoll_create1 err:%s[%d] -> ret:%d",
                     strerror(errno), errno, epoll_fd);
         }
     }
@@ -1915,7 +1898,7 @@ struct io_pool_t {
         }
         while (num_evs < 0 && errno == EINTR);
         if (num_evs < 0) {
-            CORO_DEBUG("FAILED epoll_wait: epoll_fd[%d] err:%s[%d] -> ret:%d",
+            COLIB_DEBUG("FAILED epoll_wait: epoll_fd[%d] err:%s[%d] -> ret:%d",
                     epoll_fd, strerror(errno), errno, num_evs);
             return ERROR_GENERIC;
         }
@@ -1925,13 +1908,13 @@ struct io_pool_t {
             int fd = ret_evs[i].data.fd;
             fd_data_t *data = get_data(fd);
             if (!data) {
-                CORO_DEBUG("FAILED: fd[%d] doesn't have associated data", fd);
+                COLIB_DEBUG("FAILED: fd[%d] doesn't have associated data", fd);
                 return ERROR_GENERIC;
             }
 
             uint32_t events = ret_evs[i].events;
             if (~data->mask & events) {
-                CORO_DEBUG("WARNING: unexpected events[%s] on fd[%d] with mask[%s]",
+                COLIB_DEBUG("WARNING: unexpected events[%s] on fd[%d] with mask[%s]",
                         dbg_epoll_events(events).c_str(), fd, dbg_epoll_events(data->mask).c_str());
             }
 
@@ -1945,7 +1928,7 @@ struct io_pool_t {
             }
             error_e ret;
             if ((ret = remove_waiter(io_desc_t{ .fd = fd, .events = remove_mask })) != ERROR_OK) {
-                CORO_DEBUG("FAILED to remove awaiter fd[%d] events%s",
+                COLIB_DEBUG("FAILED to remove awaiter fd[%d] events%s",
                         fd, dbg_epoll_events(remove_mask).c_str());
                 return ret;
             }
@@ -1956,13 +1939,13 @@ struct io_pool_t {
 
     error_e add_waiter(state_t *state, const io_desc_t& io_desc) {
         if (!io_desc.events) {
-            CORO_DEBUG("FAILED Can't await zero events fd[%d]", io_desc.fd);
+            COLIB_DEBUG("FAILED Can't await zero events fd[%d]", io_desc.fd);
             return ERROR_GENERIC;
         }
         fd_data_t *data = nullptr;
         if (data = get_data(io_desc.fd)) {
             if (data->mask & io_desc.events) {
-                CORO_DEBUG("FAILED Can't wait on same events twice: fd[%d] existing%s attempt%s",
+                COLIB_DEBUG("FAILED Can't wait on same events twice: fd[%d] existing%s attempt%s",
                         io_desc.fd,
                         dbg_epoll_events(data->mask).c_str(),
                         dbg_epoll_events(io_desc.events).c_str());
@@ -1973,7 +1956,7 @@ struct io_pool_t {
             ev.data.fd = io_desc.fd;
             int ret = 0;
             if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, io_desc.fd, &ev)) < 0) {
-                CORO_DEBUG("FAILED epoll_ctl EPOLL_CTL_MOD fd[%d] events%s err:%s[%d] -> ret:%d",
+                COLIB_DEBUG("FAILED epoll_ctl EPOLL_CTL_MOD fd[%d] events%s err:%s[%d] -> ret:%d",
                         io_desc.fd, dbg_epoll_events(ev.events).c_str(), strerror(errno), ret);
                 return ERROR_GENERIC;
             }
@@ -1991,7 +1974,7 @@ struct io_pool_t {
             ev.data.fd = io_desc.fd;
             int ret;
             if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, io_desc.fd, &ev)) < 0) {
-                CORO_DEBUG("FAILED epoll_ctl EPOLL_CTL_ADD fd[%d] events%s err:%s[%d] -> ret:%d",
+                COLIB_DEBUG("FAILED epoll_ctl EPOLL_CTL_ADD fd[%d] events%s err:%s[%d] -> ret:%d",
                         io_desc.fd, dbg_epoll_events(ev.events).c_str(), strerror(errno), ret);
                 return ERROR_GENERIC;
             }
@@ -2027,7 +2010,7 @@ struct io_pool_t {
         }
         error_e ret;
         if ((ret = remove_waiter(io_desc_t{ .fd = io_desc.fd, .events = remove_mask })) != ERROR_OK) {
-            CORO_DEBUG("FAILED remove_waiter in force_awake fd[%d] events%s",
+            COLIB_DEBUG("FAILED remove_waiter in force_awake fd[%d] events%s",
                     io_desc.fd, dbg_epoll_events(remove_mask).c_str());
             return ret;
         }
@@ -2041,7 +2024,7 @@ struct io_pool_t {
                     destroy_state(w.state);
                 }
                 if (remove_waiter(io_desc_t{ .fd = i, .events = 0xffff'ffff }) != ERROR_OK) {
-                    CORO_DEBUG("FAILED to remove awaiter: fd:%d", i);
+                    COLIB_DEBUG("FAILED to remove awaiter: fd:%d", i);
                     return ERROR_GENERIC;
                 }
             }
@@ -2053,7 +2036,7 @@ struct io_pool_t {
                     destroy_state(w.state);
                 }
                 if (remove_waiter(io_desc_t{ .fd = fd, .events = 0xffff'ffff }) != ERROR_OK) {
-                    CORO_DEBUG("FAILED to remove awaiter: fd:%d", fd);
+                    COLIB_DEBUG("FAILED to remove awaiter: fd:%d", fd);
                     return ERROR_GENERIC;
                 }
             }
@@ -2066,7 +2049,7 @@ private:
     error_e remove_waiter(const io_desc_t& io_desc) {
         auto data = get_data(io_desc.fd);
         if (!data) {
-            CORO_DEBUG("FAILED attempted to remove an inexisting waiter fd[%d]", io_desc.fd);
+            COLIB_DEBUG("FAILED attempted to remove an inexisting waiter fd[%d]", io_desc.fd);
             return ERROR_GENERIC;
         }
         if ((data->mask & ~io_desc.events) != 0) {
@@ -2076,7 +2059,7 @@ private:
             data->mask = ev.events;
             int ret;
             if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, io_desc.fd, &ev)) < 0) {
-                CORO_DEBUG("FAILED epoll_ctl EPOLL_CTL_MOD fd[%d] events%s err:%s[%d] -> ret:%d",
+                COLIB_DEBUG("FAILED epoll_ctl EPOLL_CTL_MOD fd[%d] events%s err:%s[%d] -> ret:%d",
                         io_desc.fd, dbg_epoll_events(ev.events).c_str(), strerror(errno), ret);
                 return ERROR_GENERIC;
             }
@@ -2095,7 +2078,7 @@ private:
             set_data(io_desc.fd, nullptr);
             int ret;
             if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, io_desc.fd, NULL)) < 0) {
-                CORO_DEBUG("FAILED epoll_ctl EPOLL_CTL_DEL fd[%d] err:%s[%d] -> ret:%d",
+                COLIB_DEBUG("FAILED epoll_ctl EPOLL_CTL_DEL fd[%d] err:%s[%d] -> ret:%d",
                         io_desc.fd, strerror(errno), ret);
                 return ERROR_GENERIC;
             }
@@ -2159,7 +2142,7 @@ struct timer_pool_t {
 
         int timer_fd = timerfd_create(CLOCK_BOOTTIME, TFD_CLOEXEC);
         if (timer_fd < 0) {
-            CORO_DEBUG("FAILED to allocate new timer err:%s[%d] -> ret: %d",
+            COLIB_DEBUG("FAILED to allocate new timer err:%s[%d] -> ret: %d",
                     strerror(errno), errno, timer_fd);
             return ERROR_GENERIC;
         }
@@ -2180,7 +2163,7 @@ struct timer_pool_t {
         its.it_value.tv_sec = t / 1000'000ULL;
         int ret = 0;
         if ((ret = timerfd_settime(timer.fd, 0, &its, NULL)) < 0) {
-            CORO_DEBUG("FAILED to set expiration date fd[%d] err:%s[%d] -> ret: %d",
+            COLIB_DEBUG("FAILED to set expiration date fd[%d] err:%s[%d] -> ret: %d",
                     timer.fd, strerror(errno), errno, ret);
             return ERROR_GENERIC;
         }
@@ -2209,8 +2192,8 @@ private:
     int stack_head = -1;
 };
 
-#endif /* CORO_OS_LINUX */
-#if CORO_OS_WINDOWS
+#endif /* COLIB_OS_LINUX */
+#if COLIB_OS_WINDOWS
 
 inline std::string get_last_error() {
     char num_buff[64] = {0};
@@ -2244,7 +2227,7 @@ struct io_pool_t {
     {
         iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 1);
         if (!iocp) {
-            CORO_DEBUG("FAILED CreateIoCompletionPort err:%s", get_last_error().c_str());
+            COLIB_DEBUG("FAILED CreateIoCompletionPort err:%s", get_last_error().c_str());
         }
     }
 
@@ -2280,12 +2263,12 @@ struct io_pool_t {
                     /* Ok, this was signaled by the timer calback, or whatever apc */
                     continue;
                 }
-                CORO_DEBUG("Failed GetQueuedCompletionStatus: %s", get_last_error().c_str());
+                COLIB_DEBUG("Failed GetQueuedCompletionStatus: %s", get_last_error().c_str());
                 /* here and in linux impl, good place for warning exception? */
                 return ERROR_GENERIC;
             }
             if (cnt == 0) {
-                CORO_DEBUG("WHY?");
+                COLIB_DEBUG("WHY?");
                 return ERROR_GENERIC;
             }
             break;
@@ -2304,12 +2287,12 @@ struct io_pool_t {
     /* The order should be: add_waiter, do the request, suspend */
     error_e add_waiter(state_t *state, const io_desc_t& io_desc) {
         if (!io_desc.data) {
-            CORO_DEBUG("FAILED Can't await null data");
+            COLIB_DEBUG("FAILED Can't await null data");
             return ERROR_GENERIC;
         }
         std::shared_ptr<io_data_t> data = io_desc.data;
         if (data->flags & io_data_t::IO_FLAG_ADDED) {
-            CORO_DEBUG("FAILED Can't add awaiter twice");
+            COLIB_DEBUG("FAILED Can't add awaiter twice");
             return ERROR_GENERIC;
         }
 
@@ -2329,7 +2312,7 @@ struct io_pool_t {
 
         error_e err = data->io_request(data->ptr);
         if (err != ERROR_OK) {
-            CORO_DEBUG("Failed the io_request: %s", get_last_error().c_str());
+            COLIB_DEBUG("Failed the io_request: %s", get_last_error().c_str());
             return err;
         }
         data->flags = io_data_t::io_flag_e(data->flags | io_data_t::IO_FLAG_ADDED);
@@ -2346,18 +2329,18 @@ struct io_pool_t {
                     (data->flags & io_data_t::IO_FLAG_TIMER_RUN))
             {
                 if (!CancelWaitableTimer(data->h)) {
-                    CORO_DEBUG("Failed to stop timer: %s", get_last_error().c_str());
+                    COLIB_DEBUG("Failed to stop timer: %s", get_last_error().c_str());
                     return ERROR_GENERIC;
                 }
                 if (!CloseHandle(data->h)) {
-                    CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
+                    COLIB_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
                     return ERROR_GENERIC;
                 }
                 data->h = NULL;
                 data->flags = io_data_t::io_flag_e(data->flags & ~io_data_t::IO_FLAG_TIMER_RUN);
             }
             else if (!CancelIoEx(data->h, &data->overlapped)) {
-                CORO_DEBUG("Failed to cancel io: %s", get_last_error().c_str());
+                COLIB_DEBUG("Failed to cancel io: %s", get_last_error().c_str());
                 return ERROR_GENERIC;
             }
 
@@ -2394,18 +2377,18 @@ struct io_pool_t {
                         (data->flags & io_data_t::IO_FLAG_TIMER_RUN))
                 {
                     if (!CancelWaitableTimer(data->h)) {
-                        CORO_DEBUG("Failed to stop timer: %s", get_last_error().c_str());
+                        COLIB_DEBUG("Failed to stop timer: %s", get_last_error().c_str());
                         return ERROR_GENERIC;
                     }
                     if (!CloseHandle(data->h)) {
-                        CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
+                        COLIB_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
                         return ERROR_GENERIC;
                     }
                     data->flags = io_data_t::io_flag_e(data->flags & ~io_data_t::IO_FLAG_TIMER_RUN);
                     data->h = NULL;
                 }
                 else if (!CancelIoEx(data->h, &data->overlapped)) {
-                    CORO_DEBUG("Failed to cancel io: %s", get_last_error().c_str());
+                    COLIB_DEBUG("Failed to cancel io: %s", get_last_error().c_str());
                     return ERROR_GENERIC;
                 }
                 destroy_state(data->state);
@@ -2466,7 +2449,7 @@ struct timer_pool_t {
         };
 
         if (!new_timer.h) {
-            CORO_DEBUG("Failed to create timer: %s", get_last_error().c_str());
+            COLIB_DEBUG("Failed to create timer: %s", get_last_error().c_str());
             new_timer.h = nullptr;
             return ERROR_GENERIC;
         }
@@ -2485,7 +2468,7 @@ struct timer_pool_t {
     /* start the respective timer with the time_us duration */
     error_e set_timer(const io_desc_t& timer, const std::chrono::microseconds& time_us) {
         if (!timer.data) {
-            CORO_DEBUG("Invalid timer descriptor!");
+            COLIB_DEBUG("Invalid timer descriptor!");
             return ERROR_GENERIC;
         }
 
@@ -2506,19 +2489,19 @@ struct timer_pool_t {
                 io_pool_t *io_pool = (io_pool_t *)data->ptr;
 
                 if (!data || !io_pool) {
-                    CORO_DEBUG("Sanity check, this shouldn't happen");
+                    COLIB_DEBUG("Sanity check, this shouldn't happen");
                     return ;
                 }
                 if (!PostQueuedCompletionStatus(io_pool->get_iocp(), 0, 0, &data->overlapped)) {
-                    CORO_DEBUG("Failed post: %s", get_last_error().c_str());
+                    COLIB_DEBUG("Failed post: %s", get_last_error().c_str());
                     return ;
                 }
             },
             timer.data.get(),
-            (CORO_WIN_ENABLE_SLEEP_AWAKE) ? TRUE : FALSE
+            (COLIB_WIN_ENABLE_SLEEP_AWAKE) ? TRUE : FALSE
         );
         if (!res) {
-            CORO_DEBUG("Couldn't start the timer");
+            COLIB_DEBUG("Couldn't start the timer");
             return ERROR_OK;
         }
         timer.data->flags = io_data_t::io_flag_e{timer.data->flags | io_data_t::IO_FLAG_TIMER_RUN};
@@ -2529,11 +2512,11 @@ struct timer_pool_t {
     error_e free_timer(io_desc_t& timer) {
         if (timer.data->flags & io_data_t::IO_FLAG_TIMER_RUN) {
             if (!CancelWaitableTimer(timer.data->h)) {
-                CORO_DEBUG("Failed to stop timer: %s", get_last_error().c_str());
+                COLIB_DEBUG("Failed to stop timer: %s", get_last_error().c_str());
                 return ERROR_GENERIC;
             }
             if (!CloseHandle(timer.data->h)) {
-                CORO_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
+                COLIB_DEBUG("Failed CloseHandle: %s", get_last_error().c_str());
                 return ERROR_GENERIC;
             }
         }
@@ -2548,11 +2531,11 @@ private:
     io_pool_t &io_pool;
 };
 
-#endif /* CORO_OS_WINDOWS */
+#endif /* COLIB_OS_WINDOWS */
 
-#if CORO_OS_UNKNOWN
+#if COLIB_OS_UNKNOWN
 
-CORO_OS_UNKNOWN_IMPLEMENTATION
+COLIB_OS_UNKNOWN_IMPLEMENTATION
 
 /*
 // Those two structs need implemented:
@@ -2592,7 +2575,7 @@ struct timer_pool_t {
 
 */
 
-#endif /* CORO_OS_UNKNOWN */
+#endif /* COLIB_OS_UNKNOWN */
 
 struct pool_internal_t {
     pool_internal_t(pool_t *_pool)
@@ -2617,18 +2600,18 @@ struct pool_internal_t {
         ready_tasks.push_back(&task.h.promise().state);
     }
 
-#if CORO_ENABLE_MULTITHREAD_SCHED
+#if COLIB_ENABLE_MULTITHREAD_SCHED
     template <typename T>
     void thread_sched(task<T> task) {
         std::lock_guard guard(lock);
         thread_pushed_new_tasks = true;
         ready_thread_tasks.push_back(&task.h.promise().state);
     }
-#endif /* CORO_ENABLE_MULTITHREAD_SCHED */
+#endif /* COLIB_ENABLE_MULTITHREAD_SCHED */
 
     run_e run() {
         if (!io_pool.is_ok()) {
-            CORO_DEBUG("the io pool is not working, check previous logs");
+            COLIB_DEBUG("the io pool is not working, check previous logs");
             return RUN_ERRORED;
         }
 
@@ -2674,7 +2657,7 @@ struct pool_internal_t {
     }
 
     state_t *next_task_state() {
-#if CORO_ENABLE_MULTITHREAD_SCHED
+#if COLIB_ENABLE_MULTITHREAD_SCHED
         /* First move the tasks comming from another thread, that is if there are any */
         if (thread_pushed_new_tasks) {
             std::lock_guard guard(lock);
@@ -2683,10 +2666,10 @@ struct pool_internal_t {
             ready_thread_tasks.clear();
             thread_pushed_new_tasks = false;
         }
-#endif /* CORO_ENABLE_MULTITHREAD_SCHED */
+#endif /* COLIB_ENABLE_MULTITHREAD_SCHED */
 
         if (io_pool.handle_ready() != ERROR_OK) {
-            CORO_DEBUG("Failed io pool");
+            COLIB_DEBUG("Failed io pool");
             ret_val = RUN_ERRORED;
             return nullptr;
         }
@@ -2759,24 +2742,24 @@ private:
     /* bookkeeping for end of life destruction */
     std::set<sem_t *, std::less<sem_t *>, allocator_t<sem_t *>> sem_pool;
 
-#if CORO_ENABLE_MULTITHREAD_SCHED
+#if COLIB_ENABLE_MULTITHREAD_SCHED
     std::mutex lock;
     std::atomic<bool> thread_pushed_new_tasks = false;
     std::vector<state_t *> ready_thread_tasks;
-#endif /* CORO_ENABLE_MULTITHREAD_SCHED */
+#endif /* COLIB_ENABLE_MULTITHREAD_SCHED */
 };
 
-#if CORO_ALLOCATOR_REPLACE
+#if COLIB_ALLOCATOR_REPLACE
 
-CORO_ALLOCATOR_REPLACE_IMPL_2
+COLIB_ALLOCATOR_REPLACE_IMPL_2
 
-#else /* CORO_ALLOCATOR_REPLACE */
+#else /* COLIB_ALLOCATOR_REPLACE */
 
 /* Allocate/deallocate need the definition of pool_internal_t */
 template <typename T>
 inline T* allocator_t<T>::allocate(size_t n) {
     T *ret = nullptr;
-    if (!CORO_DISABLE_ALLOCATOR && pool && !std::is_same_v<char, T>)
+    if (!COLIB_DISABLE_ALLOCATOR && pool && !std::is_same_v<char, T>)
         ret = static_cast<T*>(pool->allocator_memory->alloc(n * sizeof(T)));
     if (!ret)
         ret = static_cast<T*>(std::malloc(n * sizeof(T)));
@@ -2801,7 +2784,7 @@ inline void allocator_t<T>::deallocate(T* _p, std::size_t) noexcept {
     pool->allocator_memory->free(p);
 }
 
-#endif /* CORO_ALLOCATOR_REPLACE */
+#endif /* COLIB_ALLOCATOR_REPLACE */
 
 inline handle<void> cpp_yield_awaiter(state_t *yielding_task_state) {
     /* bassicaly the same as bellow, except we don't destroy the corutine */
@@ -2852,12 +2835,12 @@ inline void pool_t::sched(task<T> task, const modif_pack_t& v) {
     internal->sched(task, create_modif_table(this, v));
 }
 
-#if CORO_ENABLE_MULTITHREAD_SCHED
+#if COLIB_ENABLE_MULTITHREAD_SCHED
 template <typename T>
 inline void pool_t::thread_sched(task<T> task) {
     internal->sched(task);
 }
-#endif /* CORO_ENABLE_MULTITHREAD_SCHED */
+#endif /* COLIB_ENABLE_MULTITHREAD_SCHED */
 
 inline run_e pool_t::run() {
     return internal->run();
@@ -3010,7 +2993,7 @@ struct io_awaiter_t {
         }
         ret_err = pool->get_internal()->wait_io(h, io_desc);
         if (ret_err != ERROR_OK) {
-            CORO_DEBUG("Failed to register wait: %s on: %s",
+            COLIB_DEBUG("Failed to register wait: %s on: %s",
                     dbg_enum(ret_err).c_str(), dbg_name(h).c_str());
             do_entry_modifs(state);
             return h;
@@ -3124,12 +3107,12 @@ private:
 
 inline error_e pool_internal_t::clear() {
     if (io_pool.clear() != ERROR_OK) {
-        CORO_DEBUG("FAILED to clear events waiting for io");
+        COLIB_DEBUG("FAILED to clear events waiting for io");
         return ERROR_GENERIC;
     }
     for (auto &s : sem_pool) {
         if (s->get_internal()->clear() != ERROR_OK) {
-            CORO_DEBUG("FAILED to clear events waiting on one of the semaphores");
+            COLIB_DEBUG("FAILED to clear events waiting on one of the semaphores");
             return ERROR_GENERIC; 
         }
     }
@@ -3294,14 +3277,14 @@ inline task_t sleep(const std::chrono::microseconds& timeo) {
     io_desc_t timer;
     error_e err;
     if ((err = pool->get_internal()->get_timer(timer)) != ERROR_OK) {
-        CORO_DEBUG("FAILED to get a timer %s", dbg_enum(err).c_str());
+        COLIB_DEBUG("FAILED to get a timer %s", dbg_enum(err).c_str());
         co_return err;
     }
     if ((err = pool->get_internal()->set_timer(timer, timeo)) != ERROR_OK) {
-        CORO_DEBUG("FAILED to set a timer %s", dbg_enum(err).c_str());
+        COLIB_DEBUG("FAILED to set a timer %s", dbg_enum(err).c_str());
         error_e err_err;
         if ((err_err = pool->get_internal()->free_timer(timer)) != ERROR_OK) {
-            CORO_DEBUG("FAILED to free(on error: %s) the timer %s",
+            COLIB_DEBUG("FAILED to free(on error: %s) the timer %s",
                     dbg_enum(err).c_str(), dbg_enum(err_err).c_str());
         }
         co_return err;
@@ -3312,13 +3295,13 @@ inline task_t sleep(const std::chrono::microseconds& timeo) {
         destructor */
         error_e err_err;
         if ((err_err = pool->get_internal()->free_timer(timer)) != ERROR_OK) {
-            CORO_DEBUG("FAILED to free(on error: %s) the timer %s",
+            COLIB_DEBUG("FAILED to free(on error: %s) the timer %s",
                     dbg_enum(err_err).c_str());
         }
     });
     io_awaiter_t awaiter(timer);
     if ((err = co_await awaiter) != ERROR_OK) {
-        CORO_DEBUG("FAILED waiting on timer: %s", dbg_enum(err).c_str());
+        COLIB_DEBUG("FAILED waiting on timer: %s", dbg_enum(err).c_str());
         scope.precall();
         co_return err;
     }
@@ -3344,7 +3327,7 @@ inline task_t wait_event(const io_desc_t& io_desc) {
     co_return (co_await awaiter);
 }
 
-#if CORO_OS_LINUX
+#if COLIB_OS_LINUX
 
 inline task_t stop_fd(int fd) {
     /* gets the fd out of the poll, awakening all it's waiters with error_e ERROR_WAKEUP */
@@ -3355,13 +3338,13 @@ inline task_t connect(int fd, sockaddr *sa, socklen_t len) {
     /* connect is special, first we take it and make it non-blocking for the initial connection */
     int flags;
     if ((flags = fcntl(fd, F_GETFL, 0)) < 0) {
-        CORO_DEBUG("FAILED to get old flags for fd[%d] %s[%d]",
+        COLIB_DEBUG("FAILED to get old flags for fd[%d] %s[%d]",
                 fd, strerror(errno), errno);
         co_return ERROR_GENERIC;
     }
     bool need_nonblock = (flags & O_NONBLOCK) == 0;
     if (need_nonblock && (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)) {
-        CORO_DEBUG("FAILED to toggle on the O_NONBLOCK flag on fd[%d] %s[%d]",
+        COLIB_DEBUG("FAILED to toggle on the O_NONBLOCK flag on fd[%d] %s[%d]",
                 fd, strerror(errno), errno);
         co_return ERROR_GENERIC;
     }
@@ -3369,12 +3352,12 @@ inline task_t connect(int fd, sockaddr *sa, socklen_t len) {
     int res = ::connect(fd, sa, len);
 
     if (need_nonblock && (flags = fcntl(fd, F_GETFL, 0) < 0)) {
-        CORO_DEBUG("FAILED to get the new flags for the fd[%d] %s[%d]",
+        COLIB_DEBUG("FAILED to get the new flags for the fd[%d] %s[%d]",
                 fd, strerror(errno), errno);
         co_return ERROR_GENERIC;
     }
     if (need_nonblock && (fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) < 0)) {
-        CORO_DEBUG("FAILED to toggle off the O_NONBLOCK flag on fd[%d] %s [%d]",
+        COLIB_DEBUG("FAILED to toggle off the O_NONBLOCK flag on fd[%d] %s [%d]",
                 fd, strerror(errno), errno);
         co_return ERROR_GENERIC;
     }
@@ -3396,7 +3379,7 @@ inline task_t connect(int fd, sockaddr *sa, socklen_t len) {
     error_e err = co_await awaiter;
 
     if (err != ERROR_OK) {
-        CORO_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
+        COLIB_DEBUG("Failed waiting operation on %d co_err: %s errno: %s[%d]",
                 fd, dbg_enum(err).c_str(), strerror(errno), errno);
         co_return err;
     }
@@ -3405,12 +3388,12 @@ inline task_t connect(int fd, sockaddr *sa, socklen_t len) {
     int result;
     socklen_t result_len = sizeof(result);
     if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &result, &result_len) < 0) {
-        CORO_DEBUG("FAILED getsockopt: fd: %d err: %s[%d]", fd, strerror(errno), errno);
+        COLIB_DEBUG("FAILED getsockopt: fd: %d err: %s[%d]", fd, strerror(errno), errno);
         co_return ERROR_GENERIC;
     }
 
     if (result != 0) {
-        CORO_DEBUG("FAILED connect: fd: %d err: %s[%d]", fd, strerror(errno), errno);
+        COLIB_DEBUG("FAILED connect: fd: %d err: %s[%d]", fd, strerror(errno), errno);
         co_return result;
     }
 
@@ -3466,11 +3449,11 @@ inline task_t read_sz(int fd, void *buff, size_t len) {
             break ;
         ssize_t ret = co_await read(fd, buff, len);
         if (ret == 0) {
-            CORO_DEBUG("Read failed, peer is closed, fd: %d", fd);
+            COLIB_DEBUG("Read failed, peer is closed, fd: %d", fd);
             co_return ERROR_GENERIC;
         }
         else if (ret < 0) {
-            CORO_DEBUG("Failed read, fd: %d", fd);
+            COLIB_DEBUG("Failed read, fd: %d", fd);
             co_return ERROR_GENERIC;
         }
         else {
@@ -3488,7 +3471,7 @@ inline task_t write_sz(int fd, const void *buff, size_t len) {
             break ;
         ssize_t ret = co_await write(fd, buff, len);
         if (ret < 0) {
-            CORO_DEBUG("Failed write, fd: %d", fd);
+            COLIB_DEBUG("Failed write, fd: %d", fd);
             co_return ERROR_GENERIC;
         }
         else {
@@ -3499,9 +3482,9 @@ inline task_t write_sz(int fd, const void *buff, size_t len) {
     co_return ERROR_OK;
 }
 
-#endif /* CORO_OS_LINUX */ 
+#endif /* COLIB_OS_LINUX */ 
 
-#if CORO_OS_WINDOWS
+#if COLIB_OS_WINDOWS
 
 inline LPFN_CONNECTEX   _connect_ex = NULL;
 inline LPFN_ACCEPTEX    _accept_ex = NULL;  
@@ -3534,7 +3517,7 @@ inline error_e load_win_fn(GUID guid, Fn& fn) {
     /* Dummy socket needed for WSAIoctl */
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == INVALID_SOCKET) {
-        CORO_DEBUG("Failed to create dumy socket: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create dumy socket: %s", get_last_error().c_str());
         return ERROR_GENERIC;
     }
 
@@ -3543,13 +3526,13 @@ inline error_e load_win_fn(GUID guid, Fn& fn) {
                   &fn, sizeof(fn),
                   &dwBytes, NULL, NULL);
     if (ret != 0) {
-        CORO_DEBUG("Failed to load extension function: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to load extension function: %s", get_last_error().c_str());
         return ERROR_GENERIC;
     }
 
     ret = closesocket(sock);
     if (ret != 0) {
-        CORO_DEBUG("Failed to close dumy socket: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to close dumy socket: %s", get_last_error().c_str());
         return ERROR_GENERIC;
     }
 
@@ -3559,13 +3542,13 @@ inline error_e load_win_fn(GUID guid, Fn& fn) {
 inline error_e handle_done_req(io_data_t *data, error_e err, DWORD *len, uint64_t *offset) {
     if (err != ERROR_OK) {
         CloseHandle(data->overlapped.hEvent);
-        CORO_DEBUG("FAILED: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED: %s", get_last_error().c_str());
         return ERROR_GENERIC;
     }
     if (len)
         *len = data->recvlen;
     if (!CloseHandle(data->overlapped.hEvent)) {
-        CORO_DEBUG("Failed to close event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to close event: %s", get_last_error().c_str());
         return ERROR_GENERIC;
     }
     if (offset) {
@@ -3588,7 +3571,7 @@ inline task<BOOL> ConnectEx(SOCKET  s, const sockaddr *name, int namelen, PVOID 
         DWORD dwSendDataLength, LPDWORD lpdwBytesSent)
 {
     if (!_connect_ex && load_win_fn(WSAID_CONNECTEX, _connect_ex) != ERROR_OK) {
-        CORO_DEBUG("Can't load extension");
+        COLIB_DEBUG("Can't load extension");
         co_return false;
     }
 
@@ -3601,7 +3584,7 @@ inline task<BOOL> ConnectEx(SOCKET  s, const sockaddr *name, int namelen, PVOID 
     desc.data->h = desc.h = (HANDLE)s;
     desc.data->overlapped.hEvent = WSACreateEvent();
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
@@ -3614,7 +3597,7 @@ inline task<BOOL> ConnectEx(SOCKET  s, const sockaddr *name, int namelen, PVOID 
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpdwBytesSent, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -3625,7 +3608,7 @@ inline task<BOOL> AcceptEx( SOCKET sListenSocket, SOCKET sAcceptSocket, PVOID lp
         LPDWORD lpdwBytesReceived)
 {
     if (!_accept_ex && load_win_fn(WSAID_ACCEPTEX, _accept_ex) != ERROR_OK) {
-        CORO_DEBUG("Can't load extension");
+        COLIB_DEBUG("Can't load extension");
         co_return false;
     }
 
@@ -3637,7 +3620,7 @@ inline task<BOOL> AcceptEx( SOCKET sListenSocket, SOCKET sAcceptSocket, PVOID lp
 
     desc.data->overlapped.hEvent = WSACreateEvent();
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->h = desc.h = (HANDLE)sListenSocket;
@@ -3651,7 +3634,7 @@ inline task<BOOL> AcceptEx( SOCKET sListenSocket, SOCKET sAcceptSocket, PVOID lp
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpdwBytesReceived, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -3666,7 +3649,7 @@ inline task<BOOL> ConnectNamedPipe(HANDLE hNamedPipe) {
     desc.data->h = desc.h = hNamedPipe;
     desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
@@ -3679,7 +3662,7 @@ inline task<BOOL> ConnectNamedPipe(HANDLE hNamedPipe) {
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, NULL, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -3697,7 +3680,7 @@ inline task<BOOL> DeviceIoControl(HANDLE hDevice, DWORD dwIoControlCode, LPVOID 
     desc.data->h = desc.h = hDevice;
     desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
@@ -3710,7 +3693,7 @@ inline task<BOOL> DeviceIoControl(HANDLE hDevice, DWORD dwIoControlCode, LPVOID 
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpBytesReturned, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -3727,7 +3710,7 @@ inline task<BOOL> LockFileEx(HANDLE hFile, DWORD dwFlags, DWORD dwReserved,
 
     desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->h = desc.h = hFile;
@@ -3745,7 +3728,7 @@ inline task<BOOL> LockFileEx(HANDLE hFile, DWORD dwFlags, DWORD dwReserved,
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, NULL, offset) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -3763,7 +3746,7 @@ inline task<BOOL> ReadDirectoryChangesW(HANDLE hDirectory, LPVOID lpBuffer, DWOR
 
     desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->h = desc.h = hDirectory;
@@ -3777,7 +3760,7 @@ inline task<BOOL> ReadDirectoryChangesW(HANDLE hDirectory, LPVOID lpBuffer, DWOR
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpBytesReturned, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -3794,7 +3777,7 @@ inline task<BOOL> ReadFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesTo
 
     desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->h = desc.h = hFile;
@@ -3808,7 +3791,7 @@ inline task<BOOL> ReadFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesTo
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpNumberOfBytesRead, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -3826,7 +3809,7 @@ inline task<BOOL> TransactNamedPipe(HANDLE hNamedPipe, LPVOID lpInBuffer, DWORD 
     desc.data->h = desc.h = hNamedPipe;
     desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
@@ -3839,7 +3822,7 @@ inline task<BOOL> TransactNamedPipe(HANDLE hNamedPipe, LPVOID lpInBuffer, DWORD 
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpBytesRead, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -3855,7 +3838,7 @@ inline task<BOOL> WaitCommEvent(HANDLE  hFile, LPDWORD lpEvtMask) {
     desc.data->h = desc.h = hFile;
     desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
@@ -3868,7 +3851,7 @@ inline task<BOOL> WaitCommEvent(HANDLE  hFile, LPDWORD lpEvtMask) {
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, NULL, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -3890,7 +3873,7 @@ inline task<BOOL> WriteFile(HANDLE  hFile, LPCVOID lpBuffer, DWORD nNumberOfByte
     }
     desc.data->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
@@ -3903,7 +3886,7 @@ inline task<BOOL> WriteFile(HANDLE  hFile, LPCVOID lpBuffer, DWORD nNumberOfByte
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpNumberOfBytesWritten, offset) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -3913,7 +3896,7 @@ inline task<BOOL> WSASendMsg(SOCKET handle, LPWSAMSG lpMsg, DWORD dwFlags,
         LPDWORD lpNumberOfBytesSent, LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine)
 {
     if (!_wsa_send_msg && load_win_fn(WSAID_WSASENDMSG, _wsa_send_msg) != ERROR_OK) {
-        CORO_DEBUG("Can't load extension");
+        COLIB_DEBUG("Can't load extension");
         co_return false;
     }
     auto desc = create_io_desc(co_await get_pool());
@@ -3925,7 +3908,7 @@ inline task<BOOL> WSASendMsg(SOCKET handle, LPWSAMSG lpMsg, DWORD dwFlags,
     desc.data->h = desc.h = (HANDLE)handle;
     desc.data->overlapped.hEvent = WSACreateEvent();
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
@@ -3938,7 +3921,7 @@ inline task<BOOL> WSASendMsg(SOCKET handle, LPWSAMSG lpMsg, DWORD dwFlags,
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpNumberOfBytesSent, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -3957,7 +3940,7 @@ inline task<BOOL> WSASendTo(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
     desc.data->h = desc.h = (HANDLE)s;
     desc.data->overlapped.hEvent = WSACreateEvent();
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
@@ -3970,7 +3953,7 @@ inline task<BOOL> WSASendTo(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpNumberOfBytesSent, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -3989,7 +3972,7 @@ inline task<BOOL> WSASend(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
     desc.data->h = desc.h = (HANDLE)s;
     desc.data->overlapped.hEvent = WSACreateEvent();
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
@@ -4002,7 +3985,7 @@ inline task<BOOL> WSASend(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpNumberOfBytesSent, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -4021,7 +4004,7 @@ inline task<BOOL> WSARecvFrom(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
     desc.data->h = desc.h = (HANDLE)s;
     desc.data->overlapped.hEvent = WSACreateEvent();
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
@@ -4034,7 +4017,7 @@ inline task<BOOL> WSARecvFrom(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpNumberOfBytesRecvd, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -4044,7 +4027,7 @@ inline task<BOOL> WSARecvMsg(SOCKET s, LPWSAMSG lpMsg, LPDWORD lpdwNumberOfBytes
         LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine)
 {
     if (!_wsa_recv_msg && load_win_fn(WSAID_WSARECVMSG, _wsa_recv_msg) != ERROR_OK) {
-        CORO_DEBUG("Can't load extension");
+        COLIB_DEBUG("Can't load extension");
         co_return false;
     }
 
@@ -4057,7 +4040,7 @@ inline task<BOOL> WSARecvMsg(SOCKET s, LPWSAMSG lpMsg, LPDWORD lpdwNumberOfBytes
     desc.data->h = desc.h = (HANDLE)s;
     desc.data->overlapped.hEvent = WSACreateEvent();
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
@@ -4070,7 +4053,7 @@ inline task<BOOL> WSARecvMsg(SOCKET s, LPWSAMSG lpMsg, LPDWORD lpdwNumberOfBytes
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpdwNumberOfBytesRecvd, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -4089,7 +4072,7 @@ inline task<BOOL> WSARecv(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
     desc.data->h = desc.h = (HANDLE)s;
     desc.data->overlapped.hEvent = WSACreateEvent();
     if (!desc.data->overlapped.hEvent) {
-        CORO_DEBUG("Failed to create event: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to create event: %s", get_last_error().c_str());
         co_return false;
     }
     desc.data->io_request = +[](void *ptr) -> error_e {
@@ -4102,7 +4085,7 @@ inline task<BOOL> WSARecv(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
     desc.data->ptr = (void *)&params;
     error_e ret = co_await io_awaiter_t(desc);
     if (handle_done_req(desc.data.get(), ret, lpNumberOfBytesRecvd, NULL) != ERROR_OK) {
-        CORO_DEBUG("FAILED request: %s", get_last_error().c_str());
+        COLIB_DEBUG("FAILED request: %s", get_last_error().c_str());
         co_return false;
     }
     co_return true;
@@ -4119,7 +4102,7 @@ inline task_t connect(SOCKET s, const sockaddr *sa, uint32_t len) {
     /* ConnectEx requires the socket to be initially bound */
     int rc = bind(s, (SOCKADDR*) &tmp_addr, sizeof(tmp_addr));
     if (rc != 0) {
-        CORO_DEBUG("Failed first bind: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed first bind: %s", get_last_error().c_str());
         co_return ERROR_GENERIC;
     }
 
@@ -4131,7 +4114,7 @@ inline task<SOCKET> accept(SOCKET s, sockaddr *sa, uint32_t *len) {
     SOCKET client_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
     if (client_sock == INVALID_SOCKET) {
-        CORO_DEBUG("Failed to construct client sock: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed to construct client sock: %s", get_last_error().c_str());
         co_return INVALID_SOCKET;
     }
 
@@ -4140,7 +4123,7 @@ inline task<SOCKET> accept(SOCKET s, sockaddr *sa, uint32_t *len) {
 
     BOOL ok = co_await AcceptEx(s, client_sock, &addr_buff[0], 0, *len + 16, *len + 16, &rlen);
     if (!ok) {
-        CORO_DEBUG("Failed accept: %s", get_last_error().c_str());
+        COLIB_DEBUG("Failed accept: %s", get_last_error().c_str());
         closesocket(client_sock);
         co_return INVALID_SOCKET;
     }
@@ -4153,7 +4136,7 @@ inline task<SSIZE_T> read(HANDLE h, void *buff, size_t len) {
     DWORD nread = 0;
     BOOL ok = co_await ReadFile(h, buff, (DWORD)len, &nread);
     if (!ok) {
-        CORO_DEBUG("Failed read");
+        COLIB_DEBUG("Failed read");
         co_return ERROR_GENERIC;
     }
     co_return nread;
@@ -4163,7 +4146,7 @@ inline task<SSIZE_T> write(HANDLE h, const void *buff, size_t len, uint64_t *off
     DWORD nwrite = 0;
     BOOL ok = co_await WriteFile(h, buff, (DWORD)len, &nwrite, offset);
     if (!ok) {
-        CORO_DEBUG("Failed write");
+        COLIB_DEBUG("Failed write");
         co_return ERROR_GENERIC;
     }
     co_return nwrite;
@@ -4176,11 +4159,11 @@ inline task_t read_sz(HANDLE h, void *buff, size_t len) {
             break ;
         SSIZE_T ret = co_await read(h, buff, len);
         if (ret == 0) {
-            CORO_DEBUG("Read failed, peer is closed");
+            COLIB_DEBUG("Read failed, peer is closed");
             co_return ERROR_GENERIC;
         }
         else if (ret < 0) {
-            CORO_DEBUG("Failed read");
+            COLIB_DEBUG("Failed read");
             co_return ERROR_GENERIC;
         }
         else {
@@ -4198,7 +4181,7 @@ inline task_t write_sz(HANDLE h, const void *buff, size_t len, uint64_t *offset)
             break ;
         SSIZE_T ret = co_await write(h, buff, len, offset);
         if (ret < 0) {
-            CORO_DEBUG("Failed write");
+            COLIB_DEBUG("Failed write");
             co_return ERROR_GENERIC;
         }
         else {
@@ -4209,11 +4192,11 @@ inline task_t write_sz(HANDLE h, const void *buff, size_t len, uint64_t *offset)
     co_return ERROR_OK;
 }
 
-#endif /* CORO_OS_WINDOWS */
+#endif /* COLIB_OS_WINDOWS */
 
-#if CORO_OS_UNKNOWN
+#if COLIB_OS_UNKNOWN
 /* you implement your own */
-#endif /* CORO_OS_UNKNOWN */
+#endif /* COLIB_OS_UNKNOWN */
 
 struct task_modifs_getter_t {
     modif_table_p table;
@@ -4551,7 +4534,7 @@ inline dbg_string_t dbg_enum(run_e code) {
     }
 }
 
-#if CORO_OS_LINUX
+#if COLIB_OS_LINUX
 inline dbg_string_t dbg_epoll_events(uint32_t events) {
     dbg_string_t ret{"[", allocator_t<char>{nullptr}};
     if (events & EPOLLIN)    ret += "EPOLLIN|";
@@ -4566,53 +4549,53 @@ inline dbg_string_t dbg_epoll_events(uint32_t events) {
         ret += "]";
     return ret;
 }
-#endif /* CORO_OS_LINUX */
+#endif /* COLIB_OS_LINUX */
 
 inline modif_pack_t dbg_create_tracer(pool_t *pool) {
     modif_flags_e flags = modif_flags_e(CO_MODIF_INHERIT_ON_CALL | CO_MODIF_INHERIT_ON_SCHED);
     modif_pack_t mods;
 
     mods.push_back(create_modif<CO_MODIF_CALL_CBK>(pool, flags, [&](state_t *s) -> error_e {
-        CORO_DEBUG(">  CALL: %s", dbg_name(s->self).c_str());
+        COLIB_DEBUG(">  CALL: %s", dbg_name(s->self).c_str());
         return ERROR_OK;
     }));
     mods.push_back(create_modif<CO_MODIF_SCHED_CBK>(pool, flags, [&] (state_t *s) -> error_e {
-        CORO_DEBUG("> SCHED: %s", dbg_name(s->self).c_str());
+        COLIB_DEBUG("> SCHED: %s", dbg_name(s->self).c_str());
         return ERROR_OK;
     }));
     mods.push_back(create_modif<CO_MODIF_EXIT_CBK>(pool, flags, [&] (state_t *s) -> error_e {
-        CORO_DEBUG(">  EXIT: %s", dbg_name(s->self).c_str());
+        COLIB_DEBUG(">  EXIT: %s", dbg_name(s->self).c_str());
         return ERROR_OK;
     }));
     mods.push_back(create_modif<CO_MODIF_LEAVE_CBK>(pool, flags, [&] (state_t *s) -> error_e {
-        CORO_DEBUG("> LEAVE: %s", dbg_name(s->self).c_str());
+        COLIB_DEBUG("> LEAVE: %s", dbg_name(s->self).c_str());
         return ERROR_OK;
     }));
     mods.push_back(create_modif<CO_MODIF_ENTER_CBK>(pool, flags, [&] (state_t *s) -> error_e {
-        CORO_DEBUG("> ENTRY: %s", dbg_name(s->self).c_str());
+        COLIB_DEBUG("> ENTRY: %s", dbg_name(s->self).c_str());
         return ERROR_OK;
     }));
     mods.push_back(create_modif<CO_MODIF_WAIT_IO_CBK>(pool, flags,
         [&] (state_t *s, io_desc_t &io_desc) -> error_e {
-            CORO_DEBUG(">  WAIT: %s", dbg_name(s->self).c_str());
+            COLIB_DEBUG(">  WAIT: %s", dbg_name(s->self).c_str());
             return ERROR_OK;
         })
     );
     mods.push_back(create_modif<CO_MODIF_UNWAIT_IO_CBK>(pool, flags,
         [&] (state_t *s, io_desc_t &io_desc) -> error_e {
-            CORO_DEBUG(">UNWAIT: %s", dbg_name(s->self).c_str());
+            COLIB_DEBUG(">UNWAIT: %s", dbg_name(s->self).c_str());
             return ERROR_OK;
         }
     ));
     mods.push_back(create_modif<CO_MODIF_WAIT_SEM_CBK>(pool, flags,
         [&] (state_t *s, sem_t *sem, sem_waiter_handle_p _it) -> error_e {
-            CORO_DEBUG(">   SEM: %s", dbg_name(s->self).c_str());
+            COLIB_DEBUG(">   SEM: %s", dbg_name(s->self).c_str());
             return ERROR_OK;
         }
     ));
     mods.push_back(create_modif<CO_MODIF_UNWAIT_SEM_CBK>(pool, flags,
         [&] (state_t *s, sem_t *sem, sem_waiter_handle_p _it) -> error_e {
-            CORO_DEBUG("> UNSEM: %s", dbg_name(s->self).c_str());
+            COLIB_DEBUG("> UNSEM: %s", dbg_name(s->self).c_str());
             return ERROR_OK;
         }
     ));
@@ -4639,7 +4622,7 @@ inline uint64_t dbg_get_time() {
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
-#if CORO_ENABLE_DEBUG_NAMES
+#if COLIB_ENABLE_DEBUG_NAMES
 
 using dbg_val_type = std::map<void *, std::pair<dbg_string_t, int>>::value_type;
 inline std::map<void *,std::pair<dbg_string_t, int>, std::less<void *>, allocator_t<dbg_val_type>>
@@ -4661,16 +4644,16 @@ inline dbg_string_t dbg_name(void *v) {
             dbg_names.find(v)->second.second);
 }
 
-#else /* CORO_ENABLE_DEBUG_NAMES */
+#else /* COLIB_ENABLE_DEBUG_NAMES */
 
 template <typename ...Args>
 inline void *dbg_register_name(void *addr, const char *fmt, Args&&... args) { return addr; }
 
 inline dbg_string_t dbg_name(void *v) { return dbg_string_t{"", allocator_t<char>{nullptr}}; };
 
-#endif /* CORO_ENABLE_DEBUG_NAMES */
+#endif /* COLIB_ENABLE_DEBUG_NAMES */
 
-#if CORO_ENABLE_LOGGING
+#if COLIB_ENABLE_LOGGING
 
 inline void dbg_raw(const dbg_string_t& msg, const char *file, const char *func, int line) {
     if (log_str) {
@@ -4684,16 +4667,16 @@ inline void dbg(const char *file, const char *func, int line, const char *fmt, A
     dbg_raw(dbg_format(fmt, std::forward<Args>(args)...), file, func, line);
 }
 
-#else /* CORO_ENABLE_LOGGING */
+#else /* COLIB_ENABLE_LOGGING */
 
 template <typename... Args> /* no logging -> do nothing */
 inline void dbg(const char *, const char *, int, const char *fmt, Args&&...) {}
 
-#endif /* CORO_ENABLE_LOGGING */
+#endif /* COLIB_ENABLE_LOGGING */
 
 /* The end
 ------------------------------------------------------------------------------------------------- */
 
 }
 
-#endif /* CORO_H */
+#endif /* COLIB_H */

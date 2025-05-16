@@ -1,19 +1,21 @@
-#define CORO_ENABLE_DEBUG_NAMES true
-#define CORO_ENABLE_DEBUG_TRACE_ALL true
+#define COLIB_ENABLE_DEBUG_NAMES true
+#define COLIB_ENABLE_DEBUG_TRACE_ALL true
 
 #include <string.h>
 #include <stdexcept>
 #include <thread>
 #include <iostream>
 
-#include "coro.h"
+#include "colib.h"
+
+/* TODO: add tests for all the functions that are documented (in progress) */
 
 /* Test Utils
 ================================================================================================= */
 
 # define DBG(fmt, ...) co::dbg(__FILE__, __func__, __LINE__, fmt, ##__VA_ARGS__)
 
-#if CORO_OS_LINUX
+#if COLIB_OS_LINUX
 
 # include <sys/socket.h>
 # include <arpa/inet.h>
@@ -36,9 +38,9 @@
     } \
 } while (0)
 
-#endif /* CORO_OS_LINUX */
+#endif /* COLIB_OS_LINUX */
 
-#if CORO_OS_WINDOWS
+#if COLIB_OS_WINDOWS
 
 # include <windows.h>
 #pragma comment(lib, "Ws2_32.lib")
@@ -83,12 +85,12 @@ do { \
     } \
 } while (0)
 
-#endif /* CORO_OS_WINDOWS */
+#endif /* COLIB_OS_WINDOWS */
 
 #define CHK_BOOL(val) ((val) ? 0 : -1)
 #define CHK_PTR(ptr) ((ptr) ? 0 : -1)
 
-namespace co = coro;
+namespace co = colib;
 
 struct FnScope {
     using fn_t = std::function<void(void)>;
@@ -162,8 +164,8 @@ int test1_semaphore() {
     auto a = co::create_sem(pool, 1);
     auto b = co::create_sem(pool, 0);
 
-    pool->sched(CORO_REGNAME(test1_co_odd(a, b)));
-    pool->sched(CORO_REGNAME(test1_co_even(a, b)));
+    pool->sched(COLIB_REGNAME(test1_co_odd(a, b)));
+    pool->sched(COLIB_REGNAME(test1_co_even(a, b)));
 
     DBG("Run");
 
@@ -518,7 +520,7 @@ static int test8_chk_msg(uint32_t uints[4]) {
     return 0;
 }
 
-#if CORO_OS_LINUX
+#if COLIB_OS_LINUX
 
 int test8_server_fd;
 int test8_pass_cnt = 0;
@@ -639,9 +641,9 @@ int test8_io() {
     return 0;
 }
 
-#endif /* #if CORO_OS_LINUX */
+#endif /* #if COLIB_OS_LINUX */
 
-#if CORO_OS_WINDOWS
+#if COLIB_OS_WINDOWS
 
 int test8_io_connect_accept_ex_cnt = 0;
 
@@ -811,7 +813,6 @@ co::task_t test8_io_connect_accept() {
         while (i --> 0) {
             struct sockaddr_in client_addr;
 
-            /* TODO: this will block after accepting all, close is somehow (use stop_handle) */
             uint32_t addr_len = sizeof(client_addr);
             SOCKET client_sock = co_await co::accept(
                     server_sock, (SOCKADDR *)&client_addr, &addr_len);
@@ -1062,7 +1063,7 @@ int test8_io() {
     ASSERT_FN(CHK_BOOL(test8_io_dir_changes_cnt == 2));
     return 0;
 }
-#endif /* CORO_OS_WINDOWS */
+#endif /* COLIB_OS_WINDOWS */
 
 /* Test9 - DBG Trace
 ================================================================================================= */
@@ -1077,14 +1078,14 @@ co::task_t test9_dbg_call() {
 
 co::task_t test9_dbg_sched() {
     DBG("scheduled...");
-    co_await CORO_REGNAME(test9_dbg_call());
+    co_await COLIB_REGNAME(test9_dbg_call());
     co_return 0;
 };
 
 int test9_dbg_trace() {
     auto pool = co::create_pool();
     auto trace = co::dbg_create_tracer(pool.get());
-    pool->sched(CORO_REGNAME(test9_dbg_sched()), trace);
+    pool->sched(COLIB_REGNAME(test9_dbg_sched()), trace);
     co::run_e ret = pool->run();
     ASSERT_FN(CHK_BOOL(ret == co::RUN_OK));
     return 0;
@@ -1237,7 +1238,7 @@ int test13_except() {
 ================================================================================================= */
 
 int main(int argc, char const *argv[]) {
-#if CORO_OS_WINDOWS
+#if COLIB_OS_WINDOWS
     WSADATA wsa_data;
     ASSERT_FN(CHK_BOOL(WSAStartup(MAKEWORD(2,2), &wsa_data) == 0));
 #endif
