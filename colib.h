@@ -276,11 +276,11 @@ All those are enabled by COLIB_ENABLE_LOGGING true, else those are disabled.
 |--------------------------------|------|---------------|------------------------------------------|
 | Macro Name                     | Type | Default Value | Description                              |
 |================================|======|===============|==========================================|
-| COLIB_OS_LINUX                 | BOOL | true          | If true, the library provided Linux      |
+| COLIB_OS_LINUX                 | BOOL | auto-detect   | If true, the library provided Linux      |
 |                                |      |               | implementation will be used to implement |
 |                                |      |               | the IO pool and timers.                  |
 |--------------------------------|------|---------------|------------------------------------------|
-| COLIB_OS_WINDOWS               | BOOL | false         | If true, the library provided Windows    |
+| COLIB_OS_WINDOWS               | BOOL | auto-detect   | If true, the library provided Windows    |
 |                                |      |               | implementation will be used to implement |
 |                                |      |               | the IO pool and timers.                  |
 |--------------------------------|------|---------------|------------------------------------------|
@@ -631,11 +631,19 @@ AcceptEx(...) ~> BOOL
 #include <vector>
 
 #ifndef COLIB_OS_LINUX
-# define COLIB_OS_LINUX true
+# ifdef __linux__
+#  define COLIB_OS_LINUX true
+# else
+#  define COLIB_OS_LINUX false
+# endif
 #endif
 
 #ifndef COLIB_OS_WINDOWS
-# define COLIB_OS_WINDOWS false
+# if (defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__NT__)) && !COLIB_OS_LINUX
+#  define COLIB_OS_WINDOWS true
+# else
+#  define COLIB_OS_WINDOWS false
+# endif
 #endif
 
 #ifndef COLIB_OS_UNKNOWN
@@ -3038,24 +3046,20 @@ struct sem_internal_t {
         return await_ready();
     }
 
-    error_e signal() {
-        if (val == 0 && waiting_on_sem.size())
-            return _awake_one();
-        
-        val++;
-        if (val == 0) {
-            /* for negative initialized semaphores: if there is no awaiter we create a slot to be
-            taken by the first awaiter by increasing the counter twice. It is, at least for me,
-            more intuitive to initialize the semaphore with a negative number amounting to the
-            count of signals needed to awake the semaphore, not with that number -1 */
-            if (waiting_on_sem.size())
-                return _awake_one();
-            else
-                val++;
+    error_e signal(int64_t inc = 1) {
+        auto old = val;
+        if (inc == 0 && val < 0) {
+            val = 0;
+            inc = (int64_t)waiting_on_sem.size();
         }
+        val += inc;
 
-        /* we awake when val is 0, do nothing on negative, only increment and on positive we
-        don't have awaiters */
+        while (val > 0 && waiting_on_sem.size()) {
+            error_e ret = _awake_one();
+            if (ret != ERROR_OK)
+                return ret;
+            val--;
+        }
         return ERROR_OK;
     }
 

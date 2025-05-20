@@ -1,8 +1,6 @@
 #ifndef LOGGER_H
 #define LOGGER_H
 
-#include <fcntl.h>
-#include <unistd.h>
 #include <sstream>
 #include <iomanip>
 #include <mutex>
@@ -12,9 +10,14 @@
 
 #include "path_utils.h"
 
-#if __GLIBC__ == 2 && __GLIBC_MINOR__ <= 28
-#include <sys/syscall.h>
-#include <linux/fs.h>
+#ifdef UTILS_OS_WINDOWS
+#elif UTILS_OS_LINUX
+# if __GLIBC__ == 2 && __GLIBC_MINOR__ <= 28
+#  include <fcntl.h>
+#  include <linux/fs.h>
+#  include <sys/syscall.h>
+#  include <unistd.h>
+# endif
 #endif
 
 #define LOGGER_DEFAULT_MAXSZ	(16*1024*1024)
@@ -66,6 +69,10 @@ inline std::string logger_get_date() {
 }
 
 inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
+#ifdef UTILS_OS_WINDOWS
+	/* TODO: */
+	return 0;
+#elif UTILS_OS_LINUX
 	{
 		std::lock_guard guard(_logger_data.logger_sl);
 
@@ -74,13 +81,7 @@ inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
 			return -1;
 		}
 
-		std::string logfile_relpath;
-		if (logfile_path[0] != '/') {
-			logfile_relpath = path_get_module_dir() + "/" + logfile_path;
-		}
-		else {
-			logfile_relpath = logfile_path;
-		}
+		std::string logfile_relpath = path_get_relative(logfile_path);
 
 		_logger_data.active_file = std::string(logfile_relpath) + ".log";
 		_logger_data.old_file = std::string(logfile_relpath) + ".old.log";
@@ -107,6 +108,7 @@ inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
 
 	std::string init_msg = "<<<< LOGGER INIT [" + logger_get_date() + "] >>>>\n";
 	return logger_log(init_msg.c_str());
+#endif
 }
 
 inline bool logger_is_init() {
@@ -115,14 +117,19 @@ inline bool logger_is_init() {
 
 /* does this function have any use? */
 inline void logger_uninit() {
+#ifdef UTILS_OS_WINDOWS
+	/* TODO: */
+#elif UTILS_OS_LINUX
 	if (!_logger_data.is_init)
 		return ;
 	close(_logger_data.old_fd);
 	close(_logger_data.active_fd);
 	_logger_data.is_init = false;
+#endif
 }
 
-#if __GLIBC__ == 2 && __GLIBC_MINOR__ <= 28
+#ifdef UTILS_OS_LINUX
+# if __GLIBC__ == 2 && __GLIBC_MINOR__ <= 28
 
 inline int renameat2(int olddirfd, const char *oldpath,
              int newdirfd, const char *newpath, unsigned int flags)
@@ -130,9 +137,14 @@ inline int renameat2(int olddirfd, const char *oldpath,
 	return syscall(SYS_renameat2, olddirfd, oldpath, newdirfd, newpath, flags);
 }
 
+# endif
 #endif
 
 inline int logger_swap_files() {
+#ifdef UTILS_OS_WINDOWS
+	/* TODO: */
+	return 0;
+#elif UTILS_OS_LINUX
 	/* atomically moves active file to old file */
 	int ret = renameat2(AT_FDCWD, _logger_data.active_file.c_str(),
 			AT_FDCWD, _logger_data.old_file.c_str(), RENAME_EXCHANGE);
@@ -154,9 +166,14 @@ inline int logger_swap_files() {
 	_logger_data.curr_sz = 0;
 
 	return 0;
+#endif
 }
 
 inline int logger_log(const char *msg) {
+#ifdef UTILS_OS_WINDOWS
+	/* TODO: */
+	return 0;
+#elif UTILS_OS_LINUX
 	/* if file would grow longer than maxsz the write will be done in  */
 	uint32_t len = strlen(msg);
 	if (len > _logger_data.maxsz) {
@@ -180,7 +197,7 @@ inline int logger_log(const char *msg) {
 				strerror(errno), errno);
 		return -1;
 	}
-	return 0;
+#endif
 }
 
 inline void logger_log_autoinit(const char *msg) {
