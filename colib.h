@@ -455,10 +455,12 @@ sem_t::wait() ~> sem_t::unlocker_t
     and `unlock` function calling `signal` on the semaphore, meaning it can be used inside a
     `std::lock_guard` object to protect a piece of code using the RAII principle.
 
-sem_t::signal()
-    Increments the counter of the semaphore. Pushes waiting tasks, if any, onto the ready queue of
-    the pool if the counter would become larger than 0 and does not increment the counter if this
-    operation is done.
+sem_t::signal(increment)
+    If increment is less than 0, then it will decrease the internal counter with the amount.
+    If increment is 0 and the internal counter is less then or equal to 0 then it will awake all the
+    waiters, else it does nothing.
+    If the increment is bigger than 0 it increases the internal counter and awakes waiters until
+    either there are no more waiters or the internal counter is 0.
 
 sem_t::try_dec() -> bool
     Non-blocking; if the semaphore counter is positive, decrements the counter and returns true,
@@ -3184,7 +3186,7 @@ inline sem_t::~sem_t() {
 }
 
 inline sem_awaiter_t sem_t::wait() { return sem_awaiter_t(this); }
-inline error_e       sem_t::signal() { return internal->signal(); }
+inline error_e       sem_t::signal(int64_t inc) { return internal->signal(inc); }
 inline bool          sem_t::try_dec() { return internal->try_dec(); }
 
 inline sem_internal_t *sem_t::get_internal() {
