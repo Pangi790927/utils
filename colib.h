@@ -994,7 +994,7 @@ struct sem_t {
     ~sem_t();
 
     sem_awaiter_t wait(); /* if awaited returns unlocker_t{} */
-    error_e signal(); /* returns error if the pool disapeared */
+    error_e signal(int64_t inc = 1); /* returns error if the pool disapeared */
     bool try_dec();
 
     /* again, beeter don't touch, same as pool */
