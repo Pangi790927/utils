@@ -669,13 +669,13 @@ AcceptEx(...) ~> BOOL
 #endif
 
 /*! The version is formated as MAJOR,MINOR,DETAIL, where:
-    @MAJOR  - breaking changes to the interface: functions are deleted, functionality is added or
-              removed to already existing functions, etc.
-    @MINOR  - changes to the interface: functions are added, functionality is added to new
-              functons, additional default parameters are added, etc.
-    @DETAIL - fixes, implementation fixes, comments, etc. Changes that won't change the way you
-              use this library */
-#define COLIB_VERSION 0,0,1
+    @param MAJOR  - breaking changes to the interface: functions are deleted, functionality is added
+                    or removed to already existing functions, etc.
+    @param MINOR  - changes to the interface: functions are added, functionality is added to new
+                    functons, additional default parameters are added, etc.
+    @param DETAIL - fixes, implementation fixes, comments, etc. Changes that won't change the way
+                    you use this library */
+#define COLIB_VERSION 0,0,2
 
 #if COLIB_OS_UNKNOWN
 /* you should include your needed files before including this file */
