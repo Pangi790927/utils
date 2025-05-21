@@ -11,12 +11,12 @@
 #include "path_utils.h"
 
 #ifdef UTILS_OS_WINDOWS
-#elif UTILS_OS_LINUX
+#elif defined(UTILS_OS_LINUX)
+# include <fcntl.h>
+# include <unistd.h>
 # if __GLIBC__ == 2 && __GLIBC_MINOR__ <= 28
-#  include <fcntl.h>
-#  include <linux/fs.h>
 #  include <sys/syscall.h>
-#  include <unistd.h>
+#  include <linux/fs.h>
 # endif
 #endif
 
@@ -72,7 +72,7 @@ inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
 #ifdef UTILS_OS_WINDOWS
 	/* TODO: */
 	return 0;
-#elif UTILS_OS_LINUX
+#elif defined(UTILS_OS_LINUX)
 	{
 		std::lock_guard guard(_logger_data.logger_sl);
 
@@ -119,7 +119,7 @@ inline bool logger_is_init() {
 inline void logger_uninit() {
 #ifdef UTILS_OS_WINDOWS
 	/* TODO: */
-#elif UTILS_OS_LINUX
+#elif defined(UTILS_OS_LINUX)
 	if (!_logger_data.is_init)
 		return ;
 	close(_logger_data.old_fd);
@@ -144,7 +144,7 @@ inline int logger_swap_files() {
 #ifdef UTILS_OS_WINDOWS
 	/* TODO: */
 	return 0;
-#elif UTILS_OS_LINUX
+#elif defined(UTILS_OS_LINUX)
 	/* atomically moves active file to old file */
 	int ret = renameat2(AT_FDCWD, _logger_data.active_file.c_str(),
 			AT_FDCWD, _logger_data.old_file.c_str(), RENAME_EXCHANGE);
@@ -173,7 +173,7 @@ inline int logger_log(const char *msg) {
 #ifdef UTILS_OS_WINDOWS
 	/* TODO: */
 	return 0;
-#elif UTILS_OS_LINUX
+#elif defined(UTILS_OS_LINUX)
 	/* if file would grow longer than maxsz the write will be done in  */
 	uint32_t len = strlen(msg);
 	if (len > _logger_data.maxsz) {
@@ -197,6 +197,7 @@ inline int logger_log(const char *msg) {
 				strerror(errno), errno);
 		return -1;
 	}
+	return 0;
 #endif
 }
 
