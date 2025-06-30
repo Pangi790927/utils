@@ -2168,7 +2168,7 @@ struct task {
     using promise_type = task_state_t<T>;
     using handle_t = handle<task_state_t<T>>;
 
-    task() : h(std::noop_coroutine()) {}
+    task() {}
     task(handle_t h) : h(h) {}
     task(handle<void> h) : h(handle_t::from_address(h.address())) {}
 
@@ -2413,7 +2413,7 @@ struct io_pool_t {
             int ret = 0;
             if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, io_desc.fd, &ev)) < 0) {
                 COLIB_DEBUG("FAILED epoll_ctl EPOLL_CTL_MOD fd[%d] events%s err:%s[%d] -> ret:%d",
-                        io_desc.fd, dbg_epoll_events(ev.events).c_str(), strerror(errno), ret);
+                        io_desc.fd, dbg_epoll_events(ev.events).c_str(), strerror(errno), errno, ret);
                 return ERROR_GENERIC;
             }
             data->mask = ev.events;
@@ -2431,7 +2431,7 @@ struct io_pool_t {
             int ret;
             if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, io_desc.fd, &ev)) < 0) {
                 COLIB_DEBUG("FAILED epoll_ctl EPOLL_CTL_ADD fd[%d] events%s err:%s[%d] -> ret:%d",
-                        io_desc.fd, dbg_epoll_events(ev.events).c_str(), strerror(errno), ret);
+                        io_desc.fd, dbg_epoll_events(ev.events).c_str(), strerror(errno), errno, ret);
                 return ERROR_GENERIC;
             }
             data = alloc<fd_data_t>(pool, fd_data_t{
@@ -2516,7 +2516,7 @@ private:
             int ret;
             if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, io_desc.fd, &ev)) < 0) {
                 COLIB_DEBUG("FAILED epoll_ctl EPOLL_CTL_MOD fd[%d] events%s err:%s[%d] -> ret:%d",
-                        io_desc.fd, dbg_epoll_events(ev.events).c_str(), strerror(errno), ret);
+                        io_desc.fd, dbg_epoll_events(ev.events).c_str(), strerror(errno), errno, ret);
                 return ERROR_GENERIC;
             }
             data->waiters.erase(
@@ -2535,7 +2535,7 @@ private:
             int ret;
             if ((ret = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, io_desc.fd, NULL)) < 0) {
                 COLIB_DEBUG("FAILED epoll_ctl EPOLL_CTL_DEL fd[%d] err:%s[%d] -> ret:%d",
-                        io_desc.fd, strerror(errno), ret);
+                        io_desc.fd, strerror(errno), errno, ret);
                 return ERROR_GENERIC;
             }
             ret_evs.pop_back();
@@ -3579,8 +3579,19 @@ struct sem_awaiter_t {
     sem_awaiter_t(sem_t *sem) : sem(sem) {}
     sem_awaiter_t(const sem_awaiter_t &oth) = delete;
     sem_awaiter_t &operator = (const sem_awaiter_t &oth) = delete;
-    sem_awaiter_t(sem_awaiter_t &&oth) = delete;
-    sem_awaiter_t &operator = (sem_awaiter_t &&oth) = delete;
+    sem_awaiter_t(sem_awaiter_t &&oth) {
+        state = oth.state;
+        sem = oth.sem;
+        psem_it = oth.psem_it;
+        triggered = oth.triggered;
+    }
+    sem_awaiter_t &operator = (sem_awaiter_t &&oth) {
+        state = oth.state;
+        sem = oth.sem;
+        psem_it = oth.psem_it;
+        triggered = oth.triggered;
+        return *this;
+    }
 
     template <typename P>
     handle<void> await_suspend(handle<P> to_suspend) {
@@ -4814,7 +4825,7 @@ inline task<std::pair<T, error_e>> create_timeo(
 
     auto timer_coro = [](std::shared_ptr<timer_state_t> tstate) -> task_t {
         error_e err;
-        if ((err = co_await sleep_us(tstate->duration)) != ERROR_OK) {
+        if ((err = (error_e)co_await sleep_us(tstate->duration)) != ERROR_OK) {
             tstate->tstate_err = err;
             tstate->timer_elapsed_sig();
             co_return ERROR_GENERIC;
@@ -4825,15 +4836,15 @@ inline task<std::pair<T, error_e>> create_timeo(
         co_return ERROR_OK;
     }(tstate);
 
-    add_modifs(pool, timer_coro, timer_killer);
-    add_modifs(pool, exec_coro, timer_elapsed_killer);
+    add_modifs(pool, timer_coro, {timer_killer.begin(), timer_killer.end()});
+    add_modifs(pool, exec_coro, {timer_elapsed_killer.begin(), timer_elapsed_killer.end()});
 
     pool->sched(timer_coro);
     pool->sched(exec_coro);
 
     return [](std::shared_ptr<timer_state_t> tstate) -> task<std::pair<T, error_e>>{
         co_await tstate->sem->wait();
-        co_return {tstate->ret, tstate->tstate_err};
+        co_return std::pair<T, error_e>{tstate->ret, tstate->tstate_err};
     }(tstate);
 }
 
