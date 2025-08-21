@@ -22,7 +22,13 @@
 CXX := cl
 CXX_FLAGS := /EHsc /await:strict /std:c++20 /Zi
 INCLUDES := /I..
-SRC := main.cpp
 
-all:
-	${CXX} ${CXX_FLAGS} ${INCLUDES} ${SRC}
+all: test_colib test_mmcb
+
+test_colib:
+	${CXX} ${CXX_FLAGS} ${INCLUDES} test_colib.cpp
+	./test_colib.exe
+
+test_mmcb:	
+	${CXX} ${CXX_FLAGS} ${INCLUDES} test_mmcb.cpp Onecore.lib
+	./test_mmcb.exe
