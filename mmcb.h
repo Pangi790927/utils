@@ -82,6 +82,8 @@ struct mmcb_t {
     mmcb_err_e init(size_t size, mmcb_e flags = MMCB_FLAG_NONE);
     mmcb_err_e uninit();
 
+    bool is_init() { return base != nullptr; }
+
     template <typename T>
     T *wrap(T *ptr);
 
