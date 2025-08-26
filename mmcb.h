@@ -51,26 +51,12 @@
 #include <cstdint>
 #include <string>
 
-#ifdef MMCB_DEBUG_ENABLE_LOGGING
-# ifndef MMCB_DEBUG
-#  define MMCB_DEBUG(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
-# endif
-#else
-# ifndef MMCB_DEBUG
-#  define MMCB_DEBUG(...) do {} while (0)
-# endif
-#endif
+#include "debug.h"
+#include "misc_utils.h"
 
 enum mmcb_e : int32_t {
     MMCB_FLAG_NONE      = 0,
     MMCB_FLAG_TRICOPY   = (1 << 0),
-};
-
-enum mmcb_err_e : int32_t {
-    MMCB_ERROR_NONE = 0,
-    MMCB_ERROR_ALREADY_INIT = -1,
-    MMCB_ERROR_INVALID_PARAM = -2,
-    MMCB_ERROR_SYSCALL_ERR = -3,
 };
 
 /*! This is the main object, you use it to point to the circular buffer. Contents can be copied,
@@ -79,8 +65,8 @@ struct mmcb_t {
     size_t get_size() { return _size; }
     void *get_base() { return _base; }
 
-    mmcb_err_e init(size_t size, mmcb_e flags = MMCB_FLAG_NONE);
-    mmcb_err_e uninit();
+    int init(size_t size, mmcb_e flags = MMCB_FLAG_NONE);
+    int uninit();
 
     bool is_init() { return _base != nullptr; }
 
@@ -110,267 +96,203 @@ inline std::string mmcb_to_str(mmcb_e flags);
 
 #if defined(__linux__)
 
-inline mmcb_err_e mmcb_t::init(size_t size, mmcb_e flags) {
+inline int mmcb_t::init(size_t size, mmcb_e flags) {
     /* TODO: handle fail to init */
     if (_size != 0) {
-        MMCB_DEBUG("FAILED This object was already initialized");
-        return MMCB_ERROR_ALREADY_INIT;
+        DBG("FAILED This object was already initialized");
+        return -1;
     }
     if (size == 0) {
-        MMCB_DEBUG("FAILED Can't initialize to 0 size");
-        return MMCB_ERROR_INVALID_PARAM;
+        DBG("FAILED Can't initialize to 0 size");
+        return -1;
     }
     if (size % getpagesize() != 0) {
-        MMCB_DEBUG("FAILED size must be a multiple of page size: getpagesize()=%d", getpagesize());
-        return MMCB_ERROR_INVALID_PARAM;
+        DBG("FAILED size must be a multiple of page size: getpagesize()=%d", getpagesize());
+        return -1;
     }
     _size = size;
     _flags = flags;
 
-    if ((_mem_fd = memfd_create("", 0)) < 0) {
-        MMCB_DEBUG("FAILED memfd_create: %s[%d]", strerror(errno), errno);
-        return MMCB_ERROR_SYSCALL_ERR;
-    }
-    if (ftruncate(_mem_fd, _size) < 0) {
-        MMCB_DEBUG("FAILED ftruncate: %s[%d]", strerror(errno), errno);
-        return MMCB_ERROR_SYSCALL_ERR;
-    }
-
+    ASSERT_FN(_mem_fd = memfd_create("", 0));
+    FnScope err_scope([this]{ close(_mem_fd); });
+    ASSERT_FN(ftruncate(_mem_fd, _size));
     int prot = PROT_READ | PROT_WRITE;
     if (flags & MMCB_FLAG_TRICOPY) {
         /* Reserve for three views into the same memory */
-        void *area_start = mmap(NULL, size * 3, prot, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-        if (area_start == MAP_FAILED) {
-            MMCB_DEBUG("FAILED mmap: %s[%d]", strerror(errno), errno);
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        void *area_start;
+        ASSERT_FN(CHK_MMAP(area_start =
+                mmap(NULL, size * 3, prot, MAP_ANONYMOUS | MAP_SHARED, -1, 0)));
+        err_scope([&]{ munmap(area_start, size * 3); });
 
         /* create the first view in memory */
         uint8_t *first_zone = (uint8_t *)area_start;
-        if ((mmap(first_zone, size, prot, MAP_FIXED | MAP_SHARED, _mem_fd, 0)) == MAP_FAILED) {
-            MMCB_DEBUG("FAILED mmap0: %s[%d]", strerror(errno), errno);
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        ASSERT_FN(CHK_MMAP(mmap(first_zone, size, prot, MAP_FIXED | MAP_SHARED, _mem_fd, 0)));
 
         /* create the second view in memory (also the base one) */
         uint8_t *second_zone = first_zone + size;
-        if ((mmap(second_zone, size, prot, MAP_FIXED | MAP_SHARED, _mem_fd, 0)) == MAP_FAILED) {
-            MMCB_DEBUG("FAILED mmap1: %s[%d]", strerror(errno), errno);
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        ASSERT_FN(CHK_MMAP(mmap(second_zone, size, prot, MAP_FIXED | MAP_SHARED, _mem_fd, 0)));
         _base = (void *)second_zone;
 
         /* create the third view in memory */
         uint8_t *third_zone = second_zone + size;
-        if ((mmap(third_zone, size, prot, MAP_FIXED | MAP_SHARED, _mem_fd, 0)) == MAP_FAILED) {
-            MMCB_DEBUG("FAILED mmap2: %s[%d]", strerror(errno), errno);
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        ASSERT_FN(CHK_MMAP(mmap(third_zone, size, prot, MAP_FIXED | MAP_SHARED, _mem_fd, 0)));
     }
     else {
         /* Reserve for two views into the same memory */
-        void *area_start = mmap(NULL, size * 2, prot, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-        if (area_start == MAP_FAILED) {
-            MMCB_DEBUG("FAILED mmap: %s[%d]", strerror(errno), errno);
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        void *area_start;
+        ASSERT_FN(CHK_MMAP(area_start =
+                mmap(NULL, size * 2, prot, MAP_ANONYMOUS | MAP_SHARED, -1, 0)));
+        err_scope([&]{ munmap(area_start, size * 2); });
 
         /* create the first view in memory (also the base one) */
         uint8_t *first_zone = (uint8_t *)area_start;
-        if ((mmap(first_zone, size, prot, MAP_FIXED | MAP_SHARED, _mem_fd, 0)) == MAP_FAILED) {
-            MMCB_DEBUG("FAILED mmap0: %s[%d]", strerror(errno), errno);
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        ASSERT_FN(CHK_MMAP(mmap(first_zone, size, prot, MAP_FIXED | MAP_SHARED, _mem_fd, 0)));
         _base = first_zone;
 
         /* create the second view in memory */
         uint8_t *second_zone = first_zone + size;
-        if ((mmap(second_zone, size, prot, MAP_FIXED | MAP_SHARED, _mem_fd, 0)) == MAP_FAILED) {
-            MMCB_DEBUG("FAILED mmap1: %s[%d]", strerror(errno), errno);
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        ASSERT_FN(CHK_MMAP(mmap(second_zone, size, prot, MAP_FIXED | MAP_SHARED, _mem_fd, 0)));
     }
-    return MMCB_ERROR_NONE;
+
+    err_scope.disable();
+    return -1;
 }
 
-inline mmcb_err_e mmcb_t::uninit() {
+inline int mmcb_t::uninit() {
     if (_size == 0 || _base == nullptr) {
-        MMCB_DEBUG("FAILED This object was not initialized");
-        return MMCB_ERROR_INVALID_PARAM;
+        DBG("FAILED This object was not initialized");
+        return -1;
     }
     if (_flags & MMCB_FLAG_TRICOPY) {
         void *area_start = (uint8_t *)_base - _size;
-        if (munmap(area_start, _size * 3) < 0) {
-            MMCB_DEBUG("FAILED munmap %s[%d]", strerror(errno), errno);
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        ASSERT_FN(munmap(area_start, _size * 3));
     }
     else {
         void *area_start = _base;
-        if (munmap(area_start, _size * 2) < 0) {
-            MMCB_DEBUG("FAILED munmap %s[%d]", strerror(errno), errno);
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        ASSERT_FN(munmap(area_start, _size * 2));
     }
     close(_mem_fd);
     _base = nullptr;
     _size = 0;
     _flags = MMCB_FLAG_NONE;
     _mem_fd = -1;
-    return MMCB_ERROR_NONE;
+    return 0;
 }
 
 #elif (defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__NT__)) /* end linux */
 
-inline std::string mmcb_get_last_error_as_string() {
-    // https://stackoverflow.com/questions/1387064/
-    // how-to-get-the-error-message-from-the-error-code-returned-by-getlasterror
-
-    // Get the error message ID, if any.
-    DWORD err_msg_id = ::GetLastError();
-    if (err_msg_id == 0) {
-        return "NO_ERROR"; //No error message has been recorded
-    }
-
-    LPSTR message_buffer = nullptr;
-
-    // Ask Win32 to give us the string version of that message ID.
-    // The parameters we pass in, tell Win32 to create the buffer that holds the message for us
-    // (because we don't yet know how long the message string will be).
-    size_t size = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-            FORMAT_MESSAGE_IGNORE_INSERTS, NULL, err_msg_id,
-            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&message_buffer, 0, NULL);
-
-    // Copy the error message into a std::string.
-    std::string message(message_buffer, size);
-
-    // Free the Win32's string's buffer.
-    LocalFree(message_buffer);
-
-    return message + "[" + std::to_string(err_msg_id) +"]";
-}
-
-inline mmcb_err_e mmcb_t::init(size_t size, mmcb_e flags) {
+inline int mmcb_t::init(size_t size, mmcb_e flags) {
     SYSTEM_INFO sys_info;
 
     GetSystemInfo(&sys_info);
 
     if (_size != 0) {
-        MMCB_DEBUG("FAILED This object was already initialized");
-        return MMCB_ERROR_ALREADY_INIT;
+        DBG("FAILED This object was already initialized");
+        return -1;
     }
     if (size == 0) {
-        MMCB_DEBUG("FAILED Can't initialize to 0 size");
-        return MMCB_ERROR_INVALID_PARAM;
+        DBG("FAILED Can't initialize to 0 size");
+        return -1;
     }
     if (size % sys_info.dwPageSize != 0) {
-        MMCB_DEBUG("FAILED size must be a multiple of page size: sys_info.dwPageSize=%d",
+        DBG("FAILED size must be a multiple of page size: sys_info.dwPageSize=%d",
                 sys_info.dwPageSize);
-        return MMCB_ERROR_INVALID_PARAM;
+        return -1;
     }
     _size = size;
     _flags = flags;
 
     _mem_fd = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, (DWORD)(_size >> 32),
             (DWORD)(_size & 0xffffffff), NULL);
-
-    if (!_mem_fd) {
-        MMCB_DEBUG("FAILED CreateFileMapping: %s", mmcb_get_last_error_as_string().c_str());
-        return MMCB_ERROR_SYSCALL_ERR;
-    }
+    ASSERT_FN(CHK_PTR(_mem_fd));
+    FnScope err_scope([this] { CloseHandle(_mem_fd); });
 
     if (flags & MMCB_FLAG_TRICOPY) {
         /* Reserve for three views into the same memory */
-        void* area_start = VirtualAlloc2(NULL, NULL, 3 * _size,
-                MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, NULL, 0);
+        void* area_start;
+        ASSERT_FN(CHK_PTR(area_start = VirtualAlloc2(NULL, NULL, 3 * _size,
+                MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, NULL, 0)));
+
         if (!area_start) {
-            MMCB_DEBUG("FAILED VirtualAlloc2: %s", mmcb_get_last_error_as_string().c_str());
+            DBGE("FAILED VirtualAlloc2");
             return MMCB_ERROR_SYSCALL_ERR;
         }
 
         /* split the placeholder into two placeholders 2*size, size */
         if (!VirtualFree(area_start, 2 * _size, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
-            MMCB_DEBUG("FAILED VirtualFree0: %s", mmcb_get_last_error_as_string().c_str());
+            VirtualFree(area_start, 0, MEM_RELEASE);
+            DBG("FAILED VirtualFree0");
             return MMCB_ERROR_SYSCALL_ERR;
         }
 
         /* split the larger placeholder into two other placeholders to obtain three placeholdrs,
         each of size _size */
         if (!VirtualFree(area_start, _size, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
-            MMCB_DEBUG("FAILED VirtualFree1: %s", mmcb_get_last_error_as_string().c_str());
+            DBG("FAILED VirtualFree1");
+            VirtualFree(area_start, 0, MEM_RELEASE);
+            VirtualFree((uint8_t *)area_start + _size * 2, 0, MEM_RELEASE);
             return MMCB_ERROR_SYSCALL_ERR;
         }
 
+        err_scope([&]{ VirtualFree(first_zone, 0, MEM_RELEASE); });
         /* create the first view in memory */
         uint8_t *first_zone = (uint8_t *)area_start;
-        if (!MapViewOfFile3(_mem_fd, NULL, first_zone, 0, _size, MEM_REPLACE_PLACEHOLDER,
-                PAGE_READWRITE, NULL, 0))
-        {
-            MMCB_DEBUG("FAILED MapViewOfFile3_0: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        ASSERT_FN(CHK_BOOL(MapViewOfFile3(_mem_fd, NULL, first_zone, 0, _size,
+                MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, NULL, 0)));
+        err_scope([&]{ UnmapViewOfFileEx(first_zone, MEM_PRESERVE_PLACEHOLDER); });
 
         /* create the second view in memory (also the base one) */
         uint8_t *second_zone = first_zone + _size;
-        if (!MapViewOfFile3(_mem_fd, NULL, second_zone, 0, _size, MEM_REPLACE_PLACEHOLDER,
-                PAGE_READWRITE, NULL, 0))
-        {
-            MMCB_DEBUG("FAILED MapViewOfFile3_1: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        err_scope([&]{ VirtualFree(second_zone, 0, MEM_RELEASE); });
+        ASSERT_FN(CHK_BOOL(MapViewOfFile3(_mem_fd, NULL, second_zone, 0, _size,
+                MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, NULL, 0)));
         _base = second_zone;
+        err_scope([&]{ UnmapViewOfFileEx(second_zone, MEM_PRESERVE_PLACEHOLDER); });
 
         /* create the third view in memory */
         uint8_t *third_zone = second_zone + _size;
-        if (!MapViewOfFile3(_mem_fd, NULL, third_zone, 0, _size, MEM_REPLACE_PLACEHOLDER,
-                PAGE_READWRITE, NULL, 0))
-        {
-            MMCB_DEBUG("FAILED MapViewOfFile3_2: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        err_scope([&]{ VirtualFree(third_zone, 0, MEM_RELEASE); });
+        ASSERT_FN(CHK_BOOL(MapViewOfFile3(_mem_fd, NULL, third_zone, 0, _size,
+                MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, NULL, 0)));
+        err_scope([&]{ UnmapViewOfFileEx(third_zone, MEM_PRESERVE_PLACEHOLDER); });
     }
     else {
         /* Reserve for two views into the same memory */
-        void* area_start = VirtualAlloc2(NULL, NULL, 2 * _size,
-                MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, NULL, 0);
-        if (!area_start) {
-            MMCB_DEBUG("FAILED VirtualAlloc2: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        void* area_start;
+        ASSERT_FN(CHK_PTR(area_start = VirtualAlloc2(NULL, NULL, 2 * _size,
+                MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, NULL, 0)));
 
         /* split the placeholder into two placeholders size, size */
         if (!VirtualFree(area_start, _size, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
-            MMCB_DEBUG("FAILED VirtualFree: %s", mmcb_get_last_error_as_string().c_str());
+            DBGE("FAILED VirtualFree");
+            VirtualFree(area_start, 0, MEM_RELEASE);
             return MMCB_ERROR_SYSCALL_ERR;
         }
 
         /* create the first view in memory (also the base one) */
         uint8_t *first_zone = (uint8_t *)area_start;
-        if (!MapViewOfFile3(_mem_fd, NULL, first_zone, 0, _size, MEM_REPLACE_PLACEHOLDER,
-                PAGE_READWRITE, NULL, 0))
-        {
-            MMCB_DEBUG("FAILED MapViewOfFile3_0: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        err_scope([&]{ VirtualFree(first_zone, 0, MEM_RELEASE); });
+        ASSERT_FN(CHK_BOOL(MapViewOfFile3(_mem_fd, NULL, first_zone, 0, _size,
+                MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, NULL, 0)))
         _base = first_zone;
+        err_scope([&]{ UnmapViewOfFileEx(first_zone, MEM_PRESERVE_PLACEHOLDER); });
 
         /* create the second view in memory */
         uint8_t *second_zone = first_zone + _size;
-        if (!MapViewOfFile3(_mem_fd, NULL, second_zone, 0, _size, MEM_REPLACE_PLACEHOLDER,
-                PAGE_READWRITE, NULL, 0))
-        {
-            MMCB_DEBUG("FAILED MapViewOfFile3_1: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        err_scope([&]{ VirtualFree(second_zone, 0, MEM_RELEASE); });
+        ASSERT_FN(CHK_BOOL(MapViewOfFile3(_mem_fd, NULL, second_zone, 0, _size,
+                MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, NULL, 0)))
+        err_scope([&]{ UnmapViewOfFileEx(second_zone, MEM_PRESERVE_PLACEHOLDER); });
     }
 
-    return MMCB_ERROR_NONE;
+    err_scope.disable();
+    return 0;
 }
 
-inline mmcb_err_e mmcb_t::uninit() {
+inline int mmcb_t::uninit() {
     if (_size == 0 || _base == nullptr) {
-        MMCB_DEBUG("FAILED This object was not initialized");
-        return MMCB_ERROR_INVALID_PARAM;
+        DBG("FAILED This object was not initialized");
+        return -1;
     }
     if (_flags & MMCB_FLAG_TRICOPY) {
         void *area_start = (uint8_t *)_base - _size;
@@ -379,53 +301,25 @@ inline mmcb_err_e mmcb_t::uninit() {
         uint8_t *third_zone = second_zone + _size;
         /* Shity windows documentation doesn't make it clear that MEM_PRESERVE_PLACEHOLDER is needed
         or that unmaping the file and not calling VirtualFree would suffice. In their example for
-        a circular buffer they use both, but without the MEM_PRESERVE_PLACEHOLDER flag, but without
-        the flag, VirtualFree will thorw an error.. */
-        if (!UnmapViewOfFileEx(first_zone, MEM_PRESERVE_PLACEHOLDER)) {
-            MMCB_DEBUG("FAILED UnmapViewOfFileEx0: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
-        if (!UnmapViewOfFileEx(second_zone, MEM_PRESERVE_PLACEHOLDER)) {
-            MMCB_DEBUG("FAILED UnmapViewOfFileEx1: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
-        if (!UnmapViewOfFileEx(third_zone, MEM_PRESERVE_PLACEHOLDER)) {
-            MMCB_DEBUG("FAILED UnmapViewOfFileEx2: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
-        if (!VirtualFree(first_zone, 0, MEM_RELEASE)) {
-            MMCB_DEBUG("FAILED VirtualFree0: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
-        if (!VirtualFree(second_zone, 0, MEM_RELEASE)) {
-            MMCB_DEBUG("FAILED VirtualFree1: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
-        if (!VirtualFree(third_zone, 0, MEM_RELEASE)) {
-            MMCB_DEBUG("FAILED VirtualFree2: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+        a circular buffer they use both, but without the MEM_PRESERVE_PLACEHOLDER flag, problem is
+        that without the flag, VirtualFree will thorw an error.. */
+
+        ASSERT_FN(CHK_BOOL(UnmapViewOfFileEx(first_zone, MEM_PRESERVE_PLACEHOLDER)));
+        ASSERT_FN(CHK_BOOL(UnmapViewOfFileEx(second_zone, MEM_PRESERVE_PLACEHOLDER)));
+        ASSERT_FN(CHK_BOOL(UnmapViewOfFileEx(third_zone, MEM_PRESERVE_PLACEHOLDER)));
+        ASSERT_FN(CHK_BOOL(VirtualFree(first_zone, 0, MEM_RELEASE)));
+        ASSERT_FN(CHK_BOOL(VirtualFree(second_zone, 0, MEM_RELEASE)));
+        ASSERT_FN(CHK_BOOL(VirtualFree(third_zone, 0, MEM_RELEASE)));
     }
     else {
         void *area_start = _base;
         uint8_t *first_zone = (uint8_t *)area_start;
         uint8_t *second_zone = first_zone + _size;
-        if (!UnmapViewOfFileEx(first_zone, MEM_PRESERVE_PLACEHOLDER)) {
-            MMCB_DEBUG("FAILED UnmapViewOfFileEx0: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
-        if (!UnmapViewOfFileEx(second_zone, MEM_PRESERVE_PLACEHOLDER)) {
-            MMCB_DEBUG("FAILED UnmapViewOfFileEx1: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
-        if (!VirtualFree(first_zone, 0, MEM_RELEASE)) {
-            MMCB_DEBUG("FAILED VirtualFree0: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
-        if (!VirtualFree(second_zone, 0, MEM_RELEASE)) {
-            MMCB_DEBUG("FAILED VirtualFree1: %s", mmcb_get_last_error_as_string().c_str());
-            return MMCB_ERROR_SYSCALL_ERR;
-        }
+
+        ASSERT_FN(CHK_BOOL(UnmapViewOfFileEx(first_zone, MEM_PRESERVE_PLACEHOLDER)));
+        ASSERT_FN(CHK_BOOL(UnmapViewOfFileEx(second_zone, MEM_PRESERVE_PLACEHOLDER)));
+        ASSERT_FN(CHK_BOOL(VirtualFree(first_zone, 0, MEM_RELEASE)));
+        ASSERT_FN(CHK_BOOL(VirtualFree(second_zone, 0, MEM_RELEASE)));
     }
     CloseHandle(_mem_fd);
 
