@@ -155,7 +155,7 @@ inline int mmcb_t::init(size_t size, mmcb_e flags) {
     }
 
     err_scope.disable();
-    return -1;
+    return 0;
 }
 
 inline int mmcb_t::uninit() {

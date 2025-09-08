@@ -167,6 +167,48 @@ inline int write_sz(int fd, const void *src, size_t len) {
     }
 }
 
+/* This is needed for windows */
+inline int recv_sz(int fd, void *dst, size_t len) {
+    /* reads the exact len into buffer */
+    auto buff = (char *)dst;
+    while (true) {
+        int sent = recv(fd, buff, (int)len, 0);
+        if (sent < 0) {
+            DBGE("Failed to read data: %d", sent);
+            return -1;
+        }
+        if (sent == 0) {
+            DBG("Connection was closed");
+            return -1;
+        }
+        len -= sent;
+        buff += sent;
+        if (len == 0)
+            return 0;
+    }
+}
+
+/* This is needed for windows */
+inline int send_sz(int fd, const void *src, size_t len) {
+    /* writes the exact len into buffer */
+    auto buff = (const char *)src;
+    while (true) {
+        int sent = send(fd, buff, (int)len, 0);
+        if (sent < 0) {
+            DBGE("Failed to write data: %d", sent);
+            return -1;
+        }
+        if (sent == 0) {
+            DBG("Connection was closed");
+            return -1;
+        }
+        len -= sent;
+        buff += sent;
+        if (len == 0)
+            return 0;
+    }
+}
+
 #ifndef NO_SD_BUS
 template <typename ...Args>
 inline int systemctl_call(const char *method_name, const char *method_layout,
