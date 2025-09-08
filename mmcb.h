@@ -3,7 +3,7 @@
 
 /*! @file
  *
- * @brief Memory mapped circular buffer.
+ * @brief Memory Mapped Circular Buffer.
  *
  * This header file creates functions for creating a memory mapped circular buffer with page size
  * granularity by installing two(or three) views of the same physical memory into virtual memory
@@ -46,6 +46,10 @@
 #elif (defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__NT__))
 # define NOMINMAX
 # include <Windows.h>
+# include <memoryapi.h>
+# ifndef VirtualAlloc2
+#  define MMCB_LOAD_OWN_MEMFNS
+# endif
 #endif
 
 #include <cstdint>
@@ -84,6 +88,20 @@ protected:
     int _mem_fd = -1;
 #elif (defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__NT__))
     HANDLE _mem_fd = NULL;
+
+#ifdef MMCB_LOAD_OWN_MEMFNS
+    using VirtualAlloc2_t = PVOID(*)(HANDLE, PVOID, SIZE_T, ULONG, ULONG,
+            MEM_EXTENDED_PARAMETER*, ULONG);
+    using UnmapViewOfFileEx_t = BOOL(*)(PVOID, ULONG);
+    using MapViewOfFile3_t = PVOID(*)(HANDLE, HANDLE, PVOID, ULONG64, SIZE_T, ULONG, ULONG,
+            MEM_EXTENDED_PARAMETER*, ULONG);
+
+    static HMODULE kernel32_lib;
+    static VirtualAlloc2_t VirtualAlloc2;
+    static UnmapViewOfFileEx_t UnmapViewOfFileEx;
+    static MapViewOfFile3_t MapViewOfFile3;
+#endif
+
 #endif
 };
 
@@ -93,6 +111,7 @@ inline std::string mmcb_to_str(mmcb_e flags);
 =================================================================================================
 =================================================================================================
 ================================================================================================= */
+
 
 #if defined(__linux__)
 
@@ -155,7 +174,7 @@ inline int mmcb_t::init(size_t size, mmcb_e flags) {
     }
 
     err_scope.disable();
-    return 0;
+    return -1;
 }
 
 inline int mmcb_t::uninit() {
@@ -181,6 +200,14 @@ inline int mmcb_t::uninit() {
 
 #elif (defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__NT__)) /* end linux */
 
+
+#ifdef MMCB_LOAD_OWN_MEMFNS
+inline HMODULE mmcb_t::kernel32_lib = nullptr;
+inline mmcb_t::VirtualAlloc2_t mmcb_t::VirtualAlloc2 = nullptr;
+inline mmcb_t::UnmapViewOfFileEx_t mmcb_t::UnmapViewOfFileEx = nullptr;
+inline mmcb_t::MapViewOfFile3_t mmcb_t::MapViewOfFile3 = nullptr;
+#endif
+
 inline int mmcb_t::init(size_t size, mmcb_e flags) {
     SYSTEM_INFO sys_info;
 
@@ -202,6 +229,19 @@ inline int mmcb_t::init(size_t size, mmcb_e flags) {
     _size = size;
     _flags = flags;
 
+#ifdef MMCB_LOAD_OWN_MEMFNS
+    if (!kernel32_lib) {
+        kernel32_lib = LoadLibraryA("kernel32.dll");
+        VirtualAlloc2 = (VirtualAlloc2_t)GetProcAddress(kernel32_lib, "VirtualAlloc2");
+        UnmapViewOfFileEx = (UnmapViewOfFileEx_t)GetProcAddress(kernel32_lib, "UnmapViewOfFileEx");
+        MapViewOfFile3 = (MapViewOfFile3_t)GetProcAddress(kernel32_lib, "MapViewOfFile3");
+        if (!VirtualAlloc2 || !UnmapViewOfFileEx || !MapViewOfFile3) {
+            DBGE("Failed to get memory functions");
+            return -1;
+        }
+    }
+#endif
+
     _mem_fd = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, (DWORD)(_size >> 32),
             (DWORD)(_size & 0xffffffff), NULL);
     ASSERT_FN(CHK_PTR(_mem_fd));
@@ -215,14 +255,14 @@ inline int mmcb_t::init(size_t size, mmcb_e flags) {
 
         if (!area_start) {
             DBGE("FAILED VirtualAlloc2");
-            return MMCB_ERROR_SYSCALL_ERR;
+            return -1;
         }
 
         /* split the placeholder into two placeholders 2*size, size */
         if (!VirtualFree(area_start, 2 * _size, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
             VirtualFree(area_start, 0, MEM_RELEASE);
             DBG("FAILED VirtualFree0");
-            return MMCB_ERROR_SYSCALL_ERR;
+            return -1;
         }
 
         /* split the larger placeholder into two other placeholders to obtain three placeholdrs,
@@ -231,12 +271,12 @@ inline int mmcb_t::init(size_t size, mmcb_e flags) {
             DBG("FAILED VirtualFree1");
             VirtualFree(area_start, 0, MEM_RELEASE);
             VirtualFree((uint8_t *)area_start + _size * 2, 0, MEM_RELEASE);
-            return MMCB_ERROR_SYSCALL_ERR;
+            return -1;
         }
 
-        err_scope([&]{ VirtualFree(first_zone, 0, MEM_RELEASE); });
         /* create the first view in memory */
         uint8_t *first_zone = (uint8_t *)area_start;
+        err_scope([&] { VirtualFree(first_zone, 0, MEM_RELEASE); });
         ASSERT_FN(CHK_BOOL(MapViewOfFile3(_mem_fd, NULL, first_zone, 0, _size,
                 MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, NULL, 0)));
         err_scope([&]{ UnmapViewOfFileEx(first_zone, MEM_PRESERVE_PLACEHOLDER); });
@@ -266,7 +306,7 @@ inline int mmcb_t::init(size_t size, mmcb_e flags) {
         if (!VirtualFree(area_start, _size, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
             DBGE("FAILED VirtualFree");
             VirtualFree(area_start, 0, MEM_RELEASE);
-            return MMCB_ERROR_SYSCALL_ERR;
+            return -1;
         }
 
         /* create the first view in memory (also the base one) */
@@ -327,7 +367,7 @@ inline int mmcb_t::uninit() {
     _size = 0;
     _flags = MMCB_FLAG_NONE;
     _mem_fd = nullptr;
-    return MMCB_ERROR_NONE;
+    return -1;
 }
 
 #endif /* end windows */
