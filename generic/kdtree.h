@@ -1,9 +1,9 @@
-#ifndef GKDTREE_H
-#define GKDTREE_H
+#ifndef KDTREE_H
+#define KDTREE_H
 
-#include <memory>
-#include <functional>
 #include <cmath>
+#include <functional>
+#include <memory>
 
 /*! @file
  * 
@@ -29,10 +29,10 @@
 # ifndef KDTREE_PRINTF
 #  define KDTREE_PRINTF printf
 # endif
-# define KDTREE_DEBUG(fmt, ...)                                                 \
-do {                                                                            \
-    if (enable_logging)                                                         \
-        KDTREE_PRINTF("KDTREE: line[%d] " fmt "\n", __LINE__, ##__VA_ARGS__);   \
+# define KDTREE_DEBUG(fmt, ...)                                                                 \
+do {                                                                                            \
+    if (kdtree::enable_logging)                                                                 \
+        KDTREE_PRINTF("KDTREE: %30s line[%3d] " fmt "\n", __func__, __LINE__, ##__VA_ARGS__);   \
 } while (0)
 #else
 # define KDTREE_DEBUG(fmt, ...) do {} while (0)
@@ -70,16 +70,11 @@ struct hypersphere_t {
  * @param D the type of data stored for a point. Data must be copiable and initializable. */
 template <typename T, size_t K, typename D>
 struct node_t {
-    /*! left sub-tree root */
-    node_t *left = nullptr;
+    std::unique_ptr<node_t> left = nullptr;
+    std::unique_ptr<node_t> right = nullptr;
 
-    /*! right sub-tree root */
-    node_t *right = nullptr;
-
-    /*! data that is held by the node. */
     D data;
 
-    /*! The point aferent to the data. */
     vec_t<T, K> p;
 };
 
@@ -122,7 +117,7 @@ struct tree_t {
     static constexpr const T exact = 0;     /*! used in find/remove queries */
     static constexpr const T nearest = -1;  /*! used in find/remove queries */
 
-    node_t<T, K, D> *root = nullptr;
+    std::unique_ptr<node_t<T, K, D>> root = nullptr;
 
     std::shared_ptr<tree_opts_t<T, K, D>> o;
 
@@ -147,7 +142,7 @@ inline std::shared_ptr<tree_t<T, K, D>> create(std::shared_ptr<tree_opts_t<T, K,
  * 
  * @param tree The tree in which to insert the point.
  * @param p The point to insert.
- * @param data The data which acompanies the point.
+ * @param data The data which accompanies the point.
  * 
  * @return A shared pointer to the newly created node. Is null on error. */
 template <typename T, size_t K, typename D>
@@ -164,10 +159,11 @@ inline node_t<T, K, D> *insert(std::shared_ptr<tree_t<T, K, D>> tree, const vec_
 /*! Finds a list of points inside the kd-tree, given another point and a distance to it.
  * 
  * @param tree The tree in which to search for points.
- * @param p The point to wich to compare other points.
- * @param range The distance to wich to limit the search. If the range is equal to T{0}, an exact
- * match is searched and if the range is equal to T{-1} the nearest is searched. Any other negative
- * value besides -1 consists an error.
+ * @param p The point to which to compare other points.
+ * @param range The distance to which to limit the search. If the range is equal to T{0} (or
+ * tree_t<T, K, D>::exact), an exact match is searched and if the range is equal to T{-1} (or
+ * tree_t<T, K, D>::nearest) the nearest is searched. Any other negative value besides -1 consists
+ * an error.
  * 
  * #return A vector containing the nodes respective to the matching points. For exact matches an
  * empty returned vector signals an error. */
@@ -188,8 +184,8 @@ inline std::vector<node_t<T, K, D> *> find(std::shared_ptr<tree_t<T, K, D>> tree
  * the found nodes.
  * 
  * @param tree The tree in which to search for points.
- * @param p The point to wich to compare other points.
- * @param range The distance to wich to limit the search. If the range is equal to T{0}, the nearest
+ * @param p The point to which to compare other points.
+ * @param range The distance to which to limit the search. If the range is equal to T{0}, the nearest
  * is searched
  * 
  * @return The number of removed nodes or a negative number on error. */
@@ -294,7 +290,7 @@ inline std::shared_ptr<tree_t<T, K, D>> create(std::shared_ptr<tree_opts_t<T, K,
     ret->o->rect_intersect = [](const hyperbox_t<T, K>& rect, const hypersphere_t<T, K>& circle) {
         vec_t<T, K> circle_distance;
         for (size_t i = 0; i < K; i++)
-            circle_distance[i] = abs(circle.center[i] - rect.min_coords[i]);
+            circle_distance[i] = std::abs(circle.center[i] - rect.min_coords[i]);
 
         vec_t<T, K> half_rect_sizes;
         for (size_t i = 0; i < K; i++) {
@@ -320,29 +316,32 @@ inline std::shared_ptr<tree_t<T, K, D>> create(std::shared_ptr<tree_opts_t<T, K,
 }
 
 template <typename T, size_t K, typename D>
-inline node_t<T, K, D> *insert_recursive(node_t<T, K, D> **root,
+inline node_t<T, K, D> *insert_recursive(std::unique_ptr<node_t<T, K, D>> &root,
         const vec_t<T, K> &p, D&& data, size_t depth, tree_t<T, K, D> *tree)
 {
-    if (!(*root)) {
-        KDTREE_DEBUG("Createing new node");
-        return (*root) = new node_t<T, K, D>{ .data = std::forward<D>(data), .p = p };
+    if (!root) {
+        KDTREE_DEBUG("Creating new node");
+        root = std::make_unique<node_t<T, K, D>>();
+        root->data = std::forward<D>(data);
+        root->p = p;
+        return root.get();
     }
     size_t coord = depth % K;
 
     KDTREE_DEBUG("point: %s root: %s coord: %zu depth: %zu",
-            to_string(p).c_str(), to_string(*root).c_str(), coord, depth);
+            to_string(p).c_str(), to_string(root.get()).c_str(), coord, depth);
 
-    if (p[coord] < (*root)->p[coord])
-        return insert_recursive<T, K, D>(&(*root)->left, p, std::forward<D>(data), depth + 1, tree);
+    if (p[coord] < root->p[coord])
+        return insert_recursive<T, K, D>(root->left, p, std::forward<D>(data), depth + 1, tree);
     else
-        return insert_recursive<T, K, D>(&(*root)->right, p, std::forward<D>(data), depth + 1, tree);
+        return insert_recursive<T, K, D>(root->right, p, std::forward<D>(data), depth + 1, tree);
 }
 
 template <typename T, size_t K, typename D>
 inline node_t<T, K, D> *insert(tree_t<T, K, D> *tree,
         const vec_t<T, K> &p, D&& data)
 {
-    return insert_recursive<T, K, D>(&(tree->root), p, std::forward<D>(data), 0, tree);
+    return insert_recursive<T, K, D>(tree->root, p, std::forward<D>(data), 0, tree);
 }
 
 template <typename T, size_t K, typename D>
@@ -362,12 +361,12 @@ inline void find_in_range_recursive(node_t<T, K, D> *root,
     hyperbox_t<T, K> left_bb = bb;
     left_bb.max_coords[coord] = root->p[coord];
     if (tree->o->rect_intersect(left_bb, zone_of_interest))
-        find_in_range_recursive(root->left, p, range, result, depth + 1, tree, bb);
+        find_in_range_recursive(root->left.get(), p, range, result, depth + 1, tree, left_bb);
 
     hyperbox_t<T, K> right_bb = bb;
     right_bb.min_coords[coord] = root->p[coord];
     if (tree->o->rect_intersect(right_bb, zone_of_interest))
-        find_in_range_recursive(root->right, p, range, result, depth + 1, tree, bb);
+        find_in_range_recursive(root->right.get(), p, range, result, depth + 1, tree, right_bb);
 }
 
 template <typename T, size_t K, typename D>
@@ -382,9 +381,9 @@ inline node_t<T, K, D> *find_exact_recursive(node_t<T, K, D> *root,
     if (tree->o->eq(root->p, p))
         return root;
     if (p[coord] < root->p[coord])
-        return find_exact_recursive(root->left, p, depth + 1, tree);
+        return find_exact_recursive(root->left.get(), p, depth + 1, tree);
     else
-        return find_exact_recursive(root->right, p, depth + 1, tree);
+        return find_exact_recursive(root->right.get(), p, depth + 1, tree);
 }
 
 template <typename T, size_t K, typename D>
@@ -419,8 +418,19 @@ inline node_t<T, K, D> *find_nearest_recursive(node_t<T, K, D> *root,
     branch */
     node_t<T, K, D> *ret_left = nullptr;
     if (tree->o->rect_intersect(left_bb, zone_of_interest)) {
-        ret_left = find_nearest_recursive(root->left, p, depth + 1, tree, min_dist_squared,
+        ret_left = find_nearest_recursive(root->left.get(), p, depth + 1, tree, min_dist_squared,
                 left_bb);
+    }
+
+    /* We will have 3 candidates: the current point, the minimum found for the left branch and
+    the minimum found on the right branch. So we first compare this point to the left one and
+    remember the best in ret (that is if it is not null) */
+    T new_min = min_dist_squared;
+    if (!ret)
+        ret = ret_left;
+    else if (ret_left && (new_min = tree->o->dist2(ret->p, ret_left->p)) < min_dist_squared) {
+        min_dist_squared = new_min;
+        ret = ret_left;
     }
 
     hyperbox_t<T, K> right_bb = bb;
@@ -430,19 +440,8 @@ inline node_t<T, K, D> *find_nearest_recursive(node_t<T, K, D> *root,
     right branch */
     node_t<T, K, D> *ret_right = nullptr;
     if (tree->o->rect_intersect(right_bb, zone_of_interest)) {
-        ret_right = find_nearest_recursive(root->right, p, depth + 1, tree, min_dist_squared,
+        ret_right = find_nearest_recursive(root->right.get(), p, depth + 1, tree, min_dist_squared,
                 right_bb); 
-    }
-
-    /* Now we have 3 candidates: the current point, the minimum found for the left branch and
-    the minimum found on the right branch. So we first compare this point to the left one and
-    remember the best in ret (that is if it is not null) */
-    T new_min = min_dist_squared;
-    if (!ret)
-        ret = ret_left;
-    else if (ret_left && (new_min = tree->o->dist2(ret->p, ret_left->p)) < min_dist_squared) {
-        min_dist_squared = new_min;
-        ret = ret_left;
     }
 
     /* now if we have a point from the previous comparation we compare it with the right result and
@@ -461,17 +460,17 @@ inline std::vector<node_t<T, K, D> *> find(tree_t<T, K, D> *tree,
 {
     using ret_t = std::vector<node_t<T, K, D> *>;
 
-    if (range == T{0}) {
-        auto ret = find_exact_recursive(tree->root, p, 0, tree);
+    if (range == tree_t<T, K, D>::exact) {
+        auto ret = find_exact_recursive(tree->root.get(), p, 0, tree);
         return ret ? ret_t{ret} : ret_t{};
     }
-    else if (range == T{-1}) {
+    else if (range == tree_t<T, K, D>::nearest) {
         hyperbox_t<T, K> bb;
         for (size_t i = 0; i < K; i++) {
             bb.min_coords[i] = -tree->o->inf;
             bb.max_coords[i] = tree->o->inf;
         }
-        auto ret = find_nearest_recursive(tree->root, p, 0, tree, tree->o->inf, bb);
+        auto ret = find_nearest_recursive(tree->root.get(), p, 0, tree, tree->o->inf, bb);
         return ret ? ret_t{ret} : ret_t{};
     }
     else {
@@ -481,7 +480,7 @@ inline std::vector<node_t<T, K, D> *> find(tree_t<T, K, D> *tree,
             bb.min_coords[i] = -tree->o->inf;
             bb.max_coords[i] = tree->o->inf;
         }
-        find_in_range_recursive(tree->root, p, range, ret, 0, tree, bb);
+        find_in_range_recursive(tree->root.get(), p, range, ret, 0, tree, bb);
         return ret;
     }
     return ret_t{};
@@ -502,13 +501,13 @@ inline node_t<T, K, D> *find_min_coord(node_t<T, K, D> *root, size_t d, size_t d
     if (coord == d) {
         if (root->left == nullptr)
             return root;
-        return find_min_coord(root->right, d, depth+1);
+        return find_min_coord(root->left.get(), d, depth+1);
     }
 
     /* else we must search both sub-trees for said min */
     auto res = root;
-    auto l = find_min_coord(root->left, d, depth+1);
-    auto r = find_min_coord(root->right, d, depth+1);
+    auto l = find_min_coord(root->left.get(), d, depth+1);
+    auto r = find_min_coord(root->right.get(), d, depth+1);
     if (l && l->p[d] < res->p[d])
         res = l;
     if (r && r->p[d] < res->p[d])
@@ -517,46 +516,45 @@ inline node_t<T, K, D> *find_min_coord(node_t<T, K, D> *root, size_t d, size_t d
 }
 
 template <typename T, size_t K, typename D>
-inline node_t<T, K, D> *remove_recursive(tree_t<T, K, D> *tree, node_t<T, K, D> *root,
+inline void remove_recursive(tree_t<T, K, D> *tree, std::unique_ptr<node_t<T, K, D>> &root,
         const vec_t<T, K>& p, size_t depth)
 {
     if (!root)
-        return nullptr;
+        return ;
 
     size_t coord = depth % K;
 
     KDTREE_DEBUG("point: %s root: %s coord: %zu depth: %zu",
-            to_string(p).c_str(), to_string(root).c_str(), coord, depth);
+            to_string(p).c_str(), to_string(root.get()).c_str(), coord, depth);
 
     if (tree->o->eq(root->p, p)) {
         if (root->right != nullptr) {
-            auto min_node = find_min_coord(root->right, coord, depth+1);
+            auto min_node = find_min_coord(root->right.get(), coord, depth+1);
 
             root->p = min_node->p;
             root->data = min_node->data;
 
-            root->right = remove_recursive(tree, root->right, min_node->p, depth+1);
+            remove_recursive(tree, root->right, min_node->p, depth+1);
         }
         else if (root->left != nullptr) {
-            auto min_node = find_min_coord(root->left, coord, depth+1);
+            auto min_node = find_min_coord(root->left.get(), coord, depth+1);
 
             root->p = min_node->p;
             root->data = min_node->data;
 
-            root->right = remove_recursive(tree, root->left, min_node->p, depth+1);
-            root->left = nullptr;
+            remove_recursive(tree, root->left, min_node->p, depth+1);
+            root->right = std::move(root->left);
         }
         else {
-            delete root;
-            return nullptr;
+            root = nullptr;
+            return ;
         }
     }
 
     if (p[coord] < root->p[coord])
-        root->left = remove_recursive(tree, root->left, p, depth+1);
+        remove_recursive(tree, root->left, p, depth+1);
     else
-        root->right = remove_recursive(tree, root->right, p, depth+1);
-    return root;
+        remove_recursive(tree, root->right, p, depth+1);
 }
 
 template <typename T, size_t K, typename D>
@@ -574,7 +572,7 @@ inline int remove(tree_t<T, K, D> *tree, const vec_t<T, K> &p, const T& range) {
         to_delete_points.push_back(node->p);
     }
     for (auto p : to_delete_points)
-        tree->root = remove_recursive(tree, tree->root, p, 0);
+        remove_recursive(tree, tree->root, p, 0);
     return ret;
 }
 
@@ -587,11 +585,13 @@ inline std::string to_string_recursive(const node_t<T, K, D> *root,
     std::string ret = std::string(depth * 2, ' ') +
             to_string(root, data_to_string_fn, coord_to_string_fn) + "\n";
     if (root->left)
-        ret += to_string_recursive(root->left, data_to_string_fn, coord_to_string_fn, depth+1);
+        ret += to_string_recursive(root->left.get(), data_to_string_fn, coord_to_string_fn,
+                depth+1);
     else
         ret += std::string((depth + 1) * 2, ' ') + "[null_left]\n";
     if (root->right)
-        ret += to_string_recursive(root->right, data_to_string_fn, coord_to_string_fn, depth+1);
+        ret += to_string_recursive(root->right.get(), data_to_string_fn, coord_to_string_fn,
+                depth+1);
     else
         ret += std::string((depth + 1) * 2, ' ') + "[null_right]\n";
     return ret;
@@ -606,7 +606,7 @@ inline std::string to_string(const tree_t<T, K, D> *tree,
         return "[invalid_null_tree]";
     if (!tree->root)
         return "[null_root]";
-    return to_string_recursive(tree->root, data_to_string_fn, coord_to_string_fn, 0);
+    return to_string_recursive(tree->root.get(), data_to_string_fn, coord_to_string_fn, 0);
 }
 
 template <typename T, size_t K, typename D>
@@ -670,14 +670,14 @@ inline bool is_tree_valid_recursive(tree_t<T, K, D> *tree, node_t<T, K, D> *root
     int coord = depth % K;
     hyperbox_t<T, K> left_bb = bb;
     left_bb.max_coords[coord] = root->p[coord];
-    if (!is_tree_valid_recursive(tree, root->left, depth+1, left_bb)) {
+    if (!is_tree_valid_recursive(tree, root->left.get(), depth+1, left_bb)) {
         KDTREE_DEBUG("REV:LEFT");
         return false;
     }
 
     hyperbox_t<T, K> right_bb = bb;
     right_bb.min_coords[coord] = root->p[coord];
-    if (!is_tree_valid_recursive(tree, root->right, depth+1, right_bb)) {
+    if (!is_tree_valid_recursive(tree, root->right.get(), depth+1, right_bb)) {
         KDTREE_DEBUG("REV:RIGHT");
         return false;
     }
@@ -694,7 +694,7 @@ inline bool is_tree_valid(tree_t<T, K, D> *tree) {
         bb.min_coords[i] = -tree->o->inf;
         bb.max_coords[i] = tree->o->inf;
     }
-    return is_tree_valid_recursive(tree, tree->root, 0, bb);
+    return is_tree_valid_recursive(tree, tree->root.get(), 0, bb);
 }
 
 } /* namespace kd_tree */
