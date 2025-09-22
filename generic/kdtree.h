@@ -344,6 +344,7 @@ inline node_t<T, K, D> *insert(tree_t<T, K, D> *tree,
     return insert_recursive<T, K, D>(tree->root, p, std::forward<D>(data), 0, tree);
 }
 
+/* TODO: Test */
 template <typename T, size_t K, typename D>
 inline void find_in_range_recursive(node_t<T, K, D> *root,
         const vec_t<T, K> &p, const T &range, std::vector<node_t<T, K, D> *> &result,
@@ -386,6 +387,7 @@ inline node_t<T, K, D> *find_exact_recursive(node_t<T, K, D> *root,
         return find_exact_recursive(root->right.get(), p, depth + 1, tree);
 }
 
+/* TODO: Test */
 template <typename T, size_t K, typename D>
 inline node_t<T, K, D> *find_nearest_recursive(node_t<T, K, D> *root,
         const vec_t<T, K> &p, size_t depth, tree_t<T, K, D> *tree, T min_dist_squared,

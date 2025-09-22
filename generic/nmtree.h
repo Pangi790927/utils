@@ -11,9 +11,6 @@
  * This data structure better be able to 
  */
 
-
-
-
 namespace nmtree {
 
 constexpr size_t ipow(size_t num, size_t pow) {

@@ -21,7 +21,11 @@
 #endif
 
 #define LOGGER_DEFAULT_MAXSZ	(16*1024*1024)
+
+#ifndef LOGGER_DEFAULT_NAME
 #define LOGGER_DEFAULT_NAME		"./logfile"
+#endif /* LOGGER_DEFAULT_NAME */
+
 #define LOGGER_DEFAULT_PERM		0666
 
 struct logger_spinlock_t {
