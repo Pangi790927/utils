@@ -5,10 +5,10 @@
 
 /*! @file
  * 
- * A NM-Tree is a structure that holds N dimensional points inside a tree where each node splits
- * the space in M^N equal partitions. Leaf nodes all hold exactly one point.
+ * A N-Tree is a structure that holds N dimensional points inside a tree where each node splits
+ * the space in 2^N equal partitions. Leaf nodes all hold exactly one point.
  * 
- * This data structure better be able to 
+ * (TODO: This file may need to be C compatible)
  */
 
 
