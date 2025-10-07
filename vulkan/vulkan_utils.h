@@ -23,12 +23,15 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
+#include <format>
+#include <fstream>
+#include <functional>
+#include <map>
+#include <memory>
+#include <set>
 #include <string>
 #include <vector>
-#include <set>
-#include <fstream>
-#include <vector>
-#include <map>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -41,6 +44,8 @@ do {                                                                            
         throw vku_err_t(vk_err);                                                                   \
     }                                                                                              \
 } while (false);
+
+namespace vku_utils {
 
 /* TODO:
     - Continue the tutorial: https://vulkan-tutorial.com/Uniform_buffers/Descriptor_layout_and_buffer
@@ -57,14 +62,6 @@ enum vku_shader_stage_t {
     VKU_SPIRV_GEOMETRY,
     VKU_SPIRV_TESS_CTRL,
     VKU_SPIRV_TESS_EVAL,
-};
-
-struct vku_opts_t {
-    std::vector<std::string> exts = { "VK_EXT_debug_utils" };
-    std::vector<std::string> layers = { "VK_LAYER_KHRONOS_validation" };
-    std::string window_name = "vk_window_name_placeholder";
-    int window_width = 800;
-    int window_height = 600;
 };
 
 struct vku_err_t;
@@ -121,11 +118,11 @@ inline void vku_submit_cmdbuff(
         std::vector<std::pair<vku_ref_p<vku_sem_t>, VkPipelineStageFlags>> wait_sems,
         vku_ref_p<vku_cmdbuff_t> cbuff,
         vku_ref_p<vku_fence_t> fence,
-        std::vector<vku_ref_p<vku_fence_t>> sig_sems);
+        std::vector<vku_ref_p<vku_sem_t>> sig_sems);
 
 inline void vku_present(
         vku_ref_p<vku_swapchain_t> swc,
-        std::vector<vku_ref_p<vku_swapchain_t>> wait_sems,
+        std::vector<vku_ref_p<vku_sem_t>> wait_sems,
         uint32_t img_idx);
 
 /* if no command buffer is provided, one will be allocated from the command pool */
@@ -134,7 +131,7 @@ inline void vku_copy_buff(
         vku_ref_p<vku_buffer_t> dst,
         vku_ref_p<vku_buffer_t> src,
         vk_device_size_t sz,
-        vku_ref_p<vku_cmdbuff_t> pcbuff = nullptr);
+        vku_ref_p<vku_cmdbuff_t> cbuff = nullptr);
 
 /* VKU Objects:
 ================================================================================================= */
@@ -165,7 +162,9 @@ public:
 };
 
 /*! This holds a reference to an instance of VkuT, instance that is initiated and held by this
- * library. All objects and the user will use the instance via this reference. */
+ * library. All objects and the user will use the instance via this reference. This is implemented
+ * here because it has a small footprint and I consider making it visible would made the library
+ * easier to use. */
 template <typename VkuT>
 class vku_ref_t : public vku_ref_base_t {
 protected:
@@ -176,11 +175,19 @@ protected:
         clean_deps(); /* we lazy clear the deps whenever we want to iterate over them */
         for (auto wd : _dependees)
             wd.lock()->uninit_all();
+        if (_obj->cbks && _obj->cbks->pre_uninit)
+            _obj->cbks->pre_uninit(_obj.get(), _obj->cbks->usr_ptr);
         VK_ASSERT(_obj->uninit());
+        if (_obj->cbks && _obj->cbks->post_uninit)
+            _obj->cbks->post_uninit(_obj.get(), _obj->cbks->usr_ptr);
     }
 
     void init_all() override {
+        if (_obj->cbks && _obj->cbks->pre_init)
+            _obj->cbks->pre_init(_obj.get(), _obj->cbks->usr_ptr);
         VK_ASSERT(_obj->init());
+        if (_obj->cbks && _obj->cbks->post_init)
+            _obj->cbks->post_init(_obj.get(), _obj->cbks->usr_ptr);
         for (auto wd : _dependees)
             wd.lock()->init_all();
     }
@@ -274,6 +281,24 @@ struct vku_ssbo_t {
 using vku_vertex2d_t = vku_vertex_p2n0c3t2_t;
 using vku_vertex3d_t = vku_vertex_p3n3c3t2_t;
 
+struct vku_object_cbks_t {
+    std::shared_ptr<void> usr_ptr;
+
+    /*! This function is called when an vku_ref_p calls the vku_object_t::init function, just before
+     * init is called, with the object and usr_ptr as arguments. This call is made if
+     * vku_object_t::cbks is not null and if vku_object_cbks_t::pre_init is also not null. */
+    std::function<void(vku_object_t *, std::shared_ptr<void> &)> pre_init;
+
+    /*! Same as above, called after init. */
+    std::function<void(vku_object_t *, std::shared_ptr<void> &)> post_init;
+
+    /*! Same as for init, but this time for the uninit function */
+    std::function<void(vku_object_t *, std::shared_ptr<void> &)> pre_uninit;
+
+    /*! Same as above, called after uninit. */
+    std::function<void(vku_object_t *, std::shared_ptr<void> &)> post_uninit;
+};
+
 /*! This is virtual only for init/uninit, which need to describe how the object should be
  * initialized once it is created and it's parameters are filled */
 struct vku_object_t {
@@ -284,31 +309,44 @@ struct vku_object_t {
 
     template <typename VkuT>
     friend struct vku_ref_t;
+
+    std::shared_ptr<vku_object_cbks_t> cbks;
 };
 
 struct vku_window_t : public vku_object_t {
-    GLFWwindow *_window = NULL; /* not sure if I want to protect this one */
+    GLFWwindow *_window = NULL; /*  not sure if I want to protect this one, or how to give that
+                                    protection exactly */
 
     /* Those can be modified at any time, but they need a rebuild to actually take effect (see
     vku_ref_t::rebuild()) */
-    std::string window_name = "vk_window_name_placeholder";
-    int width = 800;
-    int height = 600;
+    std::string window_name;
+    int width;
+    int height;
 
     virtual vk_result_t init() override;
     virtual vk_result_t uninit() override;
 
-    static vku_ref_p<vku_window_t> create(int width, int height, std::string name);
+    static vku_ref_p<vku_window_t> create(int width = 800, int height = 600,
+            std::string name = "vku_window_name_placeholder");
 };
 
 struct vku_instance_t : public vku_object_t {
     vk_instance_t                   vk_instance;
     vk_debug_utils_messenger_ext_t  vk_dbg_messenger;
-    
+
+    std::vector<std::string> extensions;
+    std::vector<std::string> layers;
+    std::string app_name;
+    std::string engine_name;
+
     virtual vk_result_t init() override;
     virtual vk_result_t uninit() override;
 
-    static vku_ref_p<vku_window_t> create(/* TODO: maybe give opts as arg? */ const vku_opts_t &opts);
+    static vku_ref_p<vku_instance_t> create(
+            const std::string app_name = "vku_app_name_placeholder",
+            const std::string engine_name = "vku_engine_name_placeholder",
+            const std::vector<std::string>& extensions = { "VK_EXT_debug_utils" },
+            const std::vector<std::string>& layers = { "VK_LAYER_KHRONOS_validation" });
 };
 
 /* VkSurfaceKHR */
@@ -317,7 +355,11 @@ struct vku_surface_t : public vku_object_t {
     vku_ref_p<vku_instance_t>   inst;
     vk_surface_khr_t            vk_surface = NULL;
 
-    vku_surface_t(vku_instance_t *inst);
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_surface_t> create(vku_ref_p<vku_window_t> window,
+            vku_ref_p<vku_instance_t> inst);
 };
 
 struct vku_device_t : public vku_object_t {
@@ -329,7 +371,10 @@ struct vku_device_t : public vku_object_t {
     std::set<int>               que_ids;
     vku_gpu_family_ids_t        que_fams;
 
-    vku_device_t(vku_surface_t *surf);
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_device_t> create(vku_ref_p<vku_surface_t> surf);
 };
 
 /* VkSwapchainKHR */
@@ -345,7 +390,10 @@ struct vku_swapchain_t : public vku_object_t {
     vku_ref_p<vku_image_t>          depth_imag;
     vku_ref_p<vku_img_view_t>       depth_view;
 
-    vku_swapchain_t(vku_device_t *dev);
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_swapchain_t> create(vku_ref_p<vku_device_t> dev);
 };
 
 struct vku_shader_t : public vku_object_t {
@@ -353,29 +401,42 @@ struct vku_shader_t : public vku_object_t {
     vk_shader_module_t      vk_shader;
     vku_shader_stage_t      type;
 
-    vku_shader_t(vku_device_t *dev, const char *path, vku_shader_stage_t type);
-    vku_shader_t(vku_device_t *dev, const vku_spirv_t& spirv);
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_shader_t> create(vku_ref_p<vku_device_t> dev, const vku_spirv_t& spirv);
+    static vku_ref_p<vku_shader_t> create(vku_ref_p<vku_device_t> dev, const char *path,
+            vku_shader_stage_t type);
 };
 
 struct vku_renderpass_t : public vku_object_t {
     vku_ref_p<vku_swapchain_t>  swc;
     vk_render_pass_t            vk_render_pass;
 
-    vku_renderpass_t(vku_swapchain_t *swc);
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_renderpass_t> create(vku_ref_p<vku_swapchain_t> swc);
 };
 
 struct vku_pipeline_t : public vku_object_t {
-    vku_ref_p<vku_renderpass_t> rp;
-    vk_pipeline_t               vk_pipeline;
-    vk_pipeline_layout_t        vk_layout;
-    vk_descriptor_set_layout_t  vk_desc_set_layout;
+    vku_ref_p<vku_renderpass_t>     rp;
+    vk_pipeline_t                   vk_pipeline;
+    vk_pipeline_layout_t            vk_layout;
+    vk_descriptor_set_layout_t      vk_desc_set_layout;
+    vku_ref_p<vku_binding_desc_t>   bd;
 
-    vku_pipeline_t(
-            const vku_opts_t &opts,
-            vku_renderpass_t *rp,
-            const std::vector<vku_shader_t *> &shaders,
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_pipeline_t> create(
+            int width,
+            int height,
+            vku_ref_p<vku_renderpass_t> rp,
+            const std::vector<vku_ref_p<vku_shader_t>> &shaders,
             vk_primitive_topology_t topology,
-            vku_vertex_input_desc_t vid, const vku_binding_desc_t& bd);
+            vku_vertex_input_desc_t vid,
+            vku_ref_p<vku_binding_desc_t> bd);
 };
 
 struct vku_compute_pipeline_t : public vku_object_t {
@@ -383,9 +444,15 @@ struct vku_compute_pipeline_t : public vku_object_t {
     vk_pipeline_t               vk_pipeline;
     vk_pipeline_layout_t        vk_layout;
     vk_descriptor_set_layout_t  vk_desc_set_layout;
+    vku_ref_p<vku_binding_desc_t>   bd;
 
-    vku_compute_pipeline_t(const vku_opts_t &opts, vku_device_t *dev,
-            vku_shader_t *shader, const vku_binding_desc_t& bd);
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_compute_pipeline_t> create(
+            vku_ref_p<vku_device_t> dev,
+            vku_ref_p<vku_shader_t> shader,
+            vku_ref_p<vku_binding_desc_t> bd);
 };
 
 /*engine_create_framebuffs*/
@@ -393,65 +460,95 @@ struct vku_framebuffs_t : public vku_object_t {
     vku_ref_p<vku_renderpass_t>     rp;
     std::vector<vk_framebuffer_t>   vk_fbuffs;
 
-    vku_framebuffs_t(vku_renderpass_t *rp);
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_framebuffs_t> create(vku_ref_p<vku_renderpass_t> rp);
 };
 
 /*engine_create_cmdpool*/
 struct vku_cmdpool_t : public vku_object_t {
     vku_ref_p<vku_device_t> dev;
     vk_command_pool_t       vk_pool;
-    
-    vku_cmdpool_t(vku_device_t *dev);
+
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_cmdpool_t> create(vku_ref_p<vku_device_t> dev);
 };
 
 struct vku_cmdbuff_t : public vku_object_t {
     vku_ref_p<vku_cmdpool_t>    cp;
     vk_command_buffer_t         vk_buff;
+
     bool host_free;
 
-    vku_cmdbuff_t(vku_cmdpool_t *cp, bool host_free = false);
+    /* TODO: maybe add some callbacks: for example on_init. As such those objects would call those
+    callbacks when it so happens that they need rebuilding. */
+
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_cmdbuff_t> create(vku_ref_p<vku_cmdpool_t> cp, bool host_free = false);
 
     void begin(vk_command_buffer_usage_flags_t flags);
-    void begin_rpass(vku_framebuffs_t *fbs, uint32_t img_idx);
+    void begin_rpass(vku_ref_p<vku_framebuffs_t> fbs, uint32_t img_idx);
     void bind_vert_buffs(uint32_t first_bind,
-            std::vector<std::pair<vku_buffer_t *, vk_device_size_t>> buffs);
+            std::vector<std::pair<vku_ref_p<vku_buffer_t>, vk_device_size_t>> buffs);
     void bind_desc_set(vk_pipeline_bind_point_t bind_point, vk_pipeline_layout_t pipeline_alyout,
-            vku_desc_set_t *desc_set);
-    void bind_idx_buff(vku_buffer_t *ibuff, uint64_t off, vk_index_type_t idx_type);
-    void draw(vku_pipeline_t *pl, uint64_t vert_cnt);
-    void draw_idx(vku_pipeline_t *pl, uint64_t vert_cnt);
+            vku_ref_p<vku_desc_set_t> desc_set);
+    void bind_idx_buff(vku_ref_p<vku_buffer_t> ibuff, uint64_t off, vk_index_type_t idx_type);
+    void draw(vku_ref_p<vku_pipeline_t> pl, uint64_t vert_cnt);
+    void draw_idx(vku_ref_p<vku_pipeline_t> pl, uint64_t vert_cnt);
     void end_rpass();
     void end();
 
     void reset();
 
-    void bind_compute(vku_compute_pipeline_t *cpl);
+    void bind_compute(vku_ref_p<vku_compute_pipeline_t> cpl);
     void dispatch_compute(uint32_t x, uint32_t y = 1, uint32_t z = 1);
 };
 
 struct vku_sem_t : public vku_object_t {
     vku_ref_p<vku_device_t> dev;
     vk_semaphore_t          vk_sem;
-    
-    vku_sem_t(vku_device_t *dev);
-    ~vku_sem_t();
+
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_sem_t> create(vku_ref_p<vku_device_t> dev);
 };
 
 struct vku_fence_t : public vku_object_t {
     vku_ref_p<vku_device_t> dev;
     vk_fence_t              vk_fence;
 
-    vku_fence_t(vku_device_t *dev, VkFenceCreateFlags flags = 0);
+    VkFenceCreateFlags flags;
+
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_fence_t> create(
+            vku_ref_p<vku_device_t> dev,
+            VkFenceCreateFlags flags = 0);
 };
 
 struct vku_buffer_t : public vku_object_t {
-    vku_ref_p<vku_device_t> dev;
-    vk_buffer_t             vk_buff;
-    vk_device_memory_t      vk_mem;
-    void                    *map_ptr = nullptr;
-    size_t                  size;
+    vku_ref_p<vku_device_t>     dev;
+    vk_buffer_t                 vk_buff;
+    vk_device_memory_t          vk_mem;
+    void                        *map_ptr = nullptr;
+    size_t                      size;
 
-    vku_buffer_t(vku_device_t *dev,
+    vk_buffer_usage_flags_t     usage;
+    vk_sharing_mode_t           sh_mode;
+    vk_memory_property_flags_t  mem_flags;
+
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_buffer_t> create(
+            vku_ref_p<vku_device_t> dev,
             size_t size,
             vk_buffer_usage_flags_t usage,
             vk_sharing_mode_t sh_mode,
@@ -469,159 +566,147 @@ struct vku_image_t : public vku_object_t {
     uint32_t width;
     uint32_t height;
     vk_format_t fmt;
+    vk_image_usage_flags_t usage;
 
-    vku_image_t(vku_device_t *dev, uint32_t width, uint32_t height, vk_format_t fmt,
-            vk_image_usage_flags_t usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-            VK_IMAGE_USAGE_SAMPLED_BIT);
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_image_t> create(
+            vku_ref_p<vku_device_t> dev,
+            uint32_t width,
+            uint32_t height,
+            vk_format_t fmt,
+            vk_image_usage_flags_t usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                                           | VK_IMAGE_USAGE_SAMPLED_BIT);
 
     /* if no command buffer is provided, one will be allocated from the command pool */
-    void transition_layout(vku_cmdpool_t *cp,
-            vk_image_layout_t old_layout, vk_image_layout_t new_layout,
-            vku_cmdbuff_t *pcbuff = nullptr);
+    void transition_layout(
+            vku_ref_p<vku_cmdpool_t> cp,
+            vk_image_layout_t old_layout,
+            vk_image_layout_t new_layout,
+            vku_ref_p<vku_cmdbuff_t> cbuff = nullptr);
 
     /* if no command buffer is provided, one will be allocated from the command pool */
-    void set_data(vku_cmdpool_t *cp, void *data, uint32_t sz, vku_cmdbuff_t *pcbuff = nullptr);
+    void set_data(
+            vku_ref_p<vku_cmdpool_t> cp,
+            void *data,
+            uint32_t sz,
+            vku_ref_p<vku_cmdbuff_t> cbuff = nullptr);
 };
 
 struct vku_img_view_t : public vku_object_t {
     vk_image_view_t         vk_view;
     vku_ref_p<vku_image_t>  img;
+    vk_image_aspect_flags_t aspect_mask;
 
-    vku_img_view_t(vku_image_t *img, vk_image_aspect_flags_t aspect_mask);
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_img_view_t> create(
+            vku_ref_p<vku_image_t> img,
+            vk_image_aspect_flags_t aspect_mask);
 };
 
 struct vku_img_sampl_t : public vku_object_t {
     vku_ref_p<vku_device_t> dev;
     vk_sampler_t            vk_sampler;
 
-    vku_img_sampl_t(vku_device_t *dev, vk_filter_t filter = VK_FILTER_LINEAR);
+    vk_filter_t filter;
+
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_img_sampl_t> create(
+            vku_ref_p<vku_device_t> dev,
+            vk_filter_t filter = VK_FILTER_LINEAR);
 
     static vk_descriptor_set_layout_binding_t get_desc_set(uint32_t binding,
             vk_shader_stage_flags_t stage);
 };
 
 struct vku_desc_pool_t : public vku_object_t {
-    vku_ref_p<vku_device_t> dev;
-    vk_descriptor_pool_t    vk_descpool;
+    vku_ref_p<vku_device_t>         dev;
+    vk_descriptor_pool_t            vk_descpool;
+    vku_ref_p<vku_binding_desc_t>   bd;
 
-    vku_desc_pool_t(vku_device_t *dev, const vku_binding_desc_t& binds, uint32_t cnt);
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_desc_pool_t> create(
+            vku_ref_p<vku_device_t> dev,
+            vku_ref_p<vku_binding_desc_t> binds,
+            uint32_t cnt);
 };
 
 struct vku_desc_set_t : public vku_object_t {
-    vku_ref_p<vku_desc_pool_t>  dp;
-    vk_descriptor_set_t         vk_desc_set;
+    vku_ref_p<vku_desc_pool_t>      dp;
+    vk_descriptor_set_t             vk_desc_set;
+    vk_descriptor_set_layout_t      layout;
+    vku_ref_p<vku_binding_desc_t>   bd;
 
-    /* TODO: should the desc_pool be based on pipeline and recreated with the pipeline? And
-    on the buffer that uses it? */
-    vku_desc_set_t(vku_desc_pool_t *dp, vk_descriptor_set_layout_t layout,
-            const vku_binding_desc_t& binds);
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
+
+    static vku_ref_p<vku_desc_set_t> create(
+            vku_ref_p<vku_desc_pool_t> dp,
+            vk_descriptor_set_layout_t layout,
+            vku_ref_p<vku_binding_desc_t> bd);
 };
 
-struct vku_binding_desc_t {
-    struct binding_desc_t {
+/* TODO: this cannot work: there is a problem with the underlying type, more exactly, I can't
+polimorfically morph references around, I need a fix for this */
+struct vku_binding_desc_t : public vku_object_t {
+    struct binding_desc_t : public vku_object_t {
         vk_descriptor_set_layout_binding_t desc;
 
-        virtual vk_result_t init() = 0;
         virtual ~binding_desc_t() {}
+
+        virtual vk_result_t init() = 0;
+        virtual vk_result_t uninit() override { return VK_SUCCESS; };
 
         virtual vk_write_descriptor_set_t get_write() const = 0;
     };
 
     struct buff_binding_t : public binding_desc_t {
-        vku_ref_p<vku_buffer_t>     buff;
-        vk_descriptor_buffer_info_t desc_buff_info;
+        vk_descriptor_buffer_info_t         desc_buff_info;
 
-        static vku_ref_p<binding_desc_t> make_bind(vk_descriptor_set_layout_binding_t desc,
-                vku_ref_p<vku_buffer_t> buff)
-        {
-            // auto ptr = new buff_binding_t;
-            ptr->desc = desc;
-            ptr->buff = buff;
-            if (buff) {
-                ptr->desc_buff_info = vk_descriptor_buffer_info_t {
-                    .buffer = buff->vk_buff,
-                    .offset = 0,
-                    .range = buff->size
-                };
-            }
-            /* TODO: */
-            return vku_ref_p<binding_desc_t>{ptr};
-        }
+        vku_ref_p<vku_buffer_t>             buff;
 
-        vk_write_descriptor_set_t get_write() const {
-            vk_write_descriptor_set_t desc_write{
-                .dst_set = 0, /* will be filled later */
-                .dst_binding = desc.binding,
-                .dst_array_element = 0,
-                .descriptor_count = 1,
-                .descriptor_type = desc.descriptor_type,
-                .p_image_info = nullptr,
-                .p_buffer_info = &desc_buff_info,
-                .p_texel_buffer_view = nullptr,
-            };
+        virtual vk_result_t init() override;
 
-            return desc_write;
-        }
+        static vku_ref_p<buff_binding_t> create(
+                vk_descriptor_set_layout_binding_t desc,
+                vku_ref_p<vku_buffer_t> buff);
+
+        virtual vk_write_descriptor_set_t get_write() const override;
     };
 
     struct sampl_binding_t : public binding_desc_t {
-        vku_ref_p<vku_img_view_t>   view;
-        vku_ref_p<vku_img_sampl_t>  sampl;
-        vk_descriptor_image_info_t  imag_info;
+        vk_descriptor_image_info_t          imag_info;
 
-        static vku_ref_p<binding_desc_t> make_bind(vk_descriptor_set_layout_binding_t desc,
-                vku_ref_p<vku_img_view_t> view, vku_ref_p<vku_img_sampl_t> sampl)
-        {
-            // auto ptr = new sampl_binding_t;
-            ptr->desc = desc;
-            ptr->view = view;
-            ptr->sampl = sampl;
-            if (view && sampl) {
-                ptr->imag_info = vk_descriptor_image_info_t {
-                    .sampler = sampl->vk_sampler,
-                    .image_view = view->vk_view,
-                    .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                };
-            }
-            /* TODO: */
-            return vku_ref_p<binding_desc_t>(ptr);
-        }
+        vku_ref_p<vku_img_view_t>           view;
+        vku_ref_p<vku_img_sampl_t>          sampl;
 
-        vk_write_descriptor_set_t get_write() const {
-            vk_write_descriptor_set_t desc_write{
-                .dst_set = 0, /* will be filled later */
-                .dst_binding = desc.binding,
-                .dst_array_element = 0,
-                .descriptor_count = 1,
-                .descriptor_type = desc.descriptor_type,
-                .p_image_info = &imag_info,
-                .p_buffer_info = nullptr,
-                .p_texel_buffer_view = nullptr,
-            };
+        virtual vk_result_t init() override;
 
-            return desc_write;
-        }
+        static vku_ref_p<sampl_binding_t> create(
+                vk_descriptor_set_layout_binding_t desc,
+                vku_ref_p<vku_img_view_t> view,
+                vku_ref_p<vku_img_sampl_t> sampl);
+
+        virtual vk_write_descriptor_set_t get_write() const override;
     };
 
-    std::vector<vk_descriptor_set_layout_binding_t> get_descriptors() const {
-        std::vector<vk_descriptor_set_layout_binding_t> ret;
-        for (auto &b : binds)
-            ret.push_back(b->desc);
-        return ret;
-    }
+    std::vector<vku_ref_p<binding_desc_t>> binds;
 
-    std::vector<vk_write_descriptor_set_t> get_writes() const {
-        std::vector<vk_write_descriptor_set_t> ret;
+    virtual vk_result_t init() override;
+    virtual vk_result_t uninit() override;
 
-        for (auto &b : binds)
-            ret.push_back(b->get_write());
+    static vku_ref_p<vku_binding_desc_t> create(std::vector<vku_ref_p<binding_desc_t>> binds);
 
-        return ret;
-    }
-
-    std::vector<std::shared_ptr<binding_desc_t>> binds;
+    std::vector<vk_write_descriptor_set_t> get_writes() const;
+    std::vector<vk_descriptor_set_layout_binding_t> get_descriptors() const;
 };
-
 
 /* Internal:
 ================================================================================================= */
@@ -643,7 +728,7 @@ inline void vku_destroy_dbg_messenger(
         vk_debug_utils_messenger_ext_t dbg_msg,
         const vk_allocation_callbacks_t* alloc);
 
-static VKAPI_ATTR vk_bool32_t VKAPI_CALL vku_dbg_cbk(
+inline VKAPI_ATTR vk_bool32_t VKAPI_CALL vku_dbg_cbk(
         vk_debug_utils_message_severity_flag_bits_ext_t     severity,
         vk_debug_utils_message_type_flags_ext_t             msg_type,
         const VkDebugUtilsMessengerCallbackDataEXT* _data,
@@ -826,10 +911,10 @@ inline vku_ref_p<vku_window_t> vku_window_t::create(int width, int height, std::
     return ret;
 }
 
-/* vku_instance_t (WIP)
+/* vku_instance_t
 ================================================================================================= */
 
-inline vk_result_t vku_window_t::init() {
+inline vk_result_t vku_instance_t::init() {
     FnScope err_scope;
 
     /* get version: */
@@ -847,22 +932,22 @@ inline vk_result_t vku_window_t::init() {
         DBG("Failed to get required extensions for glfw: %s", vku_glfw_err().c_str());
         throw vku_err_t(VK_ERROR_UNKNOWN);
     }
-    std::vector<const char*> exts(glfw_exts, glfw_exts + glfw_ext_count);
-    for (auto &e : opts.exts)
-        exts.push_back(e.c_str());
-    for (auto e : exts)
+    std::vector<const char*> exts_c(glfw_exts, glfw_exts + glfw_ext_count);
+    for (auto &e : this->extensions)
+        exts_c.push_back(e.c_str());
+    for (auto e : exts_c)
         DBG("Required extension: %s", e);
 
     /* get supported extensions */
     uint32_t ext_cnt = 0;
     VK_ASSERT(vk_enumerate_instance_extension_properties(NULL, &ext_cnt, NULL));
-    std::vector<vk_extension_properties_t> extensions(ext_cnt);
-    VK_ASSERT(vk_enumerate_instance_extension_properties(NULL, &ext_cnt, extensions.data()));
+    std::vector<vk_extension_properties_t> exts(ext_cnt);
+    VK_ASSERT(vk_enumerate_instance_extension_properties(NULL, &ext_cnt, exts.data()));
 
     /* check for compatibility */
-    for (auto req_e : exts) {
+    for (auto req_e : exts_c) {
         bool found = false;
-        for (auto sup_e : extensions)
+        for (auto sup_e : exts)
             if (!strcmp(req_e, sup_e.extension_name))
                 found = true;
         if (!found) {
@@ -872,10 +957,10 @@ inline vk_result_t vku_window_t::init() {
     }
 
     /* set required layers */
-    std::vector<const char*> layers;
-    for (auto &l : opts.layers)
-        layers.push_back(l.c_str());
-    for (auto l : layers)
+    std::vector<const char*> layers_c;
+    for (auto &l : this->layers)
+        layers_c.push_back(l.c_str());
+    for (auto l : layers_c)
         DBG("Required layer: %s", l);
 
     /* get supported layers */
@@ -885,7 +970,7 @@ inline vk_result_t vku_window_t::init() {
     VK_ASSERT(vk_enumerate_instance_layer_properties(&layer_cnt, sup_layers.data()));
 
     /* check for compatibility */
-    for (auto req_l : layers) {
+    for (auto req_l : layers_c) {
         bool found = false;
         for (auto sup_l : sup_layers)
             if (!strcmp(req_l, sup_l.layer_name))
@@ -897,19 +982,19 @@ inline vk_result_t vku_window_t::init() {
     }
 
     vk_application_info_t vk_app_info = {
-        .p_application_name = opts.window_name.c_str(),
+        .p_application_name = app_name.c_str(),
         .application_version = ver,
-        .p_engine_name = opts.window_name.c_str(),
+        .p_engine_name = engine_name.c_str(),
         .engine_version = ver,
         .api_version = ver,
     };
 
     vk_instance_create_info_t inst_info = {
         .p_application_info = &vk_app_info,
-        .enabled_layer_count = (uint32_t)layers.size(),
-        .pp_enabled_layer_names = layers.data(),
-        .enabled_extension_count = (uint32_t)exts.size(),
-        .pp_enabled_extension_names = exts.data(),
+        .enabled_layer_count = (uint32_t)layers_c.size(),
+        .pp_enabled_layer_names = layers_c.data(),
+        .enabled_extension_count = (uint32_t)exts_c.size(),
+        .pp_enabled_extension_names = exts_c.data(),
     };
 
     /* create instance */
@@ -941,677 +1026,785 @@ inline vk_result_t vku_window_t::init() {
     DBG("Created vulkan messenger!");
 }
 
-inline vk_result_t vku_window_t::uninit() {
+inline vk_result_t vku_instance_t::uninit() {
     vku_destroy_dbg_messenger(vk_instance, vk_dbg_messenger, NULL);
     vk_destroy_instance(vk_instance, NULL);
 }
 
 
-inline vku_ref_p<vku_window_t> vku_window_t::create(/* TODO: maybe give opts as arg? */ const vku_opts_t &opts)
+inline vku_ref_p<vku_instance_t> vku_instance_t::create(
+        const std::string app_name,
+        const std::string engine_name,
+        const std::vector<std::string>& extensions,
+        const std::vector<std::string>& layers)
 {
+    auto ret = vku_ref_t<vku_instance_t>::create_obj_ref(std::make_unique<vku_instance_t>());
 
+    ret->get()->app_name = app_name;
+    ret->get()->engine_name = engine_name;
+    ret->get()->extensions = extensions;
+    ret->get()->layers = layers;
+
+    VK_ASSERT(ret->get()->init());
+    return ret;
 }
 
 /* vku_surface_t (TODO)
 ================================================================================================= */
 
-inline vku_surface_t::vku_surface_t(vku_instance_t *inst) : inst(inst) {
-    if (glfwCreateWindowSurface(inst->vk_instance, window, NULL, &vk_surface) != VK_SUCCESS) {
-        DBG("Failed to get vk_surface: %s", vku_glfw_err().c_str());
-        throw vku_err_t(VK_ERROR_UNKNOWN);
-    }
-    inst->add_child(this);
+inline vk_result_t vku_surface_t::init() {
 }
-inline vku_surface_t::~vku_surface_t() {
-    cleanup();
-    inst->rm_child(this);
-    vk_destroy_surface_khr(inst->vk_instance, vk_surface, NULL);
+inline vk_result_t vku_surface_t::uninit() {
 }
+inline vku_ref_p<vku_surface_t> vku_surface_t::create(
+        vku_ref_p<vku_window_t> window,
+        vku_ref_p<vku_instance_t> inst)
+{
+}
+
+// inline vku_surface_t::vku_surface_t(vku_instance_t *inst) : inst(inst) {
+//     if (glfwCreateWindowSurface(inst->vk_instance, window, NULL, &vk_surface) != VK_SUCCESS) {
+//         DBG("Failed to get vk_surface: %s", vku_glfw_err().c_str());
+//         throw vku_err_t(VK_ERROR_UNKNOWN);
+//     }
+//     inst->add_child(this);
+// }
+// inline vku_surface_t::~vku_surface_t() {
+//     cleanup();
+//     inst->rm_child(this);
+//     vk_destroy_surface_khr(inst->vk_instance, vk_surface, NULL);
+// }
 
 /* vku_device_t (TODO)
 ================================================================================================= */
 
-inline vku_device_t::vku_device_t(vku_surface_t *surf) : surf(surf) {
-    uint32_t dev_cnt = 0;
-    VK_ASSERT(vk_enumerate_physical_devices(surf->inst->vk_instance, &dev_cnt, NULL));
-
-    if (dev_cnt == 0) {
-        DBG("Failed to find a GPU with Vulkan support!")
-        throw vku_err_t(VK_ERROR_UNKNOWN);
-    }
-
-    std::vector<vk_physical_device_t> devices(dev_cnt);
-    VK_ASSERT(vk_enumerate_physical_devices(
-            surf->inst->vk_instance, &dev_cnt, devices.data()));
-
-    vk_phy_dev = VK_NULL_HANDLE;
-    int max_score = -1;
-    for (const auto &dev : devices) {
-        int score = vku_score_phydev(dev, surf->vk_surface);
-        if (score < 0)
-            continue;
-        if (score > max_score) {
-            max_score = score;
-            vk_phy_dev = dev;
-        }
-    }
-    if (max_score < 0) {
-        DBG("Failed to get a suitable physical device");
-        throw vku_err_t(VK_ERROR_UNKNOWN);
-    }
-
-    que_fams = vku_find_queue_families(vk_phy_dev, surf->vk_surface);
-    que_ids = { que_fams.graphics_id, que_fams.present_id };
-    std::vector<vk_device_queue_create_info_t> dev_ques;
-
-    float queue_prio = 1.0f;
-    for (auto id : que_ids)
-        dev_ques.push_back({
-            .flags = 0,
-            .queue_family_index = (uint32_t)id,
-            .queue_count = 1,
-            .p_queue_priorities = &queue_prio
-        });
-
-    vk_physical_device_features_t dev_feat{};
-    vk_get_physical_device_features(vk_phy_dev, &dev_feat);
-
-    std::vector<const char*> dev_exts = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-    std::vector<const char*> dev_layers = { "VK_LAYER_KHRONOS_validation" };
-    dev_feat.sampler_anisotropy = VK_TRUE;
-
-    vk_device_create_info_t dev_info {
-        .queue_create_info_count = (uint32_t)dev_ques.size(),
-        .p_queue_create_infos = dev_ques.data(),
-        .enabled_layer_count = (uint32_t)dev_layers.size(),
-        .pp_enabled_layer_names = dev_layers.data(),
-        .enabled_extension_count = (uint32_t)dev_exts.size(),
-        .pp_enabled_extension_names = dev_exts.data(),
-        .p_enabled_features = &dev_feat,
-    };
-
-    VK_ASSERT(vk_create_device(vk_phy_dev, &dev_info, NULL, &vk_dev));
-
-    vk_get_device_queue(vk_dev, que_fams.graphics_id, 0, &vk_graphics_que);
-    vk_get_device_queue(vk_dev, que_fams.present_id, 0, &vk_present_que);
-
-    DBG("Created Vulkan Logical Device");
-    surf->add_child(this);
+inline vk_result_t vku_device_t::init() {
+}
+inline vk_result_t vku_device_t::uninit() {
+}
+inline vku_ref_p<vku_device_t> vku_device_t::create(vku_ref_p<vku_surface_t> surf) {
 }
 
-inline vku_device_t::~vku_device_t() {
-    cleanup();
-    surf->rm_child(this);
-    vk_destroy_device(vk_dev, NULL);
-}
+// inline vku_device_t::vku_device_t(vku_surface_t *surf) : surf(surf) {
+//     uint32_t dev_cnt = 0;
+//     VK_ASSERT(vk_enumerate_physical_devices(surf->inst->vk_instance, &dev_cnt, NULL));
+
+//     if (dev_cnt == 0) {
+//         DBG("Failed to find a GPU with Vulkan support!")
+//         throw vku_err_t(VK_ERROR_UNKNOWN);
+//     }
+
+//     std::vector<vk_physical_device_t> devices(dev_cnt);
+//     VK_ASSERT(vk_enumerate_physical_devices(
+//             surf->inst->vk_instance, &dev_cnt, devices.data()));
+
+//     vk_phy_dev = VK_NULL_HANDLE;
+//     int max_score = -1;
+//     for (const auto &dev : devices) {
+//         int score = vku_score_phydev(dev, surf->vk_surface);
+//         if (score < 0)
+//             continue;
+//         if (score > max_score) {
+//             max_score = score;
+//             vk_phy_dev = dev;
+//         }
+//     }
+//     if (max_score < 0) {
+//         DBG("Failed to get a suitable physical device");
+//         throw vku_err_t(VK_ERROR_UNKNOWN);
+//     }
+
+//     que_fams = vku_find_queue_families(vk_phy_dev, surf->vk_surface);
+//     que_ids = { que_fams.graphics_id, que_fams.present_id };
+//     std::vector<vk_device_queue_create_info_t> dev_ques;
+
+//     float queue_prio = 1.0f;
+//     for (auto id : que_ids)
+//         dev_ques.push_back({
+//             .flags = 0,
+//             .queue_family_index = (uint32_t)id,
+//             .queue_count = 1,
+//             .p_queue_priorities = &queue_prio
+//         });
+
+//     vk_physical_device_features_t dev_feat{};
+//     vk_get_physical_device_features(vk_phy_dev, &dev_feat);
+
+//     std::vector<const char*> dev_exts = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+//     std::vector<const char*> dev_layers = { "VK_LAYER_KHRONOS_validation" };
+//     dev_feat.sampler_anisotropy = VK_TRUE;
+
+//     vk_device_create_info_t dev_info {
+//         .queue_create_info_count = (uint32_t)dev_ques.size(),
+//         .p_queue_create_infos = dev_ques.data(),
+//         .enabled_layer_count = (uint32_t)dev_layers.size(),
+//         .pp_enabled_layer_names = dev_layers.data(),
+//         .enabled_extension_count = (uint32_t)dev_exts.size(),
+//         .pp_enabled_extension_names = dev_exts.data(),
+//         .p_enabled_features = &dev_feat,
+//     };
+
+//     VK_ASSERT(vk_create_device(vk_phy_dev, &dev_info, NULL, &vk_dev));
+
+//     vk_get_device_queue(vk_dev, que_fams.graphics_id, 0, &vk_graphics_que);
+//     vk_get_device_queue(vk_dev, que_fams.present_id, 0, &vk_present_que);
+
+//     DBG("Created Vulkan Logical Device");
+//     surf->add_child(this);
+// }
+
+// inline vku_device_t::~vku_device_t() {
+//     cleanup();
+//     surf->rm_child(this);
+//     vk_destroy_device(vk_dev, NULL);
+// }
 
 /* vku_swapchain_t (TODO)
 ================================================================================================= */
 
-inline vku_swapchain_t::vku_swapchain_t(vku_device_t *dev) : dev(dev) {
-    FnScope err_scope;
-    auto sc_detail = vku_get_swapchain_details(dev->vk_phy_dev, dev->surf->vk_surface);
-
-    /* choose format */
-    vk_surf_fmt = sc_detail.formats[0];
-    for (const auto &f : sc_detail.formats)
-        if (f.format == VK_FORMAT_B8G8R8A8_SRGB && f.color_space ==
-                VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
-        {
-            vk_surf_fmt = f;
-        }
-
-    /* choose presentation mode */
-    vk_present_mode = VK_PRESENT_MODE_FIFO_KHR;
-    for (const auto& pm : sc_detail.present_modes)
-        if (pm == VK_PRESENT_MODE_MAILBOX_KHR)
-            vk_present_mode = pm;
-
-    /* choose swap extent */
-    vk_extent = vku_choose_extent(window, sc_detail.capab);
-
-    /* choose image count */
-    uint32_t img_cnt = sc_detail.capab.min_image_count + 1;
-    if (sc_detail.capab.max_image_count > 0 && img_cnt > sc_detail.capab.max_image_count)
-        img_cnt = sc_detail.capab.max_image_count;
-
-    std::vector<uint32_t> qf_arr = { dev->que_ids.begin(), dev->que_ids.end() };
-
-    vk_swapchain_create_info_khr_t sc_info = {
-        .surface = dev->surf->vk_surface,
-        .min_image_count = img_cnt,
-        .image_format = vk_surf_fmt.format,
-        .image_color_space = vk_surf_fmt.color_space,
-        .image_extent = vk_extent,
-        .image_array_layers = 1,
-        .image_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-        .image_sharing_mode       = qf_arr.size() > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
-        .queue_family_index_count = qf_arr.size() > 1 ? 2u : 0u,
-        .p_queue_family_indices   = qf_arr.size() > 1 ? qf_arr.data() : NULL,
-        .pre_transform = sc_detail.capab.current_transform,
-        .composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-        .present_mode = vk_present_mode,
-        .clipped = VK_TRUE,
-        .old_swapchain = VK_NULL_HANDLE,
-    };
-
-    VK_ASSERT(vk_create_swapchain_khr(dev->vk_dev, &sc_info, NULL, &vk_swapchain));
-    err_scope([&]{ vk_destroy_swapchain_khr(dev->vk_dev, vk_swapchain, NULL); });
-
-    img_cnt = 0;
-    VK_ASSERT(vk_get_swapchain_images_khr(dev->vk_dev, vk_swapchain, &img_cnt, NULL));
-    vk_sc_images.resize(img_cnt);
-    VK_ASSERT(vk_get_swapchain_images_khr(dev->vk_dev, vk_swapchain, &img_cnt,
-            vk_sc_images.data()));
-
-    DBG("Created Swapchain!");
-
-    /* Create Swapchain Image Views
-    ============================================================================================= */
-
-    vk_sc_image_views.resize(vk_sc_images.size());
-
-    for (int i = 0; i < vk_sc_images.size(); i++) {
-        vk_image_view_create_info_t iv_info = {
-            .image = vk_sc_images[i],
-            .view_type = VK_IMAGE_VIEW_TYPE_2D,
-            .format = vk_surf_fmt.format,
-            .components = {
-                .r = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .a = VK_COMPONENT_SWIZZLE_IDENTITY,
-            },
-            .subresource_range = {
-                .aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .base_mip_level = 0,
-                .level_count = 1,
-                .base_array_layer = 0,
-                .layer_count = 1,
-            },
-        };
-        VK_ASSERT(vk_create_image_view(dev->vk_dev, &iv_info, NULL, &vk_sc_image_views[i]));
-        err_scope([i, &dev, this]{ 
-            vk_destroy_image_view(dev->vk_dev, vk_sc_image_views[i], NULL); });
-    }
-
-    /* TODO: this is problematic, here depth_imag is dependent on dev and not on swapchain, so
-    if we delete dev we have a double free */
-    depth_imag = new vku_image_t(dev, vk_extent.width, vk_extent.height, VK_FORMAT_D32_SFLOAT,
-            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
-    depth_view = new vku_img_view_t(depth_imag, VK_IMAGE_ASPECT_DEPTH_BIT);
-
-    err_scope.disable();
-    dev->add_child(this);
+inline vk_result_t vku_swapchain_t::init() {
+}
+inline vk_result_t vku_swapchain_t::uninit() {
+}
+inline vku_ref_p<vku_swapchain_t> vku_swapchain_t::create(vku_ref_p<vku_device_t> dev) {
 }
 
-inline vku_swapchain_t::~vku_swapchain_t() {
-    delete depth_imag;
-    cleanup();
-    dev->rm_child(this);
-    for (auto &iv : vk_sc_image_views)
-        vk_destroy_image_view(dev->vk_dev, iv, NULL);
-    vk_destroy_swapchain_khr(dev->vk_dev, vk_swapchain, NULL);
-}
+// inline vku_swapchain_t::vku_swapchain_t(vku_device_t *dev) : dev(dev) {
+//     FnScope err_scope;
+//     auto sc_detail = vku_get_swapchain_details(dev->vk_phy_dev, dev->surf->vk_surface);
+
+//     /* choose format */
+//     vk_surf_fmt = sc_detail.formats[0];
+//     for (const auto &f : sc_detail.formats)
+//         if (f.format == VK_FORMAT_B8G8R8A8_SRGB && f.color_space ==
+//                 VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+//         {
+//             vk_surf_fmt = f;
+//         }
+
+//     /* choose presentation mode */
+//     vk_present_mode = VK_PRESENT_MODE_FIFO_KHR;
+//     for (const auto& pm : sc_detail.present_modes)
+//         if (pm == VK_PRESENT_MODE_MAILBOX_KHR)
+//             vk_present_mode = pm;
+
+//     /* choose swap extent */
+//     vk_extent = vku_choose_extent(window, sc_detail.capab);
+
+//     /* choose image count */
+//     uint32_t img_cnt = sc_detail.capab.min_image_count + 1;
+//     if (sc_detail.capab.max_image_count > 0 && img_cnt > sc_detail.capab.max_image_count)
+//         img_cnt = sc_detail.capab.max_image_count;
+
+//     std::vector<uint32_t> qf_arr = { dev->que_ids.begin(), dev->que_ids.end() };
+
+//     vk_swapchain_create_info_khr_t sc_info = {
+//         .surface = dev->surf->vk_surface,
+//         .min_image_count = img_cnt,
+//         .image_format = vk_surf_fmt.format,
+//         .image_color_space = vk_surf_fmt.color_space,
+//         .image_extent = vk_extent,
+//         .image_array_layers = 1,
+//         .image_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+//         .image_sharing_mode       = qf_arr.size() > 1 ? VK_SHARING_MODE_CONCURRENT
+//                                                       : VK_SHARING_MODE_EXCLUSIVE,
+//         .queue_family_index_count = qf_arr.size() > 1 ? 2u : 0u,
+//         .p_queue_family_indices   = qf_arr.size() > 1 ? qf_arr.data() : NULL,
+//         .pre_transform = sc_detail.capab.current_transform,
+//         .composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+//         .present_mode = vk_present_mode,
+//         .clipped = VK_TRUE,
+//         .old_swapchain = VK_NULL_HANDLE,
+//     };
+
+//     VK_ASSERT(vk_create_swapchain_khr(dev->vk_dev, &sc_info, NULL, &vk_swapchain));
+//     err_scope([&]{ vk_destroy_swapchain_khr(dev->vk_dev, vk_swapchain, NULL); });
+
+//     img_cnt = 0;
+//     VK_ASSERT(vk_get_swapchain_images_khr(dev->vk_dev, vk_swapchain, &img_cnt, NULL));
+//     vk_sc_images.resize(img_cnt);
+//     VK_ASSERT(vk_get_swapchain_images_khr(dev->vk_dev, vk_swapchain, &img_cnt,
+//             vk_sc_images.data()));
+
+//     DBG("Created Swapchain!");
+
+//     /* Create Swapchain Image Views
+//     ============================================================================================= */
+
+//     vk_sc_image_views.resize(vk_sc_images.size());
+
+//     for (int i = 0; i < vk_sc_images.size(); i++) {
+//         vk_image_view_create_info_t iv_info = {
+//             .image = vk_sc_images[i],
+//             .view_type = VK_IMAGE_VIEW_TYPE_2D,
+//             .format = vk_surf_fmt.format,
+//             .components = {
+//                 .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+//                 .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+//                 .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+//                 .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+//             },
+//             .subresource_range = {
+//                 .aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
+//                 .base_mip_level = 0,
+//                 .level_count = 1,
+//                 .base_array_layer = 0,
+//                 .layer_count = 1,
+//             },
+//         };
+//         VK_ASSERT(vk_create_image_view(dev->vk_dev, &iv_info, NULL, &vk_sc_image_views[i]));
+//         err_scope([i, &dev, this]{ 
+//             vk_destroy_image_view(dev->vk_dev, vk_sc_image_views[i], NULL); });
+//     }
+
+//     /* TODO: this is problematic, here depth_imag is dependent on dev and not on swapchain, so
+//     if we delete dev we have a double free */
+//     depth_imag = new vku_image_t(dev, vk_extent.width, vk_extent.height, VK_FORMAT_D32_SFLOAT,
+//             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+//     depth_view = new vku_img_view_t(depth_imag, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+//     err_scope.disable();
+//     dev->add_child(this);
+// }
+
+// inline vku_swapchain_t::~vku_swapchain_t() {
+//     delete depth_imag;
+//     cleanup();
+//     dev->rm_child(this);
+//     for (auto &iv : vk_sc_image_views)
+//         vk_destroy_image_view(dev->vk_dev, iv, NULL);
+//     vk_destroy_swapchain_khr(dev->vk_dev, vk_swapchain, NULL);
+// }
 
 /* vku_shader_t (TODO)
 ================================================================================================= */
 
-inline vku_shader_t::vku_shader_t(vku_device_t *dev, const char *path, vku_shader_stage_t type)
-: dev(dev), type(type)
+inline vk_result_t vku_shader_t::init() {
+}
+inline vk_result_t vku_shader_t::uninit() {
+}
+inline vku_ref_p<vku_shader_t> vku_shader_t::create(
+        vku_ref_p<vku_device_t> dev,
+        const vku_spirv_t& spirv)
 {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    std::streamsize size = file.tellg();
-
-    file.seekg(0, std::ios::beg);
-    std::vector<char> buffer(size);
-    if (!file.read(buffer.data(), size)) {
-        DBG("Failed to read shader data");
-        throw vku_err_t(VK_ERROR_UNKNOWN);
-    }
-    vk_shader_module_create_info_t shader_info {
-        .code_size = buffer.size(),
-        .p_code = (uint32_t *)buffer.data(),
-    };
-    VK_ASSERT(vk_create_shader_module(dev->vk_dev, &shader_info, NULL, &vk_shader));
-    dev->add_child(this);
 }
-
-inline vku_shader_t::vku_shader_t(vku_device_t *dev, const vku_spirv_t& spirv)
-: dev(dev), type(spirv.type)
+inline vku_ref_p<vku_shader_t> vku_shader_t::create(
+        vku_ref_p<vku_device_t> dev,
+        const char *path,
+        vku_shader_stage_t type)
 {
-    vk_shader_module_create_info_t shader_info {
-        .code_size = spirv.content.size() * sizeof(uint32_t),
-        .p_code = spirv.content.data(),
-    };
-    VK_ASSERT(vk_create_shader_module(dev->vk_dev, &shader_info, NULL, &vk_shader));
-    dev->add_child(this);
 }
 
-inline vku_shader_t::~vku_shader_t() {
-    cleanup();
-    dev->rm_child(this);
-    vk_destroy_shader_module(dev->vk_dev, vk_shader, NULL);
-}
+// inline vku_shader_t::vku_shader_t(vku_device_t *dev, const char *path, vku_shader_stage_t type)
+// : dev(dev), type(type)
+// {
+//     std::ifstream file(path, std::ios::binary | std::ios::ate);
+//     std::streamsize size = file.tellg();
+
+//     file.seekg(0, std::ios::beg);
+//     std::vector<char> buffer(size);
+//     if (!file.read(buffer.data(), size)) {
+//         DBG("Failed to read shader data");
+//         throw vku_err_t(VK_ERROR_UNKNOWN);
+//     }
+//     vk_shader_module_create_info_t shader_info {
+//         .code_size = buffer.size(),
+//         .p_code = (uint32_t *)buffer.data(),
+//     };
+//     VK_ASSERT(vk_create_shader_module(dev->vk_dev, &shader_info, NULL, &vk_shader));
+//     dev->add_child(this);
+// }
+
+// inline vku_shader_t::vku_shader_t(vku_device_t *dev, const vku_spirv_t& spirv)
+// : dev(dev), type(spirv.type)
+// {
+//     vk_shader_module_create_info_t shader_info {
+//         .code_size = spirv.content.size() * sizeof(uint32_t),
+//         .p_code = spirv.content.data(),
+//     };
+//     VK_ASSERT(vk_create_shader_module(dev->vk_dev, &shader_info, NULL, &vk_shader));
+//     dev->add_child(this);
+// }
+
+// inline vku_shader_t::~vku_shader_t() {
+//     cleanup();
+//     dev->rm_child(this);
+//     vk_destroy_shader_module(dev->vk_dev, vk_shader, NULL);
+// }
 
 /* vku_renderpass_t (TODO)
 ================================================================================================= */
 
-inline vku_renderpass_t::vku_renderpass_t(vku_swapchain_t *swc) : swc(swc) {
-    vk_attachment_description_t color_attach {
-        .format = swc->vk_surf_fmt.format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .load_op = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .store_op = VK_ATTACHMENT_STORE_OP_STORE,
-        .stencil_load_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencil_store_op = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initial_layout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .final_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-    };
-
-    vk_attachment_description_t depth_attach {
-        .format = swc->depth_view->img->fmt,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .load_op = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .store_op = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .stencil_load_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencil_store_op = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initial_layout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .final_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    };
-
-    /* indexes in color_attach vector, also in shader: layout(location = 0) out vec4 outColor */
-    vk_attachment_reference_t color_attach_ref {
-        .attachment = 0,
-        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    };
-
-    vk_attachment_reference_t depth_attach_ref {
-        .attachment = 1,
-        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    };
-
-    /* subpasses are postprocessing stages, we only use one pass for now */
-    vk_subpass_description_t subpass {
-        .pipeline_bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS,
-        .color_attachment_count = 1,
-        .p_color_attachments = &color_attach_ref,
-        .p_depth_stencil_attachment = &depth_attach_ref,
-    };
-
-    /* TODO: expose dependency to exterior because else it doesn't make sense to have sems waiting
-    on different stages */
-    vk_subpass_dependency_t dependency {
-        .src_subpass = VK_SUBPASS_EXTERNAL,
-        .dst_subpass = 0,
-        .src_stage_mask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |   
-                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        .dst_stage_mask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        .src_access_mask = 0,
-        .dst_access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-    };
-
-    std::array<vk_attachment_description_t, 2> attachments = {color_attach, depth_attach};
-    vk_render_pass_create_info_t render_pass_info {
-        .attachment_count = (uint32_t)attachments.size(),
-        .p_attachments = attachments.data(),
-        .subpass_count = 1,
-        .p_subpasses = &subpass,
-        .dependency_count = 1,
-        .p_dependencies = &dependency,
-    };
-
-    VK_ASSERT(vk_create_render_pass(swc->dev->vk_dev, &render_pass_info, NULL, &vk_render_pass));
-
-    swc->add_child(this);
+inline vk_result_t vku_renderpass_t::init() {
+}
+inline vk_result_t vku_renderpass_t::uninit() {
+}
+inline vku_ref_p<vku_renderpass_t> vku_renderpass_t::create(vku_ref_p<vku_swapchain_t> swc) {
 }
 
-inline vku_renderpass_t::~vku_renderpass_t() {
-    cleanup();
-    swc->rm_child(this);
-    vk_destroy_render_pass(swc->dev->vk_dev, vk_render_pass, NULL);
-}
+// inline vku_renderpass_t::vku_renderpass_t(vku_swapchain_t *swc) : swc(swc) {
+//     vk_attachment_description_t color_attach {
+//         .format = swc->vk_surf_fmt.format,
+//         .samples = VK_SAMPLE_COUNT_1_BIT,
+//         .load_op = VK_ATTACHMENT_LOAD_OP_CLEAR,
+//         .store_op = VK_ATTACHMENT_STORE_OP_STORE,
+//         .stencil_load_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+//         .stencil_store_op = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+//         .initial_layout = VK_IMAGE_LAYOUT_UNDEFINED,
+//         .final_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+//     };
+
+//     vk_attachment_description_t depth_attach {
+//         .format = swc->depth_view->img->fmt,
+//         .samples = VK_SAMPLE_COUNT_1_BIT,
+//         .load_op = VK_ATTACHMENT_LOAD_OP_CLEAR,
+//         .store_op = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+//         .stencil_load_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+//         .stencil_store_op = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+//         .initial_layout = VK_IMAGE_LAYOUT_UNDEFINED,
+//         .final_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+//     };
+
+//     /* indexes in color_attach vector, also in shader: layout(location = 0) out vec4 outColor */
+//     vk_attachment_reference_t color_attach_ref {
+//         .attachment = 0,
+//         .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+//     };
+
+//     vk_attachment_reference_t depth_attach_ref {
+//         .attachment = 1,
+//         .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+//     };
+
+//     /* subpasses are postprocessing stages, we only use one pass for now */
+//     vk_subpass_description_t subpass {
+//         .pipeline_bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS,
+//         .color_attachment_count = 1,
+//         .p_color_attachments = &color_attach_ref,
+//         .p_depth_stencil_attachment = &depth_attach_ref,
+//     };
+
+//     /* TODO: expose dependency to exterior because else it doesn't make sense to have sems waiting
+//     on different stages */
+//     vk_subpass_dependency_t dependency {
+//         .src_subpass = VK_SUBPASS_EXTERNAL,
+//         .dst_subpass = 0,
+//         .src_stage_mask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |   
+//                           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+//         .dst_stage_mask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+//                           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+//         .src_access_mask = 0,
+//         .dst_access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+//                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+//     };
+
+//     std::array<vk_attachment_description_t, 2> attachments = {color_attach, depth_attach};
+//     vk_render_pass_create_info_t render_pass_info {
+//         .attachment_count = (uint32_t)attachments.size(),
+//         .p_attachments = attachments.data(),
+//         .subpass_count = 1,
+//         .p_subpasses = &subpass,
+//         .dependency_count = 1,
+//         .p_dependencies = &dependency,
+//     };
+
+//     VK_ASSERT(vk_create_render_pass(swc->dev->vk_dev, &render_pass_info, NULL, &vk_render_pass));
+
+//     swc->add_child(this);
+// }
+
+// inline vku_renderpass_t::~vku_renderpass_t() {
+//     cleanup();
+//     swc->rm_child(this);
+//     vk_destroy_render_pass(swc->dev->vk_dev, vk_render_pass, NULL);
+// }
 
 /* vku_pipeline_t (TODO)
 ================================================================================================= */
 
-inline vku_pipeline_t::vku_pipeline_t(
-        const vku_opts_t &opts, vku_renderpass_t *rp,
-        const std::vector<vku_shader_t *> &shaders,
+inline vk_result_t vku_pipeline_t::init() {
+}
+inline vk_result_t vku_pipeline_t::uninit() {
+}
+inline vku_ref_p<vku_pipeline_t> vku_pipeline_t::create(
+        int width,
+        int height,
+        vku_ref_p<vku_renderpass_t> rp,
+        const std::vector<vku_ref_p<vku_shader_t>> &shaders,
         vk_primitive_topology_t topology,
         vku_vertex_input_desc_t vid,
-        const vku_binding_desc_t& bd)
-: rp(rp)
+        vku_ref_p<vku_binding_desc_t> bd)
 {
-    FnScope err_scope;
-
-    std::vector<vk_pipeline_shader_stage_create_info_t> shader_stages;
-    for (auto sh : shaders) {
-        shader_stages.push_back(vk_pipeline_shader_stage_create_info_t {
-            .stage  = vku_get_shader_type(sh->type),
-            .module = sh->vk_shader,
-            .p_name = "main",
-        });
-    }
-
-    /* mark prop of pipeline to be mutable */
-    std::vector<vk_dynamic_state_t> dyn_states {
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR,
-        VK_DYNAMIC_STATE_LINE_WIDTH
-    };
-
-    vk_pipeline_dynamic_state_create_info_t dyn_info {
-        .dynamic_state_count    = uint32_t(dyn_states.size()),
-        .p_dynamic_states       = dyn_states.data()
-    };
-
-    vk_pipeline_vertex_input_state_create_info_t vertex_info {
-        .vertex_binding_description_count   = 1,
-        .p_vertex_binding_descriptions      = &vid.bind_desc,
-        .vertex_attribute_description_count = (uint32_t)vid.attr_desc.size(),
-        .p_vertex_attribute_descriptions    = vid.attr_desc.data(),
-    };
-
-    vk_pipeline_input_assembly_state_create_info_t input_assembly {
-        .topology                   = topology,
-        .primitive_restart_enable   = VK_FALSE,
-    };
-
-    vk_viewport_t viewport {
-        .x          = 0.0f,
-        .y          = 0.0f,
-        .width      = float(opts.window_width),
-        .height     = float(opts.window_height),
-        .min_depth  = 0.0f,
-        .max_depth  = 1.0f,
-    };
-
-    vk_rect2d_t scissor {
-        .offset = {0, 0},
-        .extent = rp->swc->vk_extent,
-    };
-
-    vk_pipeline_viewport_state_create_info_t vp_info {
-        .viewport_count = 1,
-        .p_viewports    = &viewport,
-        .scissor_count  = 1,
-        .p_scissors     = &scissor,
-    };
-
-    vk_pipeline_rasterization_state_create_info_t raster_info {
-        .depth_clamp_enable         = VK_FALSE,
-        .rasterizer_discard_enable  = VK_FALSE,
-        .polygon_mode               = VK_POLYGON_MODE_FILL,
-        .cull_mode                  = VK_CULL_MODE_BACK_BIT,
-        .front_face                 = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        .depth_bias_enable          = VK_FALSE,
-        .depth_bias_constant_factor = 0.0f,
-        .depth_bias_clamp           = 0.0f,
-        .depth_bias_slope_factor    = 0.0f,
-        .line_width                 = 1.0f,
-    };
-
-    vk_pipeline_multisample_state_create_info_t multisample_info {
-        .rasterization_samples      = VK_SAMPLE_COUNT_1_BIT,
-        .sample_shading_enable      = VK_FALSE,
-        .min_sample_shading         = 1.0f,
-        .p_sample_mask              = NULL,
-        .alpha_to_coverage_enable   = VK_FALSE,
-        .alpha_to_one_enable        = VK_FALSE,
-    };
-
-    vk_pipeline_color_blend_attachment_state_t blend_attachment {
-        .blend_enable           = VK_FALSE,
-        .src_color_blend_factor = VK_BLEND_FACTOR_ONE,
-        .dst_color_blend_factor = VK_BLEND_FACTOR_ZERO,
-        .color_blend_op         = VK_BLEND_OP_ADD,
-        .src_alpha_blend_factor = VK_BLEND_FACTOR_ONE,
-        .dst_alpha_blend_factor = VK_BLEND_FACTOR_ZERO,
-        .alpha_blend_op         = VK_BLEND_OP_ADD,
-        .color_write_mask       =
-                VK_COLOR_COMPONENT_R_BIT |
-                VK_COLOR_COMPONENT_G_BIT |
-                VK_COLOR_COMPONENT_B_BIT |
-                VK_COLOR_COMPONENT_A_BIT,
-    };
-
-    vk_pipeline_color_blend_state_create_info_t blend_info {
-        .logic_op_enable    = VK_FALSE,
-        .logic_op           = VK_LOGIC_OP_COPY,
-        .attachment_count   = 1,
-        .p_attachments      = &blend_attachment,
-        .blend_constants    = { 0.0f, 0.0f, 0.0f, 0.0f },
-    };
-
-    vk_pipeline_depth_stencil_state_create_info_t depth_stancil{
-        .depth_test_enable = VK_TRUE,
-        .depth_write_enable = VK_TRUE,
-        .depth_compare_op = VK_COMPARE_OP_LESS,
-        .depth_bounds_test_enable = VK_FALSE,
-        .stencil_test_enable = VK_FALSE,
-        .front = {},
-        .back = {},
-        .min_depth_bounds = 0.0,
-        .max_depth_bounds = 1.0,
-    };
-
-    auto bind_descriptors = bd.get_descriptors();
-    DBGVV("cnt bind_descriptors: %ld", bind_descriptors.size());
-    for (auto &b : bind_descriptors) {
-        DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
-                b.descriptor_type, b.binding, b.stage_flags);
-    }
-
-    vk_descriptor_set_layout_create_info_t desc_set_layout_info {
-        .binding_count = (uint32_t)bind_descriptors.size(),
-        .p_bindings = bind_descriptors.data(),
-    };
-
-    VK_ASSERT(vk_create_descriptor_set_layout(rp->swc->dev->vk_dev, &desc_set_layout_info, nullptr,
-            &vk_desc_set_layout));
-    err_scope([&]{ vk_destroy_descriptor_set_layout(
-            rp->swc->dev->vk_dev, vk_desc_set_layout, nullptr); });
-    DBGVV("Allocated descriptor set layout: %p", vk_desc_set_layout);
-
-    vk_pipeline_layout_create_info_t pipeline_layout_info {
-        .set_layout_count           = 1,
-        .p_set_layouts              = &vk_desc_set_layout,
-        .push_constant_range_count  = 0,
-        .p_push_constant_ranges     = NULL,
-    };
-
-    VK_ASSERT(vk_create_pipeline_layout(
-            rp->swc->dev->vk_dev, &pipeline_layout_info, NULL, &vk_layout));
-    err_scope([&]{ vk_destroy_pipeline_layout(rp->swc->dev->vk_dev, vk_layout, NULL); });
-    DBGVV("Allocated pipeline layout: %p", vk_layout);
-
-    vk_graphics_pipeline_create_info_t pipeline_info {
-        .stage_count = (uint32_t)shader_stages.size(),
-        .p_stages               = shader_stages.data(),
-        .p_vertex_input_state   = &vertex_info,
-        .p_input_assembly_state = &input_assembly,
-        .p_viewport_state       = &vp_info,
-        .p_rasterization_state  = &raster_info,
-        .p_multisample_state    = &multisample_info,
-        .p_depth_stencil_state  = &depth_stancil,
-        .p_color_blend_state    = &blend_info,
-        .p_dynamic_state        = &dyn_info,
-        .layout                 = vk_layout,
-        .render_pass            = rp->vk_render_pass,
-        .subpass                = 0,
-        .base_pipeline_handle   = VK_NULL_HANDLE,
-        .base_pipeline_index    = -1,
-    };
-
-    VK_ASSERT(vk_create_graphics_pipelines(
-            rp->swc->dev->vk_dev, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &vk_pipeline));
-    DBGVV("Allocated pipeline: %p", vk_pipeline);
-
-    err_scope.disable();
-    rp->add_child(this);
 }
 
-inline vku_pipeline_t::~vku_pipeline_t() {
-    cleanup();
-    rp->rm_child(this);
+// inline vku_pipeline_t::vku_pipeline_t(
+//         int width, int height, vku_renderpass_t *rp,
+//         const std::vector<vku_shader_t *> &shaders,
+//         vk_primitive_topology_t topology,
+//         vku_vertex_input_desc_t vid,
+//         const vku_binding_desc_t& bd)
+// : rp(rp)
+// {
+//     FnScope err_scope;
 
-    DBGVV("Dealocating pipeline: %p", vk_pipeline);
+//     std::vector<vk_pipeline_shader_stage_create_info_t> shader_stages;
+//     for (auto sh : shaders) {
+//         shader_stages.push_back(vk_pipeline_shader_stage_create_info_t {
+//             .stage  = vku_get_shader_type(sh->type),
+//             .module = sh->vk_shader,
+//             .p_name = "main",
+//         });
+//     }
 
-    vk_destroy_pipeline(rp->swc->dev->vk_dev, vk_pipeline, NULL);
-    vk_destroy_pipeline_layout(rp->swc->dev->vk_dev, vk_layout, NULL);
-    vk_destroy_descriptor_set_layout(rp->swc->dev->vk_dev, vk_desc_set_layout, nullptr);
-}
+//     /* mark prop of pipeline to be mutable */
+//     std::vector<vk_dynamic_state_t> dyn_states {
+//         VK_DYNAMIC_STATE_VIEWPORT,
+//         VK_DYNAMIC_STATE_SCISSOR,
+//         VK_DYNAMIC_STATE_LINE_WIDTH
+//     };
+
+//     vk_pipeline_dynamic_state_create_info_t dyn_info {
+//         .dynamic_state_count    = uint32_t(dyn_states.size()),
+//         .p_dynamic_states       = dyn_states.data()
+//     };
+
+//     vk_pipeline_vertex_input_state_create_info_t vertex_info {
+//         .vertex_binding_description_count   = 1,
+//         .p_vertex_binding_descriptions      = &vid.bind_desc,
+//         .vertex_attribute_description_count = (uint32_t)vid.attr_desc.size(),
+//         .p_vertex_attribute_descriptions    = vid.attr_desc.data(),
+//     };
+
+//     vk_pipeline_input_assembly_state_create_info_t input_assembly {
+//         .topology                   = topology,
+//         .primitive_restart_enable   = VK_FALSE,
+//     };
+
+//     vk_viewport_t viewport {
+//         .x          = 0.0f,
+//         .y          = 0.0f,
+//         .width      = float(width),
+//         .height     = float(height),
+//         .min_depth  = 0.0f,
+//         .max_depth  = 1.0f,
+//     };
+
+//     vk_rect2d_t scissor {
+//         .offset = {0, 0},
+//         .extent = rp->swc->vk_extent,
+//     };
+
+//     vk_pipeline_viewport_state_create_info_t vp_info {
+//         .viewport_count = 1,
+//         .p_viewports    = &viewport,
+//         .scissor_count  = 1,
+//         .p_scissors     = &scissor,
+//     };
+
+//     vk_pipeline_rasterization_state_create_info_t raster_info {
+//         .depth_clamp_enable         = VK_FALSE,
+//         .rasterizer_discard_enable  = VK_FALSE,
+//         .polygon_mode               = VK_POLYGON_MODE_FILL,
+//         .cull_mode                  = VK_CULL_MODE_BACK_BIT,
+//         .front_face                 = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+//         .depth_bias_enable          = VK_FALSE,
+//         .depth_bias_constant_factor = 0.0f,
+//         .depth_bias_clamp           = 0.0f,
+//         .depth_bias_slope_factor    = 0.0f,
+//         .line_width                 = 1.0f,
+//     };
+
+//     vk_pipeline_multisample_state_create_info_t multisample_info {
+//         .rasterization_samples      = VK_SAMPLE_COUNT_1_BIT,
+//         .sample_shading_enable      = VK_FALSE,
+//         .min_sample_shading         = 1.0f,
+//         .p_sample_mask              = NULL,
+//         .alpha_to_coverage_enable   = VK_FALSE,
+//         .alpha_to_one_enable        = VK_FALSE,
+//     };
+
+//     vk_pipeline_color_blend_attachment_state_t blend_attachment {
+//         .blend_enable           = VK_FALSE,
+//         .src_color_blend_factor = VK_BLEND_FACTOR_ONE,
+//         .dst_color_blend_factor = VK_BLEND_FACTOR_ZERO,
+//         .color_blend_op         = VK_BLEND_OP_ADD,
+//         .src_alpha_blend_factor = VK_BLEND_FACTOR_ONE,
+//         .dst_alpha_blend_factor = VK_BLEND_FACTOR_ZERO,
+//         .alpha_blend_op         = VK_BLEND_OP_ADD,
+//         .color_write_mask       =
+//                 VK_COLOR_COMPONENT_R_BIT |
+//                 VK_COLOR_COMPONENT_G_BIT |
+//                 VK_COLOR_COMPONENT_B_BIT |
+//                 VK_COLOR_COMPONENT_A_BIT,
+//     };
+
+//     vk_pipeline_color_blend_state_create_info_t blend_info {
+//         .logic_op_enable    = VK_FALSE,
+//         .logic_op           = VK_LOGIC_OP_COPY,
+//         .attachment_count   = 1,
+//         .p_attachments      = &blend_attachment,
+//         .blend_constants    = { 0.0f, 0.0f, 0.0f, 0.0f },
+//     };
+
+//     vk_pipeline_depth_stencil_state_create_info_t depth_stancil{
+//         .depth_test_enable = VK_TRUE,
+//         .depth_write_enable = VK_TRUE,
+//         .depth_compare_op = VK_COMPARE_OP_LESS,
+//         .depth_bounds_test_enable = VK_FALSE,
+//         .stencil_test_enable = VK_FALSE,
+//         .front = {},
+//         .back = {},
+//         .min_depth_bounds = 0.0,
+//         .max_depth_bounds = 1.0,
+//     };
+
+//     auto bind_descriptors = bd.get_descriptors();
+//     DBGVV("cnt bind_descriptors: %ld", bind_descriptors.size());
+//     for (auto &b : bind_descriptors) {
+//         DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
+//                 b.descriptor_type, b.binding, b.stage_flags);
+//     }
+
+//     vk_descriptor_set_layout_create_info_t desc_set_layout_info {
+//         .binding_count = (uint32_t)bind_descriptors.size(),
+//         .p_bindings = bind_descriptors.data(),
+//     };
+
+//     VK_ASSERT(vk_create_descriptor_set_layout(rp->swc->dev->vk_dev, &desc_set_layout_info, nullptr,
+//             &vk_desc_set_layout));
+//     err_scope([&]{ vk_destroy_descriptor_set_layout(
+//             rp->swc->dev->vk_dev, vk_desc_set_layout, nullptr); });
+//     DBGVV("Allocated descriptor set layout: %p", vk_desc_set_layout);
+
+//     vk_pipeline_layout_create_info_t pipeline_layout_info {
+//         .set_layout_count           = 1,
+//         .p_set_layouts              = &vk_desc_set_layout,
+//         .push_constant_range_count  = 0,
+//         .p_push_constant_ranges     = NULL,
+//     };
+
+//     VK_ASSERT(vk_create_pipeline_layout(
+//             rp->swc->dev->vk_dev, &pipeline_layout_info, NULL, &vk_layout));
+//     err_scope([&]{ vk_destroy_pipeline_layout(rp->swc->dev->vk_dev, vk_layout, NULL); });
+//     DBGVV("Allocated pipeline layout: %p", vk_layout);
+
+//     vk_graphics_pipeline_create_info_t pipeline_info {
+//         .stage_count = (uint32_t)shader_stages.size(),
+//         .p_stages               = shader_stages.data(),
+//         .p_vertex_input_state   = &vertex_info,
+//         .p_input_assembly_state = &input_assembly,
+//         .p_viewport_state       = &vp_info,
+//         .p_rasterization_state  = &raster_info,
+//         .p_multisample_state    = &multisample_info,
+//         .p_depth_stencil_state  = &depth_stancil,
+//         .p_color_blend_state    = &blend_info,
+//         .p_dynamic_state        = &dyn_info,
+//         .layout                 = vk_layout,
+//         .render_pass            = rp->vk_render_pass,
+//         .subpass                = 0,
+//         .base_pipeline_handle   = VK_NULL_HANDLE,
+//         .base_pipeline_index    = -1,
+//     };
+
+//     VK_ASSERT(vk_create_graphics_pipelines(
+//             rp->swc->dev->vk_dev, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &vk_pipeline));
+//     DBGVV("Allocated pipeline: %p", vk_pipeline);
+
+//     err_scope.disable();
+//     rp->add_child(this);
+// }
+
+// inline vku_pipeline_t::~vku_pipeline_t() {
+//     cleanup();
+//     rp->rm_child(this);
+
+//     DBGVV("Dealocating pipeline: %p", vk_pipeline);
+
+//     vk_destroy_pipeline(rp->swc->dev->vk_dev, vk_pipeline, NULL);
+//     vk_destroy_pipeline_layout(rp->swc->dev->vk_dev, vk_layout, NULL);
+//     vk_destroy_descriptor_set_layout(rp->swc->dev->vk_dev, vk_desc_set_layout, nullptr);
+// }
 
 /* vku_compute_pipeline_t (TODO)
 ================================================================================================= */
 
-inline vku_compute_pipeline_t::vku_compute_pipeline_t(const vku_opts_t &opts, vku_device_t *dev,
-        vku_shader_t *shader, const vku_binding_desc_t& bd)
-: dev(dev)
+inline vk_result_t vku_compute_pipeline_t::init() {
+}
+inline vk_result_t vku_compute_pipeline_t::uninit() {
+}
+inline vku_ref_p<vku_compute_pipeline_t> vku_compute_pipeline_t::create(
+        vku_ref_p<vku_device_t> dev,
+        vku_ref_p<vku_shader_t> shader,
+        vku_ref_p<vku_binding_desc_t> bd)
 {
-    FnScope err_scope;
-
-    auto bind_descriptors = bd.get_descriptors();
-    DBGVV("cnt bind_descriptors: %ld", bind_descriptors.size());
-    for (auto &b : bind_descriptors) {
-        DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
-                b.descriptor_type, b.binding, b.stage_flags);
-    }
-    vk_descriptor_set_layout_create_info_t desc_set_layout_info {
-        .binding_count = (uint32_t)bind_descriptors.size(),
-        .p_bindings = bind_descriptors.data(),
-    };
-
-    VK_ASSERT(vk_create_descriptor_set_layout(dev->vk_dev, &desc_set_layout_info, nullptr,
-            &vk_desc_set_layout));
-    err_scope([&]{ vk_destroy_descriptor_set_layout(dev->vk_dev, vk_desc_set_layout, nullptr); });
-    DBGVV("Allocated descriptor set layout: %p", vk_desc_set_layout);
-
-    vk_pipeline_layout_create_info_t pipeline_layout_info {
-        .set_layout_count           = 1,
-        .p_set_layouts              = &vk_desc_set_layout,
-        .push_constant_range_count  = 0,
-        .p_push_constant_ranges     = NULL,
-    };
-
-    VK_ASSERT(vk_create_pipeline_layout(dev->vk_dev, &pipeline_layout_info, NULL, &vk_layout));
-    err_scope([&]{ vk_destroy_pipeline_layout(dev->vk_dev, vk_layout, NULL); });
-    DBGVV("Allocated pipeline layout: %p", vk_layout);
-
-    if (vku_get_shader_type(shader->type) != VK_SHADER_STAGE_COMPUTE_BIT) {
-        throw vku_err_t("compute_pipeline needs a compute shader");
-    }
-
-    vk_pipeline_shader_stage_create_info_t shader_info {
-        .stage  = vku_get_shader_type(shader->type),
-        .module = shader->vk_shader,
-        .p_name = "main",
-    };
-
-    vk_compute_pipeline_create_info_t pipeline_info {
-        .stage  = shader_info,
-        .layout = vk_layout,
-    };
-
-    VK_ASSERT(vk_create_compute_pipelines(
-            dev->vk_dev, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &vk_pipeline));
-    DBGVV("Allocated pipeline: %p", vk_pipeline);
-
-    err_scope.disable();
-    dev->add_child(this);
 }
 
-inline vku_compute_pipeline_t::~vku_compute_pipeline_t() {
-    cleanup();
-    dev->rm_child(this);
+// inline vku_compute_pipeline_t::vku_compute_pipeline_t(vku_device_t *dev,
+//         vku_shader_t *shader, const vku_binding_desc_t& bd)
+// : dev(dev)
+// {
+//     FnScope err_scope;
 
-    DBGVV("Dealocating pipeline: %p", vk_pipeline);
+//     auto bind_descriptors = bd.get_descriptors();
+//     DBGVV("cnt bind_descriptors: %ld", bind_descriptors.size());
+//     for (auto &b : bind_descriptors) {
+//         DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
+//                 b.descriptor_type, b.binding, b.stage_flags);
+//     }
+//     vk_descriptor_set_layout_create_info_t desc_set_layout_info {
+//         .binding_count = (uint32_t)bind_descriptors.size(),
+//         .p_bindings = bind_descriptors.data(),
+//     };
 
-    vk_destroy_pipeline(dev->vk_dev, vk_pipeline, NULL);
-    vk_destroy_pipeline_layout(dev->vk_dev, vk_layout, NULL);
-    vk_destroy_descriptor_set_layout(dev->vk_dev, vk_desc_set_layout, nullptr);
-}
+//     VK_ASSERT(vk_create_descriptor_set_layout(dev->vk_dev, &desc_set_layout_info, nullptr,
+//             &vk_desc_set_layout));
+//     err_scope([&]{ vk_destroy_descriptor_set_layout(dev->vk_dev, vk_desc_set_layout, nullptr); });
+//     DBGVV("Allocated descriptor set layout: %p", vk_desc_set_layout);
+
+//     vk_pipeline_layout_create_info_t pipeline_layout_info {
+//         .set_layout_count           = 1,
+//         .p_set_layouts              = &vk_desc_set_layout,
+//         .push_constant_range_count  = 0,
+//         .p_push_constant_ranges     = NULL,
+//     };
+
+//     VK_ASSERT(vk_create_pipeline_layout(dev->vk_dev, &pipeline_layout_info, NULL, &vk_layout));
+//     err_scope([&]{ vk_destroy_pipeline_layout(dev->vk_dev, vk_layout, NULL); });
+//     DBGVV("Allocated pipeline layout: %p", vk_layout);
+
+//     if (vku_get_shader_type(shader->type) != VK_SHADER_STAGE_COMPUTE_BIT) {
+//         throw vku_err_t("compute_pipeline needs a compute shader");
+//     }
+
+//     vk_pipeline_shader_stage_create_info_t shader_info {
+//         .stage  = vku_get_shader_type(shader->type),
+//         .module = shader->vk_shader,
+//         .p_name = "main",
+//     };
+
+//     vk_compute_pipeline_create_info_t pipeline_info {
+//         .stage  = shader_info,
+//         .layout = vk_layout,
+//     };
+
+//     VK_ASSERT(vk_create_compute_pipelines(
+//             dev->vk_dev, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &vk_pipeline));
+//     DBGVV("Allocated pipeline: %p", vk_pipeline);
+
+//     err_scope.disable();
+//     dev->add_child(this);
+// }
+
+// inline vku_compute_pipeline_t::~vku_compute_pipeline_t() {
+//     cleanup();
+//     dev->rm_child(this);
+
+//     DBGVV("Dealocating pipeline: %p", vk_pipeline);
+
+//     vk_destroy_pipeline(dev->vk_dev, vk_pipeline, NULL);
+//     vk_destroy_pipeline_layout(dev->vk_dev, vk_layout, NULL);
+//     vk_destroy_descriptor_set_layout(dev->vk_dev, vk_desc_set_layout, nullptr);
+// }
 
 /* vku_framebuffs_t (TODO)
 ================================================================================================= */
 
-inline vku_framebuffs_t::vku_framebuffs_t(vku_renderpass_t *rp) : rp(rp) {
-    vk_fbuffs.resize(rp->swc->vk_sc_image_views.size());
+inline vk_result_t vku_framebuffs_t::init() {
+}
+inline vk_result_t vku_framebuffs_t::uninit() {
+}
+inline vku_ref_p<vku_framebuffs_t> vku_framebuffs_t::create(vku_ref_p<vku_renderpass_t> rp){
+}
 
-    FnScope err_scope;
-    for (int i = 0; i < vk_fbuffs.size(); i++) {
-        vk_image_view_t attachs[] = {
-            rp->swc->vk_sc_image_views[i],
-            rp->swc->depth_view->vk_view
-        };
+// inline vku_framebuffs_t::vku_framebuffs_t(vku_renderpass_t *rp) : rp(rp) {
+//     vk_fbuffs.resize(rp->swc->vk_sc_image_views.size());
+
+//     FnScope err_scope;
+//     for (int i = 0; i < vk_fbuffs.size(); i++) {
+//         vk_image_view_t attachs[] = {
+//             rp->swc->vk_sc_image_views[i],
+//             rp->swc->depth_view->vk_view
+//         };
         
-        vk_framebuffer_create_info_t fbuff_info {
-            .render_pass = rp->vk_render_pass,
-            .attachment_count = 2,
-            .p_attachments = attachs,
-            .width = rp->swc->vk_extent.width,
-            .height = rp->swc->vk_extent.height,
-            .layers = 1,
-        };
+//         vk_framebuffer_create_info_t fbuff_info {
+//             .render_pass = rp->vk_render_pass,
+//             .attachment_count = 2,
+//             .p_attachments = attachs,
+//             .width = rp->swc->vk_extent.width,
+//             .height = rp->swc->vk_extent.height,
+//             .layers = 1,
+//         };
 
-        VK_ASSERT(vk_create_framebuffer(rp->swc->dev->vk_dev, &fbuff_info, NULL, &vk_fbuffs[i]));
-        err_scope([this, i, rp]{ 
-                vk_destroy_framebuffer(rp->swc->dev->vk_dev, vk_fbuffs[i], NULL); });
-    }
+//         VK_ASSERT(vk_create_framebuffer(rp->swc->dev->vk_dev, &fbuff_info, NULL, &vk_fbuffs[i]));
+//         err_scope([this, i, rp]{ 
+//                 vk_destroy_framebuffer(rp->swc->dev->vk_dev, vk_fbuffs[i], NULL); });
+//     }
 
-    err_scope.disable();
-    rp->add_child(this);
-}
+//     err_scope.disable();
+//     rp->add_child(this);
+// }
 
-inline vku_framebuffs_t::~vku_framebuffs_t() {
-    cleanup();
-    rp->rm_child(this);
-    for (auto fbuff : vk_fbuffs)
-        vk_destroy_framebuffer(rp->swc->dev->vk_dev, fbuff, NULL);
-}
+// inline vku_framebuffs_t::~vku_framebuffs_t() {
+//     cleanup();
+//     rp->rm_child(this);
+//     for (auto fbuff : vk_fbuffs)
+//         vk_destroy_framebuffer(rp->swc->dev->vk_dev, fbuff, NULL);
+// }
 
 /* vku_cmdpool_t (TODO)
 ================================================================================================= */
 
-inline vku_cmdpool_t::vku_cmdpool_t(vku_device_t *dev) : dev(dev) {
-    vk_command_pool_create_info_t pool_info{
-        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-        .queue_family_index = (uint32_t)dev->que_fams.graphics_id,
-    };
-
-    VK_ASSERT(vk_create_command_pool(dev->vk_dev, &pool_info, NULL, &vk_pool));
-    dev->add_child(this);
+inline vk_result_t vku_cmdpool_t::init() {
+}
+inline vk_result_t vku_cmdpool_t::uninit() {
+}
+inline vku_ref_p<vku_cmdpool_t> vku_cmdpool_t::create(vku_ref_p<vku_device_t> dev) {
 }
 
-inline vku_cmdpool_t::~vku_cmdpool_t() {
-    cleanup();
-    dev->rm_child(this);
-    vk_destroy_command_pool(dev->vk_dev, vk_pool, NULL);
-}
+// inline vku_cmdpool_t::vku_cmdpool_t(vku_device_t *dev) : dev(dev) {
+//     vk_command_pool_create_info_t pool_info{
+//         .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+//         .queue_family_index = (uint32_t)dev->que_fams.graphics_id,
+//     };
+
+//     VK_ASSERT(vk_create_command_pool(dev->vk_dev, &pool_info, NULL, &vk_pool));
+//     dev->add_child(this);
+// }
+
+// inline vku_cmdpool_t::~vku_cmdpool_t() {
+//     cleanup();
+//     dev->rm_child(this);
+//     vk_destroy_command_pool(dev->vk_dev, vk_pool, NULL);
+// }
 
 /* vku_cmdbuff_t (TODO)
 ================================================================================================= */
 
-inline vku_cmdbuff_t::vku_cmdbuff_t(vku_cmdpool_t *cp, bool host_free) : cp(cp), host_free(host_free) {
-    vk_command_buffer_allocate_info_t buff_info {
-        .command_pool = cp->vk_pool,
-        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .command_buffer_count = 1,
-    };
+inline vk_result_t vku_cmdbuff_t::init() {
+}
+inline vk_result_t vku_cmdbuff_t::uninit() {
+}
+inline vku_ref_p<vku_cmdbuff_t> vku_cmdbuff_t::create(
+        vku_ref_p<vku_cmdpool_t> cp, bool host_free)
+{}
 
-    VK_ASSERT(vk_allocate_command_buffers(cp->dev->vk_dev, &buff_info, &vk_buff));
-    cp->add_child(this);
-}
-inline vku_cmdbuff_t::~vku_cmdbuff_t() {
-    cleanup();
-    cp->rm_child(this);
-    if (host_free) {
-        vkFreeCommandBuffers(cp->dev->vk_dev, cp->vk_pool, 1, &vk_buff);
-    }
-}
+// inline vku_cmdbuff_t::vku_cmdbuff_t(vku_cmdpool_t *cp, bool host_free) : cp(cp), host_free(host_free) {
+//     vk_command_buffer_allocate_info_t buff_info {
+//         .command_pool = cp->vk_pool,
+//         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+//         .command_buffer_count = 1,
+//     };
+
+//     VK_ASSERT(vk_allocate_command_buffers(cp->dev->vk_dev, &buff_info, &vk_buff));
+//     cp->add_child(this);
+// }
+// inline vku_cmdbuff_t::~vku_cmdbuff_t() {
+//     cleanup();
+//     cp->rm_child(this);
+//     if (host_free) {
+//         vkFreeCommandBuffers(cp->dev->vk_dev, cp->vk_pool, 1, &vk_buff);
+//     }
+// }
 
 inline void vku_cmdbuff_t::begin(vk_command_buffer_usage_flags_t flags) {
     vk_command_buffer_begin_info_t begin_info {
@@ -1621,7 +1814,7 @@ inline void vku_cmdbuff_t::begin(vk_command_buffer_usage_flags_t flags) {
     VK_ASSERT(vk_begin_command_buffer(vk_buff, &begin_info));
 }
 
-inline void vku_cmdbuff_t::begin_rpass(vku_framebuffs_t *fbs, uint32_t img_idx) {
+inline void vku_cmdbuff_t::begin_rpass(vku_ref_p<vku_framebuffs_t> fbs, uint32_t img_idx) {
     vk_clear_value_t clear_color[] = {
         {
             .color = {{ 0.0f, 0.0f, 0.0f, 1.0f }},
@@ -1632,11 +1825,11 @@ inline void vku_cmdbuff_t::begin_rpass(vku_framebuffs_t *fbs, uint32_t img_idx) 
     };
 
     vk_render_pass_begin_info_t begin_info {
-        .render_pass = fbs->rp->vk_render_pass,
-        .framebuffer = fbs->vk_fbuffs[img_idx],
+        .render_pass = fbs->get()->rp->get()->vk_render_pass,
+        .framebuffer = fbs->get()->vk_fbuffs[img_idx],
         .render_area = {
             .offset = {0, 0},
-            .extent = fbs->rp->swc->vk_extent,
+            .extent = fbs->get()->rp->get()->swc->get()->vk_extent,
         },
         .clear_value_count = 2,
         .p_clear_values = clear_color,
@@ -1646,12 +1839,12 @@ inline void vku_cmdbuff_t::begin_rpass(vku_framebuffs_t *fbs, uint32_t img_idx) 
 }
 
 inline void vku_cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
-        std::vector<std::pair<vku_buffer_t *, vk_device_size_t>> buffs)
+        std::vector<std::pair<vku_ref_p<vku_buffer_t>, vk_device_size_t>> buffs)
 {
     std::vector<vk_buffer_t> vk_buffs;
     std::vector<vk_device_size_t> vk_offsets;
     for (auto [b, off] : buffs) {
-        vk_buffs.push_back(b->vk_buff);
+        vk_buffs.push_back(b->get()->vk_buff);
         vk_offsets.push_back(off);
     }
 
@@ -1660,27 +1853,28 @@ inline void vku_cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
 }
 
 inline void vku_cmdbuff_t::bind_desc_set(vk_pipeline_bind_point_t bind_point,
-        vk_pipeline_layout_t pipeline_layout, vku_desc_set_t *desc_set)
+        vk_pipeline_layout_t pipeline_layout, vku_ref_p<vku_desc_set_t> desc_set)
 {
     DBGVVV("bind desc_set: %p with layout: %p bind_point: %d",
-            desc_set->vk_desc_set, pipeline_layout, bind_point);
+            desc_set->get()->vk_desc_set, pipeline_layout, bind_point);
     vk_cmd_bind_descriptor_sets(vk_buff, bind_point, pipeline_layout, 0, 1,
-            &desc_set->vk_desc_set, 0, nullptr);
+            &desc_set->get()->vk_desc_set, 0, nullptr);
 }
 
-inline void vku_cmdbuff_t::bind_idx_buff(vku_buffer_t *ibuff, uint64_t off, vk_index_type_t idx_type)
+inline void vku_cmdbuff_t::bind_idx_buff(vku_ref_p<vku_buffer_t> ibuff, uint64_t off,
+        vk_index_type_t idx_type)
 {
-    vk_cmd_bind_index_buffer(vk_buff, ibuff->vk_buff, off, idx_type);
+    vk_cmd_bind_index_buffer(vk_buff, ibuff->get()->vk_buff, off, idx_type);
 }
 
-inline void vku_cmdbuff_draw_helper(auto vk_buff, auto pl) {
-    vk_cmd_bind_pipeline(vk_buff, VK_PIPELINE_BIND_POINT_GRAPHICS, pl->vk_pipeline);
+inline void vku_cmdbuff_draw_helper(vk_command_buffer_t vk_buff, vku_ref_p<vku_pipeline_t> pl) {
+    vk_cmd_bind_pipeline(vk_buff, VK_PIPELINE_BIND_POINT_GRAPHICS, pl->get()->vk_pipeline);
 
     vk_viewport_t viewport {
         .x = 0.0f,
         .y = 0.0f,
-        .width = float(pl->rp->swc->vk_extent.width),
-        .height = float(pl->rp->swc->vk_extent.height),
+        .width = float(pl->get()->rp->get()->swc->get()->vk_extent.width),
+        .height = float(pl->get()->rp->get()->swc->get()->vk_extent.height),
         .min_depth = 0.0f,
         .max_depth = 1.0f,
     };
@@ -1689,17 +1883,17 @@ inline void vku_cmdbuff_draw_helper(auto vk_buff, auto pl) {
 
     vk_rect2d_t scissor {
         .offset = {0, 0},
-        .extent = pl->rp->swc->vk_extent
+        .extent = pl->get()->rp->get()->swc->get()->vk_extent
     };
     vk_cmd_set_scissor(vk_buff, 0, 1, &scissor);
 }
 
-inline void vku_cmdbuff_t::draw(vku_pipeline_t *pl, uint64_t vert_cnt) {
+inline void vku_cmdbuff_t::draw(vku_ref_p<vku_pipeline_t> pl, uint64_t vert_cnt) {
     vku_cmdbuff_draw_helper(vk_buff, pl);
     vk_cmd_draw(vk_buff, vert_cnt, 1, 0, 0);
 }
 
-inline void vku_cmdbuff_t::draw_idx(vku_pipeline_t *pl, uint64_t vert_cnt) {
+inline void vku_cmdbuff_t::draw_idx(vku_ref_p<vku_pipeline_t> pl, uint64_t vert_cnt) {
     vku_cmdbuff_draw_helper(vk_buff, pl);
     vk_cmd_draw_indexed(vk_buff, vert_cnt, 1, 0, 0, 0);
 }
@@ -1716,9 +1910,9 @@ inline void vku_cmdbuff_t::reset() {
     VK_ASSERT(vk_reset_command_buffer(vk_buff, 0));
 }
 
-inline void vku_cmdbuff_t::bind_compute(vku_compute_pipeline_t *cpl) {
-    DBGVVV("bind compute pipeline: %p", cpl->vk_pipeline);
-    vk_cmd_bind_pipeline(vk_buff, VK_PIPELINE_BIND_POINT_COMPUTE, cpl->vk_pipeline);
+inline void vku_cmdbuff_t::bind_compute(vku_ref_p<vku_compute_pipeline_t> cpl) {
+    DBGVVV("bind compute pipeline: %p", cpl->get()->vk_pipeline);
+    vk_cmd_bind_pipeline(vk_buff, VK_PIPELINE_BIND_POINT_COMPUTE, cpl->get()->vk_pipeline);
 }
 
 inline void vku_cmdbuff_t::dispatch_compute(uint32_t x, uint32_t y, uint32_t z) {
@@ -1728,70 +1922,101 @@ inline void vku_cmdbuff_t::dispatch_compute(uint32_t x, uint32_t y, uint32_t z) 
 /* vku_sem_t (TODO)
 ================================================================================================= */
 
-inline vku_sem_t::vku_sem_t(vku_device_t *dev) : dev(dev) {
-    vk_semaphore_create_info_t sem_info {};
-
-    VK_ASSERT(vk_create_semaphore(dev->vk_dev, &sem_info, NULL, &vk_sem));
-    dev->add_child(this);
+inline vk_result_t vku_sem_t::init() {
+}
+inline vk_result_t vku_sem_t::uninit() {
+}
+inline vku_ref_p<vku_sem_t> vku_sem_t::create(vku_ref_p<vku_device_t> dev) {
 }
 
-inline vku_sem_t::~vku_sem_t() {
-    cleanup();
-    dev->rm_child(this);
-    vk_destroy_semaphore(dev->vk_dev, vk_sem, NULL);
-}
+// inline vku_sem_t::vku_sem_t(vku_device_t *dev) : dev(dev) {
+//     vk_semaphore_create_info_t sem_info {};
+
+//     VK_ASSERT(vk_create_semaphore(dev->vk_dev, &sem_info, NULL, &vk_sem));
+//     dev->add_child(this);
+// }
+
+// inline vku_sem_t::~vku_sem_t() {
+//     cleanup();
+//     dev->rm_child(this);
+//     vk_destroy_semaphore(dev->vk_dev, vk_sem, NULL);
+// }
 
 /* vku_fence_t (TODO)
 ================================================================================================= */
 
-inline vku_fence_t::vku_fence_t(vku_device_t *dev, VkFenceCreateFlags flags) : dev(dev) {
-    vk_fence_create_info_t fence_info { .flags = flags };
+inline vk_result_t vku_fence_t::init() {
+}
+inline vk_result_t vku_fence_t::uninit() {
+}
+inline vku_ref_p<vku_fence_t> vku_fence_t::create(
+        vku_ref_p<vku_device_t> dev,
+        VkFenceCreateFlags flags)
+{
+}
 
-    VK_ASSERT(vk_create_fence(dev->vk_dev, &fence_info, NULL, &vk_fence));
-    dev->add_child(this);
-}
-inline vku_fence_t::~vku_fence_t() {
-    cleanup();
-    dev->rm_child(this);
-    vk_destroy_fence(dev->vk_dev, vk_fence, NULL);
-}
+// inline vku_fence_t::vku_fence_t(vku_device_t *dev, VkFenceCreateFlags flags) : dev(dev) {
+//     vk_fence_create_info_t fence_info { .flags = flags };
+
+//     VK_ASSERT(vk_create_fence(dev->vk_dev, &fence_info, NULL, &vk_fence));
+//     dev->add_child(this);
+// }
+// inline vku_fence_t::~vku_fence_t() {
+//     cleanup();
+//     dev->rm_child(this);
+//     vk_destroy_fence(dev->vk_dev, vk_fence, NULL);
+// }
 
 /* vku_buffer_t (TODO)
 ================================================================================================= */
 
-inline vku_buffer_t::vku_buffer_t(vku_device_t *dev,
-        size_t size, vk_buffer_usage_flags_t usage, vk_sharing_mode_t sh_mode,
-        vk_memory_property_flags_t mem_flags)
- : dev(dev), size(size)
- {
-    vk_buffer_create_info_t buff_info{
-        .size = size,
-        .usage = usage,
-        .sharing_mode = sh_mode
-    };
 
-    VK_ASSERT(vk_create_buffer(dev->vk_dev, &buff_info, nullptr, &vk_buff));
-
-    vk_memory_requirements_t mem_req;
-    vk_get_buffer_memory_requirements(dev->vk_dev, vk_buff, &mem_req);
-
-    vk_memory_allocate_info_t alloc_info{
-        .allocation_size = mem_req.size,
-        .memory_type_index = vku_find_memory_type(dev, mem_req.memory_type_bits, mem_flags)
-    };
-
-    VK_ASSERT(vk_allocate_memory(dev->vk_dev, &alloc_info, nullptr, &vk_mem));
-    VK_ASSERT(vk_bind_buffer_memory(dev->vk_dev, vk_buff, vk_mem, 0));
-
-    dev->add_child(this);
+inline vk_result_t vku_buffer_t::init() {
 }
+inline vk_result_t vku_buffer_t::uninit() {
+}
+inline vku_ref_p<vku_buffer_t> vku_buffer_t::create(
+        vku_ref_p<vku_device_t> dev,
+        size_t size,
+        vk_buffer_usage_flags_t usage,
+        vk_sharing_mode_t sh_mode,
+        vk_memory_property_flags_t mem_flags)
+{
+}
+
+// inline vku_buffer_t::vku_buffer_t(vku_device_t *dev,
+//         size_t size, vk_buffer_usage_flags_t usage, vk_sharing_mode_t sh_mode,
+//         vk_memory_property_flags_t mem_flags)
+//  : dev(dev), size(size)
+//  {
+//     vk_buffer_create_info_t buff_info{
+//         .size = size,
+//         .usage = usage,
+//         .sharing_mode = sh_mode
+//     };
+
+//     VK_ASSERT(vk_create_buffer(dev->vk_dev, &buff_info, nullptr, &vk_buff));
+
+//     vk_memory_requirements_t mem_req;
+//     vk_get_buffer_memory_requirements(dev->vk_dev, vk_buff, &mem_req);
+
+//     vk_memory_allocate_info_t alloc_info{
+//         .allocation_size = mem_req.size,
+//         .memory_type_index = vku_find_memory_type(dev, mem_req.memory_type_bits, mem_flags)
+//     };
+
+//     VK_ASSERT(vk_allocate_memory(dev->vk_dev, &alloc_info, nullptr, &vk_mem));
+//     VK_ASSERT(vk_bind_buffer_memory(dev->vk_dev, vk_buff, vk_mem, 0));
+
+//     dev->add_child(this);
+// }
 
 inline void *vku_buffer_t::map_data(vk_device_size_t offset, vk_device_size_t size) {
     if (map_ptr) {
         DBG("Memory is already mapped!");
         throw vku_err_t(VK_ERROR_UNKNOWN);
     }
-    VK_ASSERT(vkMapMemory(dev->vk_dev, vk_mem, offset, size, 0, &map_ptr));
+    VK_ASSERT(vkMapMemory(dev->get()->vk_dev, vk_mem, offset, size, 0, &map_ptr));
     return map_ptr;
 }
 
@@ -1800,77 +2025,88 @@ inline void vku_buffer_t::unmap_data() {
         DBG("Memory is not mapped, can't unmap");
         throw vku_err_t(VK_ERROR_UNKNOWN);
     }
-    vkUnmapMemory(dev->vk_dev, vk_mem);
+    vkUnmapMemory(dev->get()->vk_dev, vk_mem);
     map_ptr = nullptr;
 }
 
-inline vku_buffer_t::~vku_buffer_t() {
-    cleanup();
-    dev->rm_child(this);
-    if (map_ptr)
-        unmap_data();
-    vk_destroy_buffer(dev->vk_dev, vk_buff, nullptr);
-    vk_free_memory(dev->vk_dev, vk_mem, nullptr);
-}
+// inline vku_buffer_t::~vku_buffer_t() {
+//     cleanup();
+//     dev->rm_child(this);
+//     if (map_ptr)
+//         unmap_data();
+//     vk_destroy_buffer(dev->vk_dev, vk_buff, nullptr);
+//     vk_free_memory(dev->vk_dev, vk_mem, nullptr);
+// }
 
 /* vku_image_t (TODO)
 ================================================================================================= */
 
-inline vku_image_t::vku_image_t(vku_device_t *dev, uint32_t width, uint32_t height, vk_format_t fmt,
+inline vk_result_t vku_image_t::init() {
+}
+inline vk_result_t vku_image_t::uninit() {
+}
+inline vku_ref_p<vku_image_t> vku_image_t::create(
+        vku_ref_p<vku_device_t> dev,
+        uint32_t width,
+        uint32_t height,
+        vk_format_t fmt,
         vk_image_usage_flags_t usage)
-: dev(dev), width(width), height(height), fmt(fmt)
 {
-    vk_image_create_info_t image_info{
-        .flags = 0,
-        .image_type = VK_IMAGE_TYPE_2D,
-        .format = fmt,
-        .extent = {
-            .width = width,
-            .height = height,
-            .depth = 1,
-        },
-        .mip_levels = 1,
-        .array_layers = 1,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = usage,
-        .sharing_mode = VK_SHARING_MODE_EXCLUSIVE,
-        .initial_layout = VK_IMAGE_LAYOUT_UNDEFINED,
-    };
-
-    VK_ASSERT(vk_create_image(dev->vk_dev, &image_info, nullptr, &vk_img));
-    FnScope err_scope([&]{ vk_destroy_image(dev->vk_dev, vk_img, nullptr); });
-
-    vk_memory_requirements_t mem_req;
-    vk_get_image_memory_requirements(dev->vk_dev, vk_img, &mem_req);
-
-    vk_memory_allocate_info_t alloc_info{
-        .allocation_size = mem_req.size,
-        .memory_type_index = vku_find_memory_type(dev, mem_req.memory_type_bits,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
-    };
-
-    VK_ASSERT(vk_allocate_memory(dev->vk_dev, &alloc_info, nullptr, &vk_img_mem));
-    VK_ASSERT(vk_bind_image_memory(dev->vk_dev, vk_img, vk_img_mem, 0));
-
-    dev->add_child(this);
-    err_scope.disable();
 }
 
-inline void vku_image_t::transition_layout(vku_cmdpool_t *cp,
-        vk_image_layout_t old_layout, vk_image_layout_t new_layout, vku_cmdbuff_t *pcbuff)
+// inline vku_image_t::vku_image_t(vku_device_t *dev, uint32_t width, uint32_t height, vk_format_t fmt,
+//         vk_image_usage_flags_t usage)
+// : dev(dev), width(width), height(height), fmt(fmt)
+// {
+//     vk_image_create_info_t image_info{
+//         .flags = 0,
+//         .image_type = VK_IMAGE_TYPE_2D,
+//         .format = fmt,
+//         .extent = {
+//             .width = width,
+//             .height = height,
+//             .depth = 1,
+//         },
+//         .mip_levels = 1,
+//         .array_layers = 1,
+//         .samples = VK_SAMPLE_COUNT_1_BIT,
+//         .tiling = VK_IMAGE_TILING_OPTIMAL,
+//         .usage = usage,
+//         .sharing_mode = VK_SHARING_MODE_EXCLUSIVE,
+//         .initial_layout = VK_IMAGE_LAYOUT_UNDEFINED,
+//     };
+
+//     VK_ASSERT(vk_create_image(dev->vk_dev, &image_info, nullptr, &vk_img));
+//     FnScope err_scope([&]{ vk_destroy_image(dev->vk_dev, vk_img, nullptr); });
+
+//     vk_memory_requirements_t mem_req;
+//     vk_get_image_memory_requirements(dev->vk_dev, vk_img, &mem_req);
+
+//     vk_memory_allocate_info_t alloc_info{
+//         .allocation_size = mem_req.size,
+//         .memory_type_index = vku_find_memory_type(dev, mem_req.memory_type_bits,
+//                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+//     };
+
+//     VK_ASSERT(vk_allocate_memory(dev->vk_dev, &alloc_info, nullptr, &vk_img_mem));
+//     VK_ASSERT(vk_bind_image_memory(dev->vk_dev, vk_img, vk_img_mem, 0));
+
+//     dev->add_child(this);
+//     err_scope.disable();
+// }
+
+inline void vku_image_t::transition_layout(vku_ref_p<vku_cmdpool_t> cp,
+        vk_image_layout_t old_layout, vk_image_layout_t new_layout, vku_ref_p<vku_cmdbuff_t> cbuff)
 {
-    std::unique_ptr<vku_cmdbuff_t> cbuff;
     bool existing_cbuff = true;
-    if (!pcbuff) {
-        cbuff = std::make_unique<vku_cmdbuff_t>(cp, true);
-        pcbuff = cbuff.get();
+    if (!cbuff) {
+        cbuff = vku_cmdbuff_t::create(cp, true);
         existing_cbuff = false;
     }
-    auto fence = std::make_unique<vku_fence_t>(cp->dev);
+    auto fence = vku_fence_t::create(cp->get()->dev);
 
     if (!existing_cbuff)
-        pcbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+        cbuff->get()->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
     
     vk_image_memory_barrier_t barrier {
         .old_layout = old_layout,
@@ -1933,49 +2169,48 @@ inline void vku_image_t::transition_layout(vku_cmdpool_t *cp,
     /* TODO: don't we need a transition from shader_read to transfer_dst? That for transfering
     inside the image later on? */
 
-    vk_cmd_pipeline_barrier(pcbuff->vk_buff, src_stage, dst_stage,
+    vk_cmd_pipeline_barrier(cbuff->get()->vk_buff, src_stage, dst_stage,
             0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     if (!existing_cbuff) {
-        pcbuff->end();
+        cbuff->get()->end();
 
-        vku_submit_cmdbuff({}, cbuff.get(), fence.get(), {});
-        vku_wait_fences({fence.get()});
+        vku_submit_cmdbuff({}, cbuff, fence, {});
+        vku_wait_fences({fence});
     }
 }
 
-inline void vku_image_t::set_data(vku_cmdpool_t *cp, void *data, uint32_t sz, vku_cmdbuff_t *pcbuff) {
+inline void vku_image_t::set_data(vku_ref_p<vku_cmdpool_t> cp, void *data, uint32_t sz,
+        vku_ref_p<vku_cmdbuff_t> cbuff)
+{
     uint32_t img_sz = width * height * 4;
 
     if (img_sz != sz)
         throw vku_err_t(sformat("data size(%d) does not match with image size(%d)", sz, img_sz));
 
-    auto buff = std::make_unique<vku_buffer_t>(
-        cp->dev,
+    auto buff = vku_buffer_t::create(
+        cp->get()->dev,
         img_sz,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_SHARING_MODE_EXCLUSIVE,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
 
-    memcpy(buff->map_data(0, img_sz), data, img_sz);
-    buff->unmap_data();
+    memcpy(buff->get()->map_data(0, img_sz), data, img_sz);
+    buff->get()->unmap_data();
 
-    transition_layout(cp, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, pcbuff);
+    transition_layout(cp, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, cbuff);
 
-    auto fence = std::make_unique<vku_fence_t>(cp->dev);
+    auto fence = vku_fence_t::create(cp->get()->dev);
 
-    std::unique_ptr<vku_cmdbuff_t> cbuff;
-    vku_cmdbuff_t *aux_pcbuff = pcbuff;
     bool existing_cbuff = true;
-    if (!aux_pcbuff) {
-        cbuff = std::make_unique<vku_cmdbuff_t>(cp, true);
-        aux_pcbuff = cbuff.get();
+    if (!cbuff) {
+        cbuff = vku_cmdbuff_t::create(cp, true);
         existing_cbuff = false;
     }
 
     if (!existing_cbuff)
-        aux_pcbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+        cbuff->get()->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
     vk_buffer_image_copy_t region{
         .buffer_offset = 0,
@@ -1995,8 +2230,8 @@ inline void vku_image_t::set_data(vku_cmdpool_t *cp, void *data, uint32_t sz, vk
         } 
     };
     vk_cmd_copy_buffer_to_image(
-        aux_pcbuff->vk_buff,
-        buff->vk_buff,
+        cbuff->get()->vk_buff,
+        buff->get()->vk_buff,
         vk_img,
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         1,
@@ -2004,92 +2239,115 @@ inline void vku_image_t::set_data(vku_cmdpool_t *cp, void *data, uint32_t sz, vk
     );
 
     if (!existing_cbuff) {
-        aux_pcbuff->end();
+        cbuff->get()->end();
 
-        vku_submit_cmdbuff({}, cbuff.get(), fence.get(), {});
-        vku_wait_fences({fence.get()});
+        vku_submit_cmdbuff({}, cbuff, fence, {});
+        vku_wait_fences({fence});
     }
 
     transition_layout(cp, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, pcbuff);
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, cbuff);
 }
 
-inline vku_image_t::~vku_image_t() {
-    cleanup();
-    dev->rm_child(this);
+// inline vku_image_t::~vku_image_t() {
+//     cleanup();
+//     dev->rm_child(this);
 
-    vk_destroy_image(dev->vk_dev, vk_img, nullptr);
-    vk_free_memory(dev->vk_dev, vk_img_mem, nullptr);
-}
+//     vk_destroy_image(dev->vk_dev, vk_img, nullptr);
+//     vk_free_memory(dev->vk_dev, vk_img_mem, nullptr);
+// }
 
 /* vku_img_view_t (TODO)
 ================================================================================================= */
 
-inline vku_img_view_t::vku_img_view_t(vku_image_t *img, vk_image_aspect_flags_t aspect_mask)
-: img(img)
+inline vk_result_t vku_img_view_t::init() {
+}
+inline vk_result_t vku_img_view_t::uninit() {
+}
+inline vku_ref_p<vku_img_view_t> vku_img_view_t::create(
+        vku_ref_p<vku_image_t> img,
+        vk_image_aspect_flags_t aspect_mask)
 {
-    vk_image_view_create_info_t view_info {
-        .image = img->vk_img,
-        .view_type = VK_IMAGE_VIEW_TYPE_2D,
-        .format = img->fmt,
-        .subresource_range = {
-            .aspect_mask = aspect_mask,
-            .base_mip_level = 0,
-            .level_count = 1,
-            .base_array_layer = 0,
-            .layer_count = 1,
-        }
-    };
-
-    VK_ASSERT(vk_create_image_view(img->dev->vk_dev, &view_info, nullptr, &vk_view));
-
-    img->add_child(this);
 }
 
-inline vku_img_view_t::~vku_img_view_t() {
-    cleanup();
-    img->rm_child(this);
+// inline vku_img_view_t::vku_img_view_t(vku_image_t *img, vk_image_aspect_flags_t aspect_mask)
+// : img(img)
+// {
+//     vk_image_view_create_info_t view_info {
+//         .image = img->vk_img,
+//         .view_type = VK_IMAGE_VIEW_TYPE_2D,
+//         .format = img->fmt,
+//         .subresource_range = {
+//             .aspect_mask = aspect_mask,
+//             .base_mip_level = 0,
+//             .level_count = 1,
+//             .base_array_layer = 0,
+//             .layer_count = 1,
+//         }
+//     };
 
-    vk_destroy_image_view(img->dev->vk_dev, vk_view, nullptr);
+//     VK_ASSERT(vk_create_image_view(img->dev->vk_dev, &view_info, nullptr, &vk_view));
+
+//     img->add_child(this);
+// }
+
+// inline vku_img_view_t::~vku_img_view_t() {
+//     cleanup();
+//     img->rm_child(this);
+
+//     vk_destroy_image_view(img->dev->vk_dev, vk_view, nullptr);
+// }
+
+/* vku_img_sampl_t (TODO)
+================================================================================================= */
+
+inline vk_result_t vku_img_sampl_t::init() {
+}
+inline vk_result_t vku_img_sampl_t::uninit() {
+}
+inline vku_ref_p<vku_img_sampl_t> vku_img_sampl_t::create(
+        vku_ref_p<vku_device_t> dev,
+        vk_filter_t filter)
+{
 }
 
-inline vku_img_sampl_t::vku_img_sampl_t(vku_device_t *dev, vk_filter_t filter) : dev(dev) {
-    vk_physical_device_properties_t dev_props;
-    vk_get_physical_device_properties(dev->vk_phy_dev, &dev_props);
+// inline vku_img_sampl_t::vku_img_sampl_t(vku_device_t *dev, vk_filter_t filter) : dev(dev) {
+//     vk_physical_device_properties_t dev_props;
+//     vk_get_physical_device_properties(dev->vk_phy_dev, &dev_props);
 
-    vk_sampler_create_info_t sampler_info {
-        .mag_filter = filter,
-        .min_filter = filter,
-        .mipmap_mode = filter == VK_FILTER_LINEAR ? VK_SAMPLER_MIPMAP_MODE_LINEAR
-                                                  : VK_SAMPLER_MIPMAP_MODE_NEAREST,
-        .address_mode_u = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .address_mode_v = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .address_mode_w = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .mip_lod_bias = 0.0f,
-        .anisotropy_enable = vk_bool32_t(filter == VK_FILTER_NEAREST ? VK_FALSE : VK_TRUE),
-        .max_anisotropy = dev_props.limits.max_sampler_anisotropy,
-        .compare_enable = VK_FALSE,
-        .compare_op = VK_COMPARE_OP_ALWAYS,
-        .min_lod = 0.0f,
-        .max_lod = 0.0f,
-        .border_color = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
-        .unnormalized_coordinates = VK_FALSE,
-    };
-    // OBS:
-    // samplerInfo.anisotropyEnable = VK_FALSE;
-    // samplerInfo.maxAnisotropy = 1.0f;
+//     vk_sampler_create_info_t sampler_info {
+//         .mag_filter = filter,
+//         .min_filter = filter,
+//         .mipmap_mode = filter == VK_FILTER_LINEAR ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+//                                                   : VK_SAMPLER_MIPMAP_MODE_NEAREST,
+//         .address_mode_u = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+//         .address_mode_v = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+//         .address_mode_w = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+//         .mip_lod_bias = 0.0f,
+//         .anisotropy_enable = vk_bool32_t(filter == VK_FILTER_NEAREST ? VK_FALSE : VK_TRUE),
+//         .max_anisotropy = dev_props.limits.max_sampler_anisotropy,
+//         .compare_enable = VK_FALSE,
+//         .compare_op = VK_COMPARE_OP_ALWAYS,
+//         .min_lod = 0.0f,
+//         .max_lod = 0.0f,
+//         .border_color = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+//         .unnormalized_coordinates = VK_FALSE,
+//     };
+//     // OBS:
+//     // samplerInfo.anisotropyEnable = VK_FALSE;
+//     // samplerInfo.maxAnisotropy = 1.0f;
 
-    VK_ASSERT(vk_create_sampler(dev->vk_dev, &sampler_info, nullptr, &vk_sampler));
+//     VK_ASSERT(vk_create_sampler(dev->vk_dev, &sampler_info, nullptr, &vk_sampler));
 
-    dev->add_child(this);
-}
+//     dev->add_child(this);
+// }
 
-inline vku_img_sampl_t::~vku_img_sampl_t() {
-    cleanup();
-    dev->rm_child(this);
+// inline vku_img_sampl_t::~vku_img_sampl_t() {
+//     cleanup();
+//     dev->rm_child(this);
 
-    vk_destroy_sampler(dev->vk_dev, vk_sampler, nullptr);
-}
+//     vk_destroy_sampler(dev->vk_dev, vk_sampler, nullptr);
+// }
 
 inline vk_descriptor_set_layout_binding_t vku_img_sampl_t::get_desc_set(uint32_t binding,
         vk_shader_stage_flags_t stage)
@@ -2106,87 +2364,219 @@ inline vk_descriptor_set_layout_binding_t vku_img_sampl_t::get_desc_set(uint32_t
 /* vku_desc_pool_t (TODO)
 ================================================================================================= */
 
-inline vku_desc_pool_t::vku_desc_pool_t(vku_device_t *dev,
-        const vku_binding_desc_t& binds, uint32_t cnt)
-: dev(dev)
+inline vk_result_t vku_desc_pool_t::init() {
+}
+inline vk_result_t vku_desc_pool_t::uninit() {
+}
+inline vku_ref_p<vku_desc_pool_t> vku_desc_pool_t::create(
+        vku_ref_p<vku_device_t> dev,
+        vku_ref_p<vku_binding_desc_t> binds,
+        uint32_t cnt)
 {
-    std::vector<vk_descriptor_pool_size_t> pool_sizes;
-    std::map<decltype(binds.binds[0]->desc.descriptor_type), uint32_t> type_cnt;
-    for (auto &b : binds.binds)
-        type_cnt[b->desc.descriptor_type] += cnt;
-
-    for (auto &[type, cnt] : type_cnt) {
-        pool_sizes.push_back(vk_descriptor_pool_size_t{
-            .type = type,
-            .descriptor_count = cnt,
-        });
-        DBGVV("pool_size: type: %x sz: %d", type, cnt);
-    }
-
-    vk_descriptor_pool_create_info_t pool_info{
-        .max_sets = cnt,
-        .pool_size_count = (uint32_t)pool_sizes.size(),
-        .p_pool_sizes = pool_sizes.data(),
-    };
-
-    VK_ASSERT(vk_create_descriptor_pool(dev->vk_dev, &pool_info, nullptr, &vk_descpool));
-    DBGVV("Allocated pool: %p", vk_descpool);
-
-    dev->add_child(this);
 }
 
-inline vku_desc_pool_t::~vku_desc_pool_t() {
-    cleanup();
-    dev->rm_child(this);
-    vk_destroy_descriptor_pool(dev->vk_dev, vk_descpool, nullptr);
-}
+// inline vku_desc_pool_t::vku_desc_pool_t(vku_device_t *dev,
+//         const vku_binding_desc_t& binds, uint32_t cnt)
+// : dev(dev)
+// {
+//     std::vector<vk_descriptor_pool_size_t> pool_sizes;
+//     std::map<decltype(binds.binds[0]->desc.descriptor_type), uint32_t> type_cnt;
+//     for (auto &b : binds.binds)
+//         type_cnt[b->desc.descriptor_type] += cnt;
+
+//     for (auto &[type, cnt] : type_cnt) {
+//         pool_sizes.push_back(vk_descriptor_pool_size_t{
+//             .type = type,
+//             .descriptor_count = cnt,
+//         });
+//         DBGVV("pool_size: type: %x sz: %d", type, cnt);
+//     }
+
+//     vk_descriptor_pool_create_info_t pool_info{
+//         .max_sets = cnt,
+//         .pool_size_count = (uint32_t)pool_sizes.size(),
+//         .p_pool_sizes = pool_sizes.data(),
+//     };
+
+//     VK_ASSERT(vk_create_descriptor_pool(dev->vk_dev, &pool_info, nullptr, &vk_descpool));
+//     DBGVV("Allocated pool: %p", vk_descpool);
+
+//     dev->add_child(this);
+// }
+
+// inline vku_desc_pool_t::~vku_desc_pool_t() {
+//     cleanup();
+//     dev->rm_child(this);
+//     vk_destroy_descriptor_pool(dev->vk_dev, vk_descpool, nullptr);
+// }
 
 /* vku_desc_set_t (TODO)
 ================================================================================================= */
 
-inline vku_desc_set_t::vku_desc_set_t(vku_desc_pool_t *dp, vk_descriptor_set_layout_t layout,
-            const vku_binding_desc_t& binds)
-: dp(dp)
+inline vk_result_t vku_desc_set_t::init() {
+}
+inline vk_result_t vku_desc_set_t::uninit() {
+}
+inline vku_ref_p<vku_desc_set_t> vku_desc_set_t::create(
+        vku_ref_p<vku_desc_pool_t> dp,
+        vk_descriptor_set_layout_t layout,
+        vku_ref_p<vku_binding_desc_t> bd)
 {
-    vk_descriptor_set_allocate_info_t alloc_info {
-        .descriptor_pool = dp->vk_descpool,
-        .descriptor_set_count = 1,
-        .p_set_layouts = &layout,
+}
+
+// inline vku_desc_set_t::vku_desc_set_t(vku_desc_pool_t *dp, vk_descriptor_set_layout_t layout,
+//             const vku_binding_desc_t& binds)
+// : dp(dp)
+// {
+//     vk_descriptor_set_allocate_info_t alloc_info {
+//         .descriptor_pool = dp->vk_descpool,
+//         .descriptor_set_count = 1,
+//         .p_set_layouts = &layout,
+//     };
+
+//     VK_ASSERT(vk_allocate_descriptor_sets(dp->dev->vk_dev, &alloc_info, &vk_desc_set));
+//     DBGVV("Allocated descriptor set: %p from pool: %p with layout: %p",
+//             vk_desc_set, dp->vk_descpool, layout);
+
+//     /* TODO: this sucks, it references the buffer, but doesn't have a mechanism to do something
+//     if the buffer is freed without it's knowledge. So the buffer and descriptor set must
+//     match in size, but the buffer doesn't know that, that's not ok. */
+
+//     auto desc_writes = binds.get_writes();
+//     for (auto &dw : desc_writes)
+//         dw.dst_set = vk_desc_set;
+
+//     DBGVV("writes: %ld", desc_writes.size());
+//     for (auto &w : desc_writes) {
+//         DBGVV("write: type: %x, bind: %d, dst_set: %p",
+//                 w.descriptor_type, w.dst_binding, w.dst_set);
+//     }
+
+//     vk_update_descriptor_sets(dp->dev->vk_dev, (uint32_t)desc_writes.size(),
+//             desc_writes.data(), 0, nullptr);
+
+//     dp->add_child(this);
+// }
+
+// inline vku_desc_set_t::~vku_desc_set_t() {
+//     cleanup();
+//     dp->rm_child(this);
+// }
+
+/* vku_binding_desc_t (TODO):
+================================================================================================= */
+
+inline vku_ref_p<vku_binding_desc_t::buff_binding_t> vku_binding_desc_t::buff_binding_t::create(
+        vk_descriptor_set_layout_binding_t desc,
+        vku_ref_p<vku_buffer_t> buff)
+{
+    using bd_t = vku_binding_desc_t::buff_binding_t;
+    vku_ref_p<bd_t> ret = vku_ref_t<bd_t>::create_obj_ref(std::make_unique<bd_t>());
+    /* Implementation is provided in header part because else it would not be clear how to
+    initialize imag_info */
+    ret->get()->desc = desc;
+    ret->get()->buff = buff;
+    return ret;
+}
+
+inline vk_result_t vku_binding_desc_t::buff_binding_t::init() {
+    if (buff) {
+        desc_buff_info = vk_descriptor_buffer_info_t {
+            .buffer = buff->get()->vk_buff,
+            .offset = 0,
+            .range = buff->get()->size
+        };
+    }
+    return VK_SUCCESS;
+}
+
+inline vk_write_descriptor_set_t vku_binding_desc_t::buff_binding_t::get_write() const {
+    vk_write_descriptor_set_t desc_write{
+        .dst_set = 0, /* will be filled later */
+        .dst_binding = desc.binding,
+        .dst_array_element = 0,
+        .descriptor_count = 1,
+        .descriptor_type = desc.descriptor_type,
+        .p_image_info = nullptr,
+        .p_buffer_info = &desc_buff_info,
+        .p_texel_buffer_view = nullptr,
     };
 
-    VK_ASSERT(vk_allocate_descriptor_sets(dp->dev->vk_dev, &alloc_info, &vk_desc_set));
-    DBGVV("Allocated descriptor set: %p from pool: %p with layout: %p",
-            vk_desc_set, dp->vk_descpool, layout);
+    return desc_write;
+}
 
-    /* TODO: this sucks, it references the buffer, but doesn't have a mechanism to do something
-    if the buffer is freed without it's knowledge. So the buffer and descriptor set must
-    match in size, but the buffer doesn't know that, that's not ok. */
 
-    auto desc_writes = binds.get_writes();
-    for (auto &dw : desc_writes)
-        dw.dst_set = vk_desc_set;
+inline vku_ref_p<vku_binding_desc_t::sampl_binding_t> vku_binding_desc_t::sampl_binding_t::create(
+        vk_descriptor_set_layout_binding_t desc,
+        vku_ref_p<vku_img_view_t> view,
+        vku_ref_p<vku_img_sampl_t> sampl)
+{
+    using sb_t = vku_binding_desc_t::sampl_binding_t;
+    /* Implementation is provided in header part because else it would not be clear how to
+    initialize imag_info */
+    vku_ref_p<sb_t> ret = vku_ref_t<sb_t>::create_obj_ref(std::make_unique<sb_t>());
+    ret->get()->desc = desc;
+    ret->get()->view = view;
+    ret->get()->sampl = sampl;
+    return ret;
+}
 
-    DBGVV("writes: %ld", desc_writes.size());
-    for (auto &w : desc_writes) {
-        DBGVV("write: type: %x, bind: %d, dst_set: %p",
-                w.descriptor_type, w.dst_binding, w.dst_set);
+inline vk_result_t vku_binding_desc_t::sampl_binding_t::init() {
+    if (view && sampl) {
+        imag_info = vk_descriptor_image_info_t {
+            .sampler = sampl->get()->vk_sampler,
+            .image_view = view->get()->vk_view,
+            .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        };
     }
-
-    vk_update_descriptor_sets(dp->dev->vk_dev, (uint32_t)desc_writes.size(),
-            desc_writes.data(), 0, nullptr);
-
-    dp->add_child(this);
+    return VK_SUCCESS;
 }
 
-inline vku_desc_set_t::~vku_desc_set_t() {
-    cleanup();
-    dp->rm_child(this);
+inline vk_write_descriptor_set_t vku_binding_desc_t::sampl_binding_t::get_write() const {
+    vk_write_descriptor_set_t desc_write{
+        .dst_set = 0, /* will be filled later */
+        .dst_binding = desc.binding,
+        .dst_array_element = 0,
+        .descriptor_count = 1,
+        .descriptor_type = desc.descriptor_type,
+        .p_image_info = &imag_info,
+        .p_buffer_info = nullptr,
+        .p_texel_buffer_view = nullptr,
+    };
+
+    return desc_write;
 }
+
+inline vk_result_t vku_binding_desc_t::init() {
+}
+inline vk_result_t vku_binding_desc_t::uninit() {
+}
+inline vku_ref_p<vku_binding_desc_t> vku_binding_desc_t::create(
+        std::vector<vku_ref_p<binding_desc_t>> binds)
+{
+}
+
+inline std::vector<vk_write_descriptor_set_t> vku_binding_desc_t::get_writes() const {
+    std::vector<vk_write_descriptor_set_t> ret;
+
+    for (auto &b : binds)
+        ret.push_back(b->get()->get_write());
+
+    return ret;
+}
+
+inline std::vector<vk_descriptor_set_layout_binding_t> vku_binding_desc_t::get_descriptors() const {
+    std::vector<vk_descriptor_set_layout_binding_t> ret;
+    for (auto &b : binds)
+        ret.push_back(b->get()->desc);
+    return ret;
+}
+
 
 /* Functions: (TODO)
 ================================================================================================= */
 
-inline void vku_wait_fences(std::vector<vku_fence_t *> fences) {
+inline void vku_wait_fences(std::vector<vku_ref_p<vku_fence_t>> fences) {
     std::vector<vk_fence_t> vk_fences;
 
     if (!fences.size()) {
@@ -2195,13 +2585,13 @@ inline void vku_wait_fences(std::vector<vku_fence_t *> fences) {
     }
     vk_fences.reserve(fences.size());
     for (auto f : fences)
-        vk_fences.push_back(f->vk_fence);
+        vk_fences.push_back(f->get()->vk_fence);
 
-    VK_ASSERT(vk_wait_for_fences(fences[0]->dev->vk_dev, vk_fences.size(), vk_fences.data(),
-            VK_TRUE, UINT64_MAX));
+    VK_ASSERT(vk_wait_for_fences(fences[0]->get()->dev->get()->vk_dev,
+            vk_fences.size(), vk_fences.data(), VK_TRUE, UINT64_MAX));
 }
 
-inline void vku_reset_fences(std::vector<vku_fence_t *> fences) {
+inline void vku_reset_fences(std::vector<vku_ref_p<vku_fence_t>> fences) {
     std::vector<vk_fence_t> vk_fences;
 
     if (!fences.size()) {
@@ -2210,20 +2600,23 @@ inline void vku_reset_fences(std::vector<vku_fence_t *> fences) {
     }
     vk_fences.reserve(fences.size());
     for (auto f : fences)
-        vk_fences.push_back(f->vk_fence);
-    VK_ASSERT(vk_reset_fences(fences[0]->dev->vk_dev, vk_fences.size(), vk_fences.data()));
+        vk_fences.push_back(f->get()->vk_fence);
+    VK_ASSERT(vk_reset_fences(fences[0]->get()->dev->get()->vk_dev,
+            vk_fences.size(), vk_fences.data()));
 }
 
-inline void vku_aquire_next_img(vku_swapchain_t *swc, vku_sem_t *sem, uint32_t *img_idx) {
-    VK_ASSERT(vk_acquire_next_image_khr(swc->dev->vk_dev, swc->vk_swapchain, UINT64_MAX,
-            sem->vk_sem, VK_NULL_HANDLE, img_idx));
+inline void vku_aquire_next_img(vku_ref_p<vku_swapchain_t> swc, vku_ref_p<vku_sem_t> sem,
+        uint32_t *img_idx)
+{
+    VK_ASSERT(vk_acquire_next_image_khr(swc->get()->dev->get()->vk_dev, swc->get()->vk_swapchain,
+            UINT64_MAX, sem->get()->vk_sem, VK_NULL_HANDLE, img_idx));
 }
 
 inline void vku_submit_cmdbuff(
-        std::vector<std::pair<vku_sem_t *, VkPipelineStageFlags>> wait_sems,
-        vku_cmdbuff_t *cbuff,
-        vku_fence_t *fence,
-        std::vector<vku_sem_t *> sig_sems)
+        std::vector<std::pair<vku_ref_p<vku_sem_t>, VkPipelineStageFlags>> wait_sems,
+        vku_ref_p<vku_cmdbuff_t> cbuff,
+        vku_ref_p<vku_fence_t> fence,
+        std::vector<vku_ref_p<vku_sem_t>> sig_sems)
 {
     std::vector<VkPipelineStageFlags> vk_wait_stages;
     std::vector<vk_semaphore_t> vk_wait_sems;
@@ -2231,74 +2624,73 @@ inline void vku_submit_cmdbuff(
 
     for (auto [s, wait_stage] : wait_sems) {
         vk_wait_stages.push_back(wait_stage);
-        vk_wait_sems.push_back(s->vk_sem);
+        vk_wait_sems.push_back(s->get()->vk_sem);
     }
     for (auto s : sig_sems) {
-        vk_sig_sems.push_back(s->vk_sem);
+        vk_sig_sems.push_back(s->get()->vk_sem);
     }
     vk_submit_info_t submit_info {
         .wait_semaphore_count = (uint32_t)vk_wait_sems.size(),
         .p_wait_semaphores = vk_wait_sems.size() == 0 ? nullptr : vk_wait_sems.data(),
         .p_wait_dst_stage_mask = vk_wait_sems.size() == 0 ? nullptr : vk_wait_stages.data(),
         .command_buffer_count = 1,
-        .p_command_buffers = &cbuff->vk_buff,
+        .p_command_buffers = &cbuff->get()->vk_buff,
         .signal_semaphore_count = (uint32_t)vk_sig_sems.size(),
         .p_signal_semaphores = vk_sig_sems.size() == 0 ? nullptr : vk_sig_sems.data(),
     };
 
-    VK_ASSERT(vk_queue_submit(cbuff->cp->dev->vk_graphics_que, 1, &submit_info,
-            fence == nullptr ? nullptr : fence->vk_fence));
+    VK_ASSERT(vk_queue_submit(cbuff->get()->cp->get()->dev->get()->vk_graphics_que, 1, &submit_info,
+            fence == nullptr ? nullptr : fence->get()->vk_fence));
 }
 
 inline void vku_present(
-        vku_swapchain_t *swc,
-        std::vector<vku_sem_t *> wait_sems,
+        vku_ref_p<vku_swapchain_t> swc,
+        std::vector<vku_ref_p<vku_sem_t>> wait_sems,
         uint32_t img_idx)
 {
     std::vector<vk_semaphore_t> vk_wait_sems;
 
     for (auto s : wait_sems) {
-        vk_wait_sems.push_back(s->vk_sem);
+        vk_wait_sems.push_back(s->get()->vk_sem);
     }
 
     vk_present_info_khr_t pres_info {
         .wait_semaphore_count = (uint32_t)vk_wait_sems.size(),
         .p_wait_semaphores = vk_wait_sems.data(),
         .swapchain_count = 1,
-        .p_swapchains = &swc->vk_swapchain,
+        .p_swapchains = &swc->get()->vk_swapchain,
         .p_image_indices = &img_idx,
         .p_results = NULL,
     };
 
-    VK_ASSERT(vk_queue_present_khr(swc->dev->vk_present_que, &pres_info));
+    VK_ASSERT(vk_queue_present_khr(swc->get()->dev->get()->vk_present_que, &pres_info));
 }
 
-inline void vku_copy_buff(vku_cmdpool_t *cp, vku_buffer_t *dst, vku_buffer_t *src,
-        vk_device_size_t sz, vku_cmdbuff_t *pcbuff)
+inline void vku_copy_buff(vku_ref_p<vku_cmdpool_t> cp, vku_ref_p<vku_buffer_t> dst,
+        vku_ref_p<vku_buffer_t> src, vk_device_size_t sz, vku_ref_p<vku_cmdbuff_t> cbuff)
 {
-    std::unique_ptr<vku_cmdbuff_t> cbuff;
     bool existing_cbuff = true;
-    if (!pcbuff) {
-        cbuff = std::make_unique<vku_cmdbuff_t>(cp, true);
-        pcbuff = cbuff.get();
+    if (!cbuff) {
+        cbuff = vku_cmdbuff_t::create(cp, true);
         existing_cbuff = false;
     }
-    auto fence = std::make_unique<vku_fence_t>(cp->dev);
+    auto fence = vku_fence_t::create(cp->get()->dev);
 
     if (!existing_cbuff)
-        pcbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+        cbuff->get()->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
     vk_buffer_copy_t copy_region{
         .src_offset = 0,
         .dst_offset = 0,
         .size = sz
     };
-    vk_cmd_copy_buffer(pcbuff->vk_buff, src->vk_buff, dst->vk_buff, 1, &copy_region);
+    vk_cmd_copy_buffer(cbuff->get()->vk_buff, src->get()->vk_buff, dst->get()->vk_buff,
+            1, &copy_region);
 
     if (!existing_cbuff) {
-        pcbuff->end();
+        cbuff->get()->end();
 
-        vku_submit_cmdbuff({}, cbuff.get(), fence.get(), {});
-        vku_wait_fences({fence.get()});
+        vku_submit_cmdbuff({}, cbuff, fence, {});
+        vku_wait_fences({fence});
     }
 }
 
@@ -2340,7 +2732,7 @@ inline void vku_destroy_dbg_messenger(
     }
 }
 
-static VKAPI_ATTR vk_bool32_t VKAPI_CALL vku_dbg_cbk(
+inline VKAPI_ATTR vk_bool32_t VKAPI_CALL vku_dbg_cbk(
         vk_debug_utils_message_severity_flag_bits_ext_t     severity,
         vk_debug_utils_message_type_flags_ext_t             msg_type,
         const VkDebugUtilsMessengerCallbackDataEXT* _data,
@@ -2991,5 +3383,7 @@ inline const char *vk_err_str(vk_result_t res) {
             return "VK_UNKNOWN_ERR";
     }
 }
+
+} /* namespace vku_utils */
 
 #endif
