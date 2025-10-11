@@ -64,7 +64,6 @@ static auto create_ibuff(auto dev, auto cp, const std::vector<uint16_t>& indices
 
 static auto load_image(auto cp, std::string path) {
     int w, h, chans;
-    DBG("Here?");
     stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &chans, STBI_rgb_alpha);
 
     /* TODO: some more logs around here */
