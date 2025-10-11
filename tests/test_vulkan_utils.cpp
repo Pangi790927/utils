@@ -64,10 +64,11 @@ static auto create_ibuff(auto dev, auto cp, const std::vector<uint16_t>& indices
 
 static auto load_image(auto cp, std::string path) {
     int w, h, chans;
+    DBG("Here?");
     stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &chans, STBI_rgb_alpha);
 
     /* TODO: some more logs around here */
-    vk_device_size_t imag_sz = w*h*4;
+    VkDeviceSize imag_sz = w*h*4;
     if (!pixels) {
         throw vku_err_t("Failed to load image");
     }
@@ -82,6 +83,9 @@ static auto load_image(auto cp, std::string path) {
 
 int main(int argc, char const *argv[])
 {
+    (void)argc;
+    (void)argv;
+
     DBG_SCOPE();
 
     // const std::vector<vku_vertex2d_t> vertices = {
@@ -110,8 +114,9 @@ int main(int argc, char const *argv[])
     vku_mvp_t mvp;
 
     auto inst = vku_instance_t::create();
+    DBG("Done instance init");
 
-    auto vert = vku_spirv_compile(inst, VKU_SPIRV_VERTEX, R"___(
+    auto vert = vku_spirv_compile(VKU_SPIRV_VERTEX, R"___(
         #version 450
 
         layout(binding = 0) uniform ubo_t {
@@ -136,7 +141,7 @@ int main(int argc, char const *argv[])
 
     )___");
 
-    auto frag = vku_spirv_compile(inst, VKU_SPIRV_FRAGMENT, R"___(
+    auto frag = vku_spirv_compile(VKU_SPIRV_FRAGMENT, R"___(
         #version 450
 
         layout(location = 0) in vec3 in_color;      // this is referenced by the vert shader
@@ -152,7 +157,9 @@ int main(int argc, char const *argv[])
         }
     )___");
 
-    auto window =   vku_window_t::create();
+    int width = 800, height = 600;
+
+    auto window =   vku_window_t::create(width, height);
     auto surf =     vku_surface_t::create(window, inst);
     auto dev =      vku_device_t::create(surf);
     auto cp =       vku_cmdpool_t::create(dev);
@@ -170,16 +177,16 @@ int main(int argc, char const *argv[])
     );
     auto mvp_pbuff = mvp_buff->get()->map_data(0, sizeof(vku_mvp_t));
 
-    auto bindings = vku_binding_desc_t::create(std::vector<vku_ref_p<vku_binding_desc_t::binding_desc_t>>{
+    auto bindings = vku_binding_desc_t::create({
         vku_binding_desc_t::buff_binding_t::create(
             vku_ubo_t::get_desc_set(0, VK_SHADER_STAGE_VERTEX_BIT),
             mvp_buff
-        ),
+        ).get()->to_parent<vku_binding_desc_t::binding_desc_t>(),
         vku_binding_desc_t::sampl_binding_t::create(
             vku_img_sampl_t::get_desc_set(1, VK_SHADER_STAGE_FRAGMENT_BIT),
             view,
             sampl
-        ),
+        ).get()->to_parent<vku_binding_desc_t::binding_desc_t>(),
     });
 
     auto sh_vert =  vku_shader_t::create(dev, vert);
@@ -187,7 +194,7 @@ int main(int argc, char const *argv[])
     auto swc =      vku_swapchain_t::create(dev);
     auto rp =       vku_renderpass_t::create(swc);
     auto pl =       vku_pipeline_t::create(
-        opts,
+        width, height,
         rp,
         {sh_vert, sh_frag},
         VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
@@ -206,7 +213,7 @@ int main(int argc, char const *argv[])
     auto ibuff = create_ibuff(dev, cp, indices);
 
     auto desc_pool = vku_desc_pool_t::create(dev, bindings, 1);
-    auto desc_set = vku_desc_set_t::create(desc_pool, pl->vk_desc_set_layout, bindings);
+    auto desc_set = vku_desc_set_t::create(desc_pool, pl->get()->vk_desc_set_layout, bindings);
 
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
@@ -218,8 +225,8 @@ int main(int argc, char const *argv[])
     double start_time = get_time_ms();
    
     DBG("Starting main loop"); 
-    while (!glfwWindowShouldClose(inst->window)) {
-        if (glfwGetKey(inst->window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+    while (!glfwWindowShouldClose(window->get()->get_window())) {
+        if (glfwGetKey(window->get()->get_window(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
             break;
         glfwPollEvents();
 
@@ -234,18 +241,18 @@ int main(int argc, char const *argv[])
             mvp.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
                     glm::vec3(0.0f, 0.0f, 1.0f));
             mvp.proj = glm::perspective(glm::radians(45.0f),
-                    swc->vk_extent.width / (float)swc->vk_extent.height, 0.1f, 10.0f);
+                    swc->get()->vk_extent.width / (float)swc->get()->vk_extent.height, 0.1f, 10.0f);
             mvp.proj[1][1] *= -1;
             memcpy(mvp_pbuff, &mvp, sizeof(mvp));
 
-            cbuff->begin(0);
-            cbuff->begin_rpass(fbs, img_idx);
-            cbuff->bind_vert_buffs(0, {{vbuff, 0}});
-            cbuff->bind_idx_buff(ibuff, 0, VK_INDEX_TYPE_UINT16);
-            cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_GRAPHICS, pl->vk_layout, desc_set);
-            cbuff->draw_idx(pl, indices.size());
-            cbuff->end_rpass();
-            cbuff->end();
+            cbuff->get()->begin(0);
+            cbuff->get()->begin_rpass(fbs, img_idx);
+            cbuff->get()->bind_vert_buffs(0, {{vbuff, 0}});
+            cbuff->get()->bind_idx_buff(ibuff, 0, VK_INDEX_TYPE_UINT16);
+            cbuff->get()->bind_desc_set(VK_PIPELINE_BIND_POINT_GRAPHICS, pl->get()->vk_layout, desc_set);
+            cbuff->get()->draw_idx(pl, indices.size());
+            cbuff->get()->end_rpass();
+            cbuff->get()->end();
 
             vku_submit_cmdbuff({{img_sem, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
                     cbuff, fence, {draw_sem});
@@ -256,27 +263,17 @@ int main(int argc, char const *argv[])
         }
         catch (vku_err_t &e) {
             /* TODO: fix this (next time write what's wrong with it) */
+            DBG("resize?");
             if (e.vk_err == VK_SUBOPTIMAL_KHR) {
-                vk_device_wait_idle(dev->vk_dev);
+                vkDeviceWaitIdle(dev->get()->vk_dev);
 
-                delete swc;
-                swc = new vku_swapchain_t(dev);
-                rp = new vku_renderpass_t(swc);
-                pl = new vku_pipeline_t(
-                    opts,
-                    rp,
-                    {sh_vert, sh_frag},
-                    VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-                    vku_vertex3d_t::get_input_desc(),
-                    bindings
-                );
-                fbs = new vku_framebuffs_t(rp);
+                /* This will rebuild the entire tree following from window */
+                window->rebuild();
             }
             else
                 throw e;
         }
     }
 
-    delete inst;
     return 0;
 }

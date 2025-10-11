@@ -356,7 +356,7 @@ void ap_storage_uninit() {
     ignres = ftruncate(backup_fd, last_storage_sz);
     close(backup_fd);
 
-    (int)ignres;
+    (void)ignres;
 
     ctrl->flag_in_use = false;
     msync(ctrl, CTRL_SZ, MS_SYNC);

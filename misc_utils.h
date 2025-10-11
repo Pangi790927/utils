@@ -152,15 +152,17 @@ inline std::string hexdump_str(void *ptr, int buflen) {
     int i;
     for (i = 0; i < buflen; i += 16) {
         std::string curr;
-        for (int j = 0; j < 16; j++) 
+        for (int j = 0; j < 16; j++) {
             if (i + j < buflen)
                 curr += sformat("%02x ", buf[i + j]);
             else
                 curr += sformat("   ");
             curr += sformat(" ");
-        for (int j = 0; j < 16; j++) 
+        }
+        for (int j = 0; j < 16; j++) {
             if (i + j < buflen)
                 curr += sformat("%c", isprint(buf[i + j]) ? buf[i + j] : '.');
+        }
         if (curr == last_line) {
             if (!repeated) {
                 ret += sformat("%06x: ...\n", i);
@@ -208,7 +210,7 @@ inline std::vector<std::string> ssplit(const std::string& src, const std::string
 }
 
 /* string split, but tries to keep arguments intact */
-static int ssplit_args(const std::string& str, std::vector<std::string>& args) {
+inline int ssplit_args(const std::string& str, std::vector<std::string>& args) {
     const char *cstr = str.c_str();
     std::string token = "";
     bool quoted = false;
