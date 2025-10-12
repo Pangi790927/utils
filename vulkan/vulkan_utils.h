@@ -793,7 +793,6 @@ struct vku_binding_desc_t : public vku_object_t {
     struct buff_binding_t : public binding_desc_t {
         VkDescriptorBufferInfo          desc_buff_info;
 
-        VkDescriptorSetLayoutBinding    desc;
         vku_ref_p<vku_buffer_t>         buff;
 
         static vku_ref_p<buff_binding_t> create(
@@ -809,7 +808,6 @@ struct vku_binding_desc_t : public vku_object_t {
     struct sampl_binding_t : public binding_desc_t {
         VkDescriptorImageInfo           imag_info;
 
-        VkDescriptorSetLayoutBinding    desc;
         vku_ref_p<vku_img_view_t>       view;
         vku_ref_p<vku_img_sampl_t>      sampl;
 
@@ -1448,6 +1446,8 @@ inline VkResult vku_shader_t::_init() {
             .pCode = (uint32_t *)buffer.data(),
         };
         VK_ASSERT(vkCreateShaderModule(dev->get()->vk_dev, &shader_info, NULL, &vk_shader));
+        DBG("Loaded shader from path [%s] of size: %zu data: %p",
+                path.c_str(), buffer.size(), buffer.data());
     }
     else {
         VkShaderModuleCreateInfo shader_info {
@@ -1458,6 +1458,8 @@ inline VkResult vku_shader_t::_init() {
             .pCode = spirv.content.data(),
         };
         VK_ASSERT(vkCreateShaderModule(dev->get()->vk_dev, &shader_info, NULL, &vk_shader));
+        DBG("Loaded shader from buffer of size: %zu data: %p",
+                spirv.content.size() * sizeof(uint32_t), spirv.content.data());
     }
     return VK_SUCCESS;
 }
@@ -2357,8 +2359,9 @@ inline void vku_image_t::transition_layout(vku_ref_p<vku_cmdpool_t> cp,
     }
     auto fence = vku_fence_t::create(cp->get()->dev);
 
-    if (!existing_cbuff)
+    if (!existing_cbuff) {
         cbuff->get()->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    }
     
     VkImageMemoryBarrier barrier {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -2486,13 +2489,15 @@ inline void vku_image_t::set_data(vku_ref_p<vku_cmdpool_t> cp, void *data, uint3
         } 
     };
     vkCmdCopyBufferToImage(
-        cbuff->get()->vk_buff,
-        buff->get()->vk_buff,
-        vk_img,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        1,
-        &region
-    );
+            cbuff->get()->vk_buff,
+            buff->get()->vk_buff,
+            vk_img,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1,
+            &region);
+
+    transition_layout(cp, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, cbuff);
 
     if (!existing_cbuff) {
         cbuff->get()->end();
@@ -2500,9 +2505,6 @@ inline void vku_image_t::set_data(vku_ref_p<vku_cmdpool_t> cp, void *data, uint3
         vku_submit_cmdbuff({}, cbuff, fence, {});
         vku_wait_fences({fence});
     }
-
-    transition_layout(cp, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, cbuff);
 }
 
 
@@ -2517,7 +2519,12 @@ inline VkResult vku_img_view_t::_init() {
         .image = img->get()->vk_img,
         .viewType = VK_IMAGE_VIEW_TYPE_2D,
         .format = img->get()->fmt,
-        .components = { .r = {/*TODO:*/}, .g = {/*TODO:*/}, .b = {/*TODO:*/}, .a = {/*TODO:*/}},
+        .components = {
+            .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = VK_COMPONENT_SWIZZLE_IDENTITY
+        },
         .subresourceRange = {
             .aspectMask = aspect_mask,
             .baseMipLevel = 0,
@@ -2718,7 +2725,7 @@ inline vku_ref_p<vku_binding_desc_t::buff_binding_t> vku_binding_desc_t::buff_bi
     vku_ref_p<bd_t> ret = vku_ref_t<bd_t>::create_obj_ref(std::make_unique<bd_t>(), {buff});
     ret->get()->desc = desc;
     ret->get()->buff = buff;
-    VK_ASSERT(ret->get()->_call_init()); /* init does nothing */
+    VK_ASSERT(ret->get()->_call_init());
     return ret;
 }
 
