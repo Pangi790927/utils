@@ -38,9 +38,6 @@
 #include <string>
 #include <vector>
 
-// #include <fcntl.h>
-// #include <unistd.h>
-
 /* TODO: Check if throw may be better transformed in a return. */
 #define VK_ASSERT(fn_call)                                                                         \
 do {                                                                                               \
@@ -54,6 +51,7 @@ do {                                                                            
 namespace vku_utils {
 
 /* TODO:
+    - Add logs for all the creations/deletions of objects with type and id(ptr)
     - Continue the tutorial: https://vulkan-tutorial.com/Uniform_buffers/Descriptor_layout_and_buffer
     - Add compute shaders and compute things
     - Create an ImGui backend using this helper
@@ -882,6 +880,7 @@ inline glslang_resource_t vku_spirv_resources = {};
 inline void vku_spirv_uninit();
 inline void vku_spirv_init();
 inline vku_spirv_t vku_spirv_compile(vku_shader_stage_t vk_stage, const char *code);
+inline int vku_spirv_save(const vku_spirv_t& code, const char *filepath);
 
 inline uint32_t vku_find_memory_type(vku_ref_p<vku_device_t> dev,
         uint32_t type_filter, VkMemoryPropertyFlags properties);
@@ -1448,8 +1447,8 @@ inline VkResult vku_shader_t::_init() {
             .pCode = (uint32_t *)buffer.data(),
         };
         VK_ASSERT(vkCreateShaderModule(dev->get()->vk_dev, &shader_info, NULL, &vk_shader));
-        DBG("Loaded shader from path [%s] of size: %zu data: %p",
-                path.c_str(), buffer.size(), buffer.data());
+        DBG("Loaded shader from path [%s] of size: %zu data: %p -> vk_%p",
+                path.c_str(), buffer.size(), buffer.data(), vk_shader);
     }
     else {
         VkShaderModuleCreateInfo shader_info {
@@ -1459,9 +1458,10 @@ inline VkResult vku_shader_t::_init() {
             .codeSize = spirv.content.size() * sizeof(uint32_t),
             .pCode = spirv.content.data(),
         };
+        type = spirv.type;
         VK_ASSERT(vkCreateShaderModule(dev->get()->vk_dev, &shader_info, NULL, &vk_shader));
-        DBG("Loaded shader from buffer of size: %zu data: %p",
-                spirv.content.size() * sizeof(uint32_t), spirv.content.data());
+        DBG("Loaded shader from buffer of size: %zu data: %p -> vk_%p",
+                spirv.content.size() * sizeof(uint32_t), spirv.content.data(), vk_shader);
     }
     return VK_SUCCESS;
 }
@@ -1610,6 +1610,8 @@ inline VkResult vku_pipeline_t::_init() {
             .pName               = "main",
             .pSpecializationInfo = nullptr,
         });
+        DBG("Added shader: %p, type: %x ",
+                sh->get()->vk_shader, vku_get_shader_type(sh->get()->type));
     }
 
     /* mark prop of pipeline to be mutable */
@@ -3147,10 +3149,17 @@ inline VkShaderStageFlagBits vku_get_shader_type(vku_shader_stage_t own_type) {
     return VK_SHADER_STAGE_ALL;
 }
 
+inline int vku_spirv_save(const vku_spirv_t& code, const char *filepath) {
+    std::ofstream file(filepath, std::ios::out | std::ios::binary);
+    file.write((const char *)code.content.data(), code.content.size() * sizeof(uint32_t));
+    return file.good() ? 0 : -1;
+}
+
 #ifdef VKU_HAS_NEW_GLSLANG
 
 inline vku_spirv_t vku_spirv_compile(vku_shader_stage_t vku_stage, const char *code) {
     VK_ASSERT(vku_init());
+    DBG("NEW GLSLANG COMPILE");
 
     glslang_stage_t stage;
     switch (vku_stage) {

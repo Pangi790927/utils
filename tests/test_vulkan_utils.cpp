@@ -87,12 +87,6 @@ int main(int argc, char const *argv[])
 
     DBG_SCOPE();
 
-    // const std::vector<vku_vertex2d_t> vertices = {
-    //     {{0.0f, -0.5f}, {1.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
-    //     {{0.5f,  0.5f}, {0.0f, 1.0f, 1.0f}, {0.0f, 0.0f}},
-    //     {{-0.5f, 0.5f}, {1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}}
-    // };
-
     const std::vector<vku_vertex3d_t> vertices = {
         {{-0.5f, -0.5f,  0.0f}, {0, 0, 0}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
         {{ 0.5f, -0.5f,  0.0f}, {0, 0, 0}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
@@ -124,6 +118,11 @@ int main(int argc, char const *argv[])
             mat4 proj;
         } ubo;
 
+        // This shows us that macros work, but not sure how this would work with includes afterwards
+        // but, meh, I don't really care, I'll simply paste the code there whenever I see an include
+        // directive (from path or from a known name, not sure how I will decide on the name resplve)
+        #define APPLY_ASSIGN(x, y) x = y
+
         layout(location = 0) in vec3 in_pos;    // those are referenced by
         layout(location = 1) in vec3 in_normal; // vku_vertex3d_t::get_input_desc()
         layout(location = 2) in vec3 in_color;
@@ -134,8 +133,8 @@ int main(int argc, char const *argv[])
 
         void main() {
             gl_Position = ubo.proj * ubo.view * ubo.model * vec4(in_pos, 1.0);
-            out_color = in_color;
-            out_tex_coord = in_tex;
+            APPLY_ASSIGN(out_color, in_color);
+            APPLY_ASSIGN(out_tex_coord, in_tex);
         }
 
     )___");
@@ -155,6 +154,9 @@ int main(int argc, char const *argv[])
             out_color = texture(tex_sampler, in_tex_coord);
         }
     )___");
+
+    ASSERT_FN(vku_spirv_save(frag, "./frag.bin"));
+    ASSERT_FN(vku_spirv_save(vert, "./vert.bin"));
 
     int width = 800, height = 600;
 
@@ -280,3 +282,39 @@ int main(int argc, char const *argv[])
 
     return 0;
 }
+
+void skelet_for_ingrid() {
+    /* This is a list for all that I need for the vulkan/ingrid part: */
+
+    /* A way to init/uninit dma memory that is common with the CS board */
+    /* A generic way of having matrices, vectors and computation zones (that is covered by
+    in locations and out locations, I guess) */
+    /* A way of doing fft */
+
+    /* (TODO: if possible) check if I can implement a recovery mechanism 
+        see: MPK (Memory Protection Keys)
+        see: sigsegv and signal()
+        see: setjmp, longjmp...
+        see: dlmopen */
+
+    /* Do this for all the computation zones */
+    // auto part_x = vku_spirv_compile(COMPUTE, compute_src);
+
+    /* Also I need a way to load all those things and maybe a loadable dll, like the one we had,
+    that would  */
+
+
+    /*
+
+    So the steps are:
+        1. Write code to have those objects created from a json
+        1. Test the way dma allocations work, fft, maybe also how that MPK thing works
+        2. Write a test code with all those things, first without CS
+        3. Integrate CS two
+        4. Write the shaders That would make the thing work like the current one
+        5. Replace current implementation with this new one
+        6. Test for speed and check AGAIN if that buff bug is still there (this would mean it is
+        from the gpu driver directly)
+    */
+}
+

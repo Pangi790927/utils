@@ -24,7 +24,11 @@ SRCS      += $(wildcard ../ap/*.cpp)
 OBJS      := $(SRCS:.cpp=.o)
 DEPS      := $(SRCS:.cpp=.d)
 CXX_FLAGS := -std=c++2a -g -export-dynamic -O3
-CXX_FLAGS += -fsanitize=address -Wall -Wextra -Wno-format-security
+CXX_FLAGS += -Wall -Wextra -Wno-format-security
+
+# For when I need to debug compilation time
+# CXX_FLAGS += -Q
+# CXX_FLAGS += -ftime-report
 
 TEST_SRCS := $(wildcard ./*.cpp)
 TESTS     := $(TEST_SRCS:%.cpp=%.bin)
@@ -61,5 +65,6 @@ clean:
 	rm -f ${OBJS}
 	rm -f ${DEPS}
 	rm -f ${NAME}
+	rm -f ${TEST_OBJS}
 	rm -f ${TESTS}
 	rm -f data/*
