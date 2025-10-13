@@ -82,21 +82,51 @@ do { \
 } while (0)
 
 
-#define DBGE(fmt, ...)\
+#ifdef __linux__
+# define DBGE(fmt, ...)\
     DBG("[SYS] " fmt "[err: %s [%s], code: %d]", ##__VA_ARGS__,\
             strerror(errno), errnoname(errno), errno)
+#elif (defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__NT__)) /* end linux */
+
+inline std::string windows_get_last_error_as_string() {
+    // https://stackoverflow.com/questions/1387064/
+    // how-to-get-the-error-message-from-the-error-code-returned-by-getlasterror
+
+    // Get the error message ID, if any.
+    DWORD err_msg_id = ::GetLastError();
+    if (err_msg_id == 0) {
+        return "NO_ERROR"; //No error message has been recorded
+    }
+
+    LPSTR message_buffer = nullptr;
+
+    // Ask Win32 to give us the string version of that message ID.
+    // The parameters we pass in, tell Win32 to create the buffer that holds the message for us
+    // (because we don't yet know how long the message string will be).
+    size_t size = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+            FORMAT_MESSAGE_IGNORE_INSERTS, NULL, err_msg_id,
+            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&message_buffer, 0, NULL);
+
+    // Copy the error message into a std::string.
+    std::string message(message_buffer, size);
+
+    // Free the Win32's string's buffer.
+    LocalFree(message_buffer);
+
+    return message + "[" + std::to_string(err_msg_id) +"]";
+}
+
+# define DBGE(fmt, ...)\
+        DBG("[SYS] " fmt "[err: %s]", ##__VA_ARGS__, windows_get_last_error_as_string().c_str());
+
+#endif /* end windows */
+
 
 #define ASSERT_FN(fn_call)\
 if (intptr_t(fn_call) < 0) {\
     DBGE("FAILED: " #fn_call);\
     return -1;\
 }
-
-// #define ASSERT_PTR(fn_call)                                                                        \
-// if (!(fn_call)) {                                                                                  \
-//     DBGE("FAILED: " #fn_call);                                                                     \
-//     return -1;                                                                                     \
-// }
 
 #define CHK_MMAP(x) ((x) == MAP_FAILED ? -1 : 0)
 #define CHK_BOOL(x) ((x) ? 0 : -1)

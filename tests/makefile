@@ -24,7 +24,7 @@ SRCS      += $(wildcard ../ap/*.cpp)
 OBJS      := $(SRCS:.cpp=.o)
 DEPS      := $(SRCS:.cpp=.d)
 CXX_FLAGS := -std=c++2a -g -export-dynamic -O3
-CXX_FLAGS += -Wno-format-security
+CXX_FLAGS += -fsanitize=address -Wall -Wextra -Wno-format-security
 
 TEST_SRCS := $(wildcard ./*.cpp)
 TESTS     := $(TEST_SRCS:%.cpp=%.bin)

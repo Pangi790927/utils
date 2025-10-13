@@ -150,8 +150,6 @@ inline std::vector<std::string> list_dir(std::string dirname) {
 #elif defined(UTILS_OS_LINUX)
     DIR* dir;
     struct dirent* ent;
-    char* endptr;
-    char buf[512];
 
     if (!(dir = opendir(dirname.c_str()))) {
         return {}; /* the directory has to have at least .. and . */
