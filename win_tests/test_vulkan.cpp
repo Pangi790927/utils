@@ -69,6 +69,7 @@ static auto load_image(auto cp, std::string path) {
     /* TODO: some more logs around here */
     VkDeviceSize imag_sz = w*h*4;
     if (!pixels) {
+        DBG("Bad pixels...");
         throw vku_err_t("Failed to load image");
     }
 
@@ -190,11 +191,8 @@ int main(int argc, char const *argv[])
 
     auto sh_vert =  vku_shader_t::create(dev, vert);
     auto sh_frag =  vku_shader_t::create(dev, frag);
-    DBG("C Here?");
     auto swc =      vku_swapchain_t::create(dev);
-    DBG("B Here?");
     auto rp =       vku_renderpass_t::create(swc);
-    DBG("A Here?");
     auto pl =       vku_pipeline_t::create(
         width, height,
         rp,
@@ -203,7 +201,6 @@ int main(int argc, char const *argv[])
         vku_vertex3d_t::get_input_desc(),
         bindings
     );
-    DBG("Here?");
     auto fbs =      vku_framebuffs_t::create(rp);
 
     auto img_sem =  vku_sem_t::create(dev);
