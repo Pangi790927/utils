@@ -20,8 +20,13 @@
 # list of commands: https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/commands
 
 CXX := cl
-CXX_FLAGS := /EHsc /await:strict /std:c++20 /Zi
-INCLUDES := /I..
+CXX_FLAGS := /EHsc /await:strict /std:c++20 /Zi /MD
+INCLUDES := /I.. /I../vulkan /IC:/VulkanSDK/1.4.328.1/Include
+
+VK_LIBS += user32.lib gdi32.lib shell32.lib ole32.lib
+VK_LIBS += glfw3.lib
+VK_LIBS += C:/VulkanSDK/1.4.328.1/Lib/shaderc_combined.lib
+VK_LIBS += C:/VulkanSDK/1.4.328.1/Lib/vulkan-1.lib
 
 all: test_colib test_mmcb
 
@@ -32,3 +37,7 @@ test_colib:
 test_mmcb:	
 	${CXX} ${CXX_FLAGS} ${INCLUDES} test_mmcb.cpp Onecore.lib
 	./test_mmcb.exe
+
+test_vulkan:
+	${CXX} ${CXX_FLAGS} ${INCLUDES} ${VK_LIBS} test_vulkan.cpp 
+	./test_vulkan.exe

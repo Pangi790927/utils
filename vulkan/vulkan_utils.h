@@ -4,6 +4,7 @@
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLFW_INCLUDE_NONE
 
 #include "gpu_defines.h"
 #include "debug.h"
@@ -29,9 +30,10 @@
 #include <fstream>
 #include <vector>
 #include <map>
+#include <array>
 
-#include <fcntl.h>
-#include <unistd.h>
+// #include <fcntl.h>
+// #include <unistd.h>
 
 #define VK_ASSERT(fn_call)                                                                         \
 do {                                                                                               \
