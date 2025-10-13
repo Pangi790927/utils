@@ -1739,7 +1739,7 @@ inline VkResult vku_pipeline_t::_init() {
     };
 
     auto bind_descriptors = bd->get()->get_descriptors();
-    DBGVV("cnt bind_descriptors: %ld", bind_descriptors.size());
+    DBGVV("cnt bind_descriptors: %zu", bind_descriptors.size());
     for (auto &b : bind_descriptors) {
         DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
                 b.descriptorType, b.binding, b.stageFlags);
@@ -1846,7 +1846,7 @@ inline VkResult vku_compute_pipeline_t::_init() {
     FnScope err_scope;
 
     auto bind_descriptors = bd->get()->get_descriptors();
-    DBGVV("cnt bind_descriptors: %ld", bind_descriptors.size());
+    DBGVV("cnt bind_descriptors: %zu", bind_descriptors.size());
     for (auto &b : bind_descriptors) {
         DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
                 b.descriptorType, b.binding, b.stageFlags);
@@ -2688,7 +2688,7 @@ inline VkResult vku_desc_set_t::_init() {
     for (auto &dw : desc_writes)
         dw.dstSet = vk_desc_set;
 
-    DBGVV("writes: %ld", desc_writes.size());
+    DBGVV("writes: %zu", desc_writes.size());
     for (auto &w : desc_writes) {
         DBGVV("write: type: %x, bind: %d, dst_set: %p",
                 w.descriptorType, w.dstBinding, w.dstSet);
