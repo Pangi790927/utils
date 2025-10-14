@@ -1,5 +1,5 @@
-Observation: json.h, stb_image.h, yaml.h and backtrace.h have their own
-licens that can be seen in their respective files.
+Observation: json.h, stb_image.h, yaml.h, tinyexpr.h, minilua.h and backtrace.h have their own
+licenses that can be seen in their respective files.
 
 MIT License
 
