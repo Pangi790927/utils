@@ -1,0 +1,198 @@
+vert_spirv:
+  shader_type: VKU_SPIRV_VERTEX
+  # should also have a posible "path"
+  content: |
+    #version 450
+
+    layout(binding = 0) uniform ubo_t {
+      mat4 model;
+      mat4 view;
+      mat4 proj;
+    } ubo;
+
+    // This shows us that macros work, but not sure how this would work with includes afterwards
+    // but, meh, I don't really care, I'll simply paste the code there whenever I see an include
+    // directive (from path or from a known name, not sure how I will decide on the name resplve)
+    #define APPLY_ASSIGN(x, y) x = y
+
+    layout(location = 0) in vec3 in_pos;
+
+    // those are referenced by
+    layout(location = 1) in vec3 in_normal; // vku_vertex3d_t::get_input_desc()
+    layout(location = 2) in vec3 in_color;
+    layout(location = 3) in vec2 in_tex;
+
+    layout(location = 0) out vec3 out_color;
+    layout(location = 1) out vec2 out_tex_coord;
+
+    void main() {
+      gl_Position = ubo.proj * ubo.view * ubo.model * vec4(in_pos, 1.0);
+
+      APPLY_ASSIGN(out_color, in_color);
+      APPLY_ASSIGN(out_tex_coord, in_tex);
+
+    }
+
+frag_spirv:
+  shader_type: VKU_SPIRV_FRAGMENT
+  content: |
+    #version 450
+
+    layout(location = 0) in vec3 in_color;      // this is referenced by the vert shader
+    layout(location = 1) in vec2 in_tex_coord;  // this is referenced by the vert shader
+
+    layout(location = 0) out vec4 out_color;
+    layout(binding = 1) uniform sampler2D tex_sampler;
+
+    void main() {
+      out_color = vec4(in_color, 1.0);
+      out_color = texture(tex_sampler, in_tex_coord);
+    }
+inst:
+  type: vku_instance_t
+window:
+  type: vku_window_t
+  width: width_var # this var must be declared before parsing this config
+  height: height_var
+surf:
+  type: vku_surface_t
+  window: window
+  instance: inst
+dev:
+  type: vku_device_t
+  surface: surf
+cp:
+  type: vku_cmdpool_t
+  device: dev
+img:
+  type: vku_image_t
+  cmdpool: cp
+  path: test_image.png
+view:
+  type: vku_img_view_t
+  image: img
+  aspect_mask: VK_IMAGE_ASPECT_COLOR_BIT
+sampl:
+  type: vku_img_sampl_t
+  device: dev
+mvp_buff:
+  type: vku_buffer_t
+  device: dev
+  source: var_mvp_source
+  usage_flags: VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
+  sharing_mode: VK_SHARING_MODE_EXCLUSIVE
+  memory_flags: VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+bindings:
+  type: vku_binding_desc_t
+  descriptors:
+    # all should have the alternate posibility to be nested and have another "tag" option
+    # this would be especially usefull here, where we could've instead hust nest view instead of
+    # declaring it before it was needed
+    - type: vku_binding_desc_t::buff_binding_t
+      buff: mvp_buff
+    - type: vku_binding_desc_t::sampl_binding_t
+      view: view
+   sampler: sampl
+vert:
+  type: vku_shader_t
+  device: dev
+  spirv: vert_spirv
+frag:
+  type: vku_shader_t
+  device: dev
+  spirv: frag_spirv
+swc:
+  type: vku_swapchain_t
+  device: dev
+rp:
+  type: vku_renderpass_t
+  swapchain: swc
+pl:
+  type: vku_pipeline_t
+  width: width_var
+  height: height_var
+  renderpass: rp
+  shaders:
+    - vert
+    - frag
+  topology: VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+  input_desc: var_input_desc
+  bindings: bindings
+fbs:
+  type: vku_framebuffs_t
+  renderpass: rp
+img_sem:
+  type: vku_sem_t
+  device: dev
+draw_sem:
+  type: vku_sem_t
+  device: dev
+fence:
+  type: vku_fence_t
+  device: dev
+cbuff:
+  type: vku_cmdbuff_t
+  cmdpool: cp
+vbuff:
+  type: vku_buffer_t
+  device: dev
+  source: var_vertex_source
+  usage_flags: VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
+  sharing_mode: VK_SHARING_MODE_EXCLUSIVE
+  memory_flags: VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+ibuff:
+  type: vku_buffer_t
+  device: dev
+  source: var_index_source
+  usage_flags: VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
+  sharing_mode: VK_SHARING_MODE_EXCLUSIVE
+  memory_flags: VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+desc_pool:
+  type: vku_desc_pool_t
+  device: dev
+  bindings: bindings
+  cnt: 1
+desc_set:
+  type: vku_desc_set_t
+  descritpor_pool: desc_pool
+  pipeline: pl
+  bindings: bindings
+
+lua-script: |
+  vku = require("vulkan_utils")
+
+  function on_loop_run() do
+    vku.glfw_pool_events() -- needed for keys to be available
+    if vku.get_key(vku.window, vku.GLFW_KEY_ESCAPE) == vku.GLFW_PRESS then
+      vku.signal_close() -- this will close the loop
+    end
+
+    img_idx = vku.aquire_next_img(vku.swc, vku.img_sem)
+
+    -- do mvp update somehow?
+
+    vku.cbuff.begin()
+    vku.cbuff.begin_rpass(vku.fbs, img_idx)
+    vku.cbuff.bind_vert_buffs(0, {{vku.vbuff, 0}});
+    vku.cbuff.bind_idx_buff(vku.ibuff, 0, vku.VK_INDEX_TYPE_UINT16);
+    vku.cbuff.bind_desc_set(vku.VK_PIPELINE_BIND_POINT_GRAPHICS, vku.pl, vku.desc_set);
+    vku.cbuff.draw_idx(vku.pl, indices.size());
+    vku.cbuff.end_rpass();
+    vku.cbuff.end();
+
+    vku.submit_cmdbuff({{vku.img_sem, vku.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
+        vku.cbuff, vku.fence, {vku.draw_sem})
+    vku.present(vku.swc, {vku.draw_sem}, img_idx)
+
+    vku.wait_fences({vku.fence})
+    vku.reset_fences({vku.fence})
+  end
+
+  function on_window_resize(w, h)
+    vku.device_wait_handle(vku.dev)
+
+    vku.window.set_width(w)
+    vku.window.set_height(h)
+
+    -- this will recurse and rebuild all dependees on window
+    vku.window.rebuild()

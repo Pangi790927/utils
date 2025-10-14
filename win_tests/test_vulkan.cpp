@@ -4,6 +4,7 @@
 #include "debug.h"
 #include "misc_utils.h"
 #include "time_utils.h"
+#include "vulkan_config.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>

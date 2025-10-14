@@ -8,6 +8,9 @@
  * source code. */
 
 #include "vulkan_utils.h"
+#include "yaml.h"
+#include "tinyexpr.h"
+#include "minilua.h"
 
 /* What do I really care about? So I can make a format that covers all the things I want:
     1. I want to be able to have buffers with:
@@ -33,10 +36,5 @@
 //     std::string filename;
 //     vku_opts_t vku_opts;    /*! json object: opts */  
 // };
-
-
-
-
-
 
 #endif
