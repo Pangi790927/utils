@@ -4,6 +4,7 @@
 #include "debug.h"
 #include "misc_utils.h"
 #include "time_utils.h"
+#include "vulkan_composer.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -86,6 +87,11 @@ int main(int argc, char const *argv[])
     (void)argv;
 
     DBG_SCOPE();
+
+    ASSERT_FN(luaw_init());
+    ASSERT_FN(luaw_execute_loop_run());
+    ASSERT_FN(luaw_execute_window_resize(800, 600));
+    ASSERT_FN(luaw_uninit());
 
     const std::vector<vku_vertex3d_t> vertices = {
         {{-0.5f, -0.5f,  0.0f}, {0, 0, 0}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
