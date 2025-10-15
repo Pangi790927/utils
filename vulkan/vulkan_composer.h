@@ -85,10 +85,77 @@ end
 enum vkc_error_e : int32_t {
     VKC_ERROR_OK = 0,
     VKC_ERROR_FAILED_CALL = -1,
-    VKC_ERROR_FAILED_LUA_INIT = -2,
-    VKC_ERROR_FAILED_LUA_LOAD = -3,
-    VKC_ERROR_FAILED_LUA_EXEC = -4,
+    VKC_ERROR_FAILED_LOAD = -2,
+    VKC_ERROR_FAILED_LUA_INIT = -3,
+    VKC_ERROR_FAILED_LUA_LOAD = -4,
+    VKC_ERROR_FAILED_LUA_EXEC = -5,
 };
+
+inline int impl_glfw_pool_events(lua_State *L) {
+    DBG_SCOPE();
+    (void)L;
+    return 0;
+}
+
+inline int impl_get_key(lua_State *L) {
+    DBG_SCOPE();
+    (void)L;
+    return 0;
+}
+
+inline int impl_TODO(lua_State *L) {
+    DBG_SCOPE();
+    (void)L;
+    return 0;
+}
+
+inline const luaL_Reg vku_tab_funcs[] = {
+    {"glfw_pool_events", impl_TODO},
+    {"get_key", impl_TODO},
+    {"signal_close", impl_TODO},
+    {"aquire_next_img", impl_TODO},
+    {NULL, NULL}
+};
+
+inline int luaopen_vku (lua_State *L) {
+    luaL_newlib(L, vku_tab_funcs);
+
+    /* This is also a great example of how to register all the types:
+        - all the nmes will be registered and depending of their types
+        - all their members and functions will also be registered
+        - all the numbers will be also registered as integers
+        - each type that is not a constant will have a _t that holds the user ptr
+        */
+
+    /* this makes vulkan_utils.cbuff = {} */
+    lua_createtable(L, 0, 0);
+    lua_setfield(L, -2, "cbuff");
+
+    /* This pushes the reference of vulkan_utils.cbuff on the stack */
+    lua_getfield(L, -1, "cbuff");
+
+    /* this makes vulkan_utils.cbuff.begin = begin_fn */
+    lua_pushcfunction(L, impl_TODO);
+    lua_setfield(L, -2, "begin");
+
+    /* this makes vulkan_utils.cbuff.begin_rpass = begin_rpass_fn */
+    lua_pushcfunction(L, impl_TODO);
+    lua_setfield(L, -2, "begin_rpass");
+
+    /* this makes vulkan_utils.cbuff.bind_vert_buffs = bind_vert_buffs_fn */
+    lua_pushcfunction(L, impl_TODO);
+    lua_setfield(L, -2, "bind_vert_buffs");
+
+    /* this makes vulkan_utils.cbuff._this = &false_user_data */
+    char false_user_data;
+    lua_pushlightuserdata(L, &false_user_data);
+    lua_setfield(L, -2, "_t");
+
+    /* Poping the reference of cbuff from the stack */
+    lua_pop(L, 1);
+
+    return 1;
+}
 
 inline lua_State *lua_state;
 inline vkc_error_e luaw_init() {
@@ -97,6 +164,8 @@ inline vkc_error_e luaw_init() {
         DBG("Failed to init lua");
         return VKC_ERROR_FAILED_LUA_INIT;
     }
+
+    luaL_requiref(lua_state, "vulkan_utils", luaopen_vku, 1);       lua_pop(lua_state, 1);
     luaL_requiref(lua_state, LUA_GNAME, luaopen_base, 1);           lua_pop(lua_state, 1);
     luaL_requiref(lua_state, LUA_LOADLIBNAME, luaopen_package, 1);  lua_pop(lua_state, 1);
     luaL_requiref(lua_state, LUA_COLIBNAME, luaopen_coroutine, 1);  lua_pop(lua_state, 1);
@@ -130,7 +199,7 @@ inline vkc_error_e luaw_uninit() {
 }
 
 inline vkc_error_e luaw_execute_loop_run() {
-    luaL_loadstring(lua_state, "on_loop_run");
+    lua_getglobal(lua_state, "on_loop_run");
     if (lua_pcall(lua_state, 0, 0, 0) != LUA_OK) {
         DBG("LUA luaw_execute_loop_run Failed: \n%s", lua_tostring(lua_state, -1));
         return VKC_ERROR_FAILED_CALL;
@@ -139,7 +208,7 @@ inline vkc_error_e luaw_execute_loop_run() {
 }
 
 inline vkc_error_e luaw_execute_window_resize(int width, int height) {
-    luaL_loadstring(lua_state, "on_window_resize");
+    lua_getglobal(lua_state, "on_window_resize");
     lua_pushinteger(lua_state, width);
     lua_pushinteger(lua_state, height);
     if (lua_pcall(lua_state, 2, 0, 0) != LUA_OK) {
