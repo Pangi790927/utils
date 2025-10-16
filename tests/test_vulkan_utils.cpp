@@ -88,10 +88,10 @@ int main(int argc, char const *argv[])
 
     DBG_SCOPE();
 
-    ASSERT_FN(luaw_init());
-    ASSERT_FN(luaw_execute_loop_run());
-    ASSERT_FN(luaw_execute_window_resize(800, 600));
-    ASSERT_FN(luaw_uninit());
+    ASSERT_FN(vkc::luaw_init());
+    ASSERT_FN(vkc::luaw_execute_loop_run());
+    ASSERT_FN(vkc::luaw_execute_window_resize(800, 600));
+    ASSERT_FN(vkc::luaw_uninit());
 
     const std::vector<vku_vertex3d_t> vertices = {
         {{-0.5f, -0.5f,  0.0f}, {0, 0, 0}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
