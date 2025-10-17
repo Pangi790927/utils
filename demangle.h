@@ -5,6 +5,7 @@
 #include <memory>
 #include <cxxabi.h>
 
+template <int indent = -1>
 inline std::string demangle(const char *name) {
     int status = -4;
     std::unique_ptr<char, void (*)(void *)> res {
@@ -12,18 +13,45 @@ inline std::string demangle(const char *name) {
         std::free
     };
 
-    return (status == 0) ? res.get() : name;
+    if (indent <= 0)
+        return (status == 0) ? res.get() : name;
+
+    std::string to_indent = (status == 0) ? res.get() : name;
+    std::string indented = "";
+    int indent_level = 0;
+    bool was_nl = false;
+
+    for (auto c : to_indent) {
+        if (c == ' ' && was_nl)
+            continue;
+        was_nl = false;
+        if (c == '<') {
+            indent_level++;
+        }
+        if (c == '>') {
+            indent_level--;
+            indented += "\n" + std::string(indent_level * indent, ' ') + c;
+            was_nl = true;
+        }
+        else {
+            indented += c;
+        }
+        if (c == ',' || c == '<') {
+            indented += "\n" + std::string(indent_level * indent, ' ');
+            was_nl = true;
+        }
+    }
+    return indented + "\n";
 }
 
-template <class T>
+template <class T, int indent = -1>
 inline std::string demangle() {
-    return demangle(typeid(T).name());
+    return demangle<indent>(typeid(T).name());
 }
 
-template <class T>
+template <class T, int indent = -1>
 inline std::string demangle(const T& t) {
-    return demangle<T>();
+    return demangle<T, indent>();
 }
-
 
 #endif

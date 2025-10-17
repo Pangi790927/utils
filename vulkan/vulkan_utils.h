@@ -300,9 +300,15 @@ public:
     }
 
     template <typename VkuB> requires std::derived_from<VkuT, VkuB>
-    std::shared_ptr<vku_ref_t<VkuB>> to_parent() {
+    std::shared_ptr<vku_ref_t<VkuB>> to_base() {
         return std::shared_ptr<vku_ref_t<VkuB>>(
                 shared_from_this(), reinterpret_cast<vku_ref_t<VkuB> *>(this));
+    }
+
+    template <typename VkuB> requires std::derived_from<VkuB, VkuT>
+    std::shared_ptr<vku_ref_t<VkuB>> to_derived() {
+        return std::shared_ptr<vku_ref_t<VkuB>>(
+                shared_from_this(), dynamic_cast<vku_ref_t<VkuB> *>(this));
     }
 
     void clean_deps() override {

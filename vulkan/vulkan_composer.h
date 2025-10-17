@@ -13,8 +13,10 @@
 #include "yaml.h"
 #include "tinyexpr.h"
 #include "minilua.h"
+#include "demangle.h"
 
 #include <coroutine>
+#include <filesystem>
 
 /* TODO: find a better name for this file */
 
@@ -76,11 +78,79 @@ enum vkc_error_e : int32_t {
     VKC_ERROR_FAILED_LUA_EXEC = -8,
 };
 
-using namespace vku_utils; /* This is temporary here */
+using namespace vku_utils;          /* This is temporary here */
+
+inline std::string app_path = std::filesystem::weakly_canonical("./");
 
 inline std::map<std::string, vku_ref_p<vku_object_t>> objects;
 inline std::map<std::string, std::vector<std::coroutine_handle<void>>> wanted_objects;
 inline std::deque<std::coroutine_handle<void>> work;
+
+struct vkc_lua_var_t : public vku_object_t {
+    std::string name;
+    static vku_ref_p<vkc_lua_var_t> create(std::string name) {
+        auto ret = vku_ref_t<vkc_lua_var_t>::create_obj_ref(std::make_unique<vkc_lua_var_t>(), {});
+        ret->get()->name = name;
+        return ret;
+    }
+
+private:
+    virtual VkResult _init() override { return VK_SUCCESS; }
+    virtual VkResult _uninit() override { return VK_SUCCESS; }
+};
+
+struct vkc_lua_script_t : public vku_object_t {
+    std::string content;
+    static vku_ref_p<vkc_lua_script_t> create(std::string content) {
+        auto ret = vku_ref_t<vkc_lua_script_t>::create_obj_ref(std::make_unique<vkc_lua_script_t>(), {});
+        ret->get()->content = content;
+        return ret;
+    }
+
+private:
+    virtual VkResult _init() override { return VK_SUCCESS; }
+    virtual VkResult _uninit() override { return VK_SUCCESS; }
+};
+
+
+struct vkc_integer_t : public vku_object_t {
+    int64_t value = 0;
+    static vku_ref_p<vkc_integer_t> create(int64_t value) {
+        auto ret = vku_ref_t<vkc_integer_t>::create_obj_ref(std::make_unique<vkc_integer_t>(), {});
+        ret->get()->value = value;
+        return ret;
+    }
+
+private:
+    virtual VkResult _init() override { return VK_SUCCESS; }
+    virtual VkResult _uninit() override { return VK_SUCCESS; }
+};
+
+struct vkc_string_t : public vku_object_t {
+    std::string value = 0;
+    static vku_ref_p<vkc_string_t> create(const std::string& value) {
+        auto ret = vku_ref_t<vkc_string_t>::create_obj_ref(std::make_unique<vkc_string_t>(), {});
+        ret->get()->value = value;
+        return ret;
+    }
+
+private:
+    virtual VkResult _init() override { return VK_SUCCESS; }
+    virtual VkResult _uninit() override { return VK_SUCCESS; }
+};
+
+struct vkc_spirv_t : public vku_object_t {
+    vku_spirv_t spirv;
+    static vku_ref_p<vkc_spirv_t> create(const vku_spirv_t& spirv) {
+        auto ret = vku_ref_t<vkc_spirv_t>::create_obj_ref(std::make_unique<vkc_spirv_t>(), {});
+        ret->get()->spirv = spirv;
+        return ret;
+    }
+
+private:
+    virtual VkResult _init() override { return VK_SUCCESS; }
+    virtual VkResult _uninit() override { return VK_SUCCESS; }
+};
 
 template <typename T, typename K>
 constexpr auto has(T&& data_struct, K&& key) {
@@ -101,6 +171,10 @@ struct co_t {
                 if (ending_task.promise().caller)
                     return ending_task.promise().caller;
 
+                /* The task that ended is a root task and it errored out, so we return an error */
+                if (ending_task.promise().retval < 0)
+                    return std::noop_coroutine();
+
                 /* Else we check if there is more work to be done, if not we exit the coro-link */
                 if (work.empty())
                     return std::noop_coroutine();
@@ -118,12 +192,19 @@ struct co_t {
         std::suspend_always initial_suspend() noexcept    { return {}; }
         final_awaiter_t     final_suspend() noexcept      { return {}; }
         void                unhandled_exception()         { exception = std::current_exception(); }
-        void                return_value(vkc_error_e ret) { this->ret = ret; }
-        void                return_value(int ret)         { this->ret = (vkc_error_e)ret; }
+        void                return_value(int ret)         { return_value((vkc_error_e)ret); }
 
-        std::coroutine_handle<co_state_t> caller;
+        void return_value(vkc_error_e ret) {
+            /* TODO: fix this */
+            if (!caller && ret != VKC_ERROR_OK) {
+                throw std::runtime_error("Failed dangling coro");
+            }
+            this->retval = ret;
+        }
+
+        std::coroutine_handle<co_state_t> caller = nullptr;
         std::exception_ptr exception;
-        vkc_error_e ret;
+        vkc_error_e retval = VKC_ERROR_GENERIC;
     };
 
     using handle_t = std::coroutine_handle<co_state_t>;
@@ -133,15 +214,15 @@ struct co_t {
     co_t(handle_t h) : h(h) {}
 
     /* This is for calling  */
-    bool        await_ready() noexcept { return false; }
-    handle_t    await_suspend(handle_t caller) noexcept {
+    bool await_ready() noexcept { return false; }
+    handle_t await_suspend(handle_t caller) noexcept {
         caller.promise().caller = h;    /* we first mark the coroutine we will return to and */
         return h;                       /* we return this coroutine as the continuation */
     }
     vkc_error_e await_resume() {
         /* We save the exception pointer(even if no exception) and the return value */
         std::exception_ptr exc_ptr = h.promise().exception;
-        auto ret = h.promise().ret;
+        auto ret = h.promise().retval;
 
         /* We now destroy the coroutine as it returned and is no longer usefull */
         h.destroy();
@@ -184,6 +265,10 @@ struct depend_resolver_t {
         return ret;
     }
 
+    vku_ref_p<VkuT> await_resume() {
+        return objects[required_depend]->to_derived<VkuT>();
+    }
+
     std::string required_depend;
 };
 
@@ -206,11 +291,172 @@ inline void builder_sched(co_t new_work) {
     work.push_back(new_work.h);
 }
 
+co_t build_object(const std::string& name, fkyaml::node& node);
 
-co_t build_object(fkyaml::node& node) {
+inline bool starts_with(const std::string& a, const std::string& b) {
+    return a.size() >= b.size() && a.compare(0, b.size(), b) == 0;
+}
+
+inline std::unordered_map<std::string, vku_shader_stage_t> shader_stage_from_string = {
+    {"VKU_SPIRV_VERTEX",    VKU_SPIRV_VERTEX},
+    {"VKU_SPIRV_FRAGMENT",  VKU_SPIRV_FRAGMENT},
+    {"VKU_SPIRV_COMPUTE",   VKU_SPIRV_COMPUTE},
+    {"VKU_SPIRV_GEOMETRY",  VKU_SPIRV_GEOMETRY},
+    {"VKU_SPIRV_TESS_CTRL", VKU_SPIRV_TESS_CTRL},
+    {"VKU_SPIRV_TESS_EVAL", VKU_SPIRV_TESS_EVAL},
+};
+
+inline auto get_from_map(auto &m, const std::string& str) {
+    if (!has(m, str))
+        throw std::runtime_error(std::format("Failed to get object: {} from: {}",
+                str, demangle<decltype(m), 2>()));
+    return m[str];
+}
+
+inline std::string get_file_string_content(const std::string& file_path_relative) {
+    std::string file_path = std::filesystem::weakly_canonical(file_path_relative);
+
+    if (!starts_with(file_path, app_path)) {
+        DBG("The path is restricted to the application main directory");
+        throw std::runtime_error("File_error");
+    }
+
+    std::ifstream ifs(file_path.c_str());
+
+    if (!ifs.good()) {
+        DBG("Failed to open path: %s", file_path.c_str());
+        throw std::runtime_error("File_error");
+    }
+
+    return std::string((std::istreambuf_iterator<char>(ifs)),
+                       (std::istreambuf_iterator<char>()));
+}
+
+co_t build_pseudo_object(const std::string& name, fkyaml::node& node) {
+    if (node.is_integer()) {
+        auto obj = vkc_integer_t::create(node.as_int());
+        mark_dependency_solved(name, obj->to_base<vku_object_t>());
+        co_return 0;
+    }
+
+    if (node.is_string()) {
+        auto obj = vkc_string_t::create(node.as_str());
+        mark_dependency_solved(name, obj->to_base<vku_object_t>());
+        co_return 0;
+    }
+
+    if (node.is_mapping() && node.contains("shader_type")) {
+        vku_spirv_t spirv;
+
+        if (node.contains("source")) {
+            spirv = vku_spirv_compile(
+                    get_from_map(shader_stage_from_string, node["shader_type"].as_str()),
+                    node["source"].as_str().c_str());
+        }
+
+        if (node.contains("source-path")) {
+            if (spirv.content.size()) {
+                DBG("Trying to initialize spirv from 2 sources (only one of source, "
+                        "source-path, or spirv-path allowed)");
+                co_return -1;
+            }
+            spirv = vku_spirv_compile(
+                    get_from_map(shader_stage_from_string, node["shader_type"].as_str()),
+                    get_file_string_content(node["source-path"].as_str()).c_str());
+        }
+
+        if (node.contains("spirv-path")) {
+            if (spirv.content.size()) {
+                DBG("Trying to initialize spirv from 2 sources (only one of source, "
+                        "source-path, or spirv-path allowed)");
+                co_return -1;
+            }
+
+            spirv.type = get_from_map(shader_stage_from_string, node["shader_type"].as_str());
+            std::string file_path = std::filesystem::weakly_canonical(node["spirv-path"].as_str());
+
+            if (!starts_with(file_path, app_path)) {
+                DBG("The path is restricted to the application main directory");
+                co_return 0;
+            }
+
+            std::ifstream file(file_path.c_str(), std::ios::binary | std::ios::ate);
+            std::streamsize size = file.tellg();
+
+            if (size % sizeof(uint32_t) != 0) {
+                DBG("File must be a shader, so it must have it's data multiple of %zu", sizeof(uint32_t));
+                co_return 0;
+            }
+
+            file.seekg(0, std::ios::beg);
+            spirv.content.resize(size / sizeof(uint32_t));
+            if (!file.read((char *)spirv.content.data(), size)) {
+                DBG("Failed to read shader data");
+                co_return -1;
+            }
+        }
+        
+        if (!spirv.content.size()) {
+            DBG("Spirv shader can't be empty!")
+            co_return -1;
+        }
+
+        auto obj = vkc_spirv_t::create(spirv);
+        mark_dependency_solved(name, obj->to_base<vku_object_t>());
+
+        co_return 0;
+    }
+
+    if (name == "lua-script") {
+        if (!(node.contains("source") || node.contains("source-path"))) {
+            DBG("lua-script must be a node that has either source or source-path")
+            co_return -1;
+        }
+
+        if (node.contains("source") && node.contains("source-path")) {
+            DBG("lua-script can be either loaded from inline script or from a specified path, not"
+                    "from both!");
+            co_return -1;
+        }
+
+        if (node.contains("source")) {
+            auto obj = vkc_lua_script_t::create(node["source"].as_str());
+            mark_dependency_solved(name, obj->to_base<vku_object_t>());
+            co_return 0;
+        }
+
+        if (node.contains("source-path")) {
+            std::string source = get_file_string_content(node["source-path"].as_str());
+
+            auto obj = vkc_lua_script_t::create(source);
+            mark_dependency_solved(name, obj->to_base<vku_object_t>());
+            co_return 0;
+        }
+    }
+
+    DBG("Failed to build anything from this object[%s], so the object is invalid", name.c_str());
+    co_return -1;
+}
+
+co_t build_object(const std::string& name, fkyaml::node& node) {
+    if (!node.is_mapping()) {
+        DBG("Error node: %s not a mapping", fkyaml::node::serialize(node).c_str());
+        co_return -1;
+    }
+
     if (false);
-    else if (node["type"] == "vku_instance_t") { /* TODO: mark_dependency_solved...*/ }
-    else if (node["type"] == "vku_window_t") { /* TODO: */ }
+    else if (node["type"] == "vku_instance_t") {
+        auto obj = vku_instance_t::create();
+        mark_dependency_solved(name, obj->to_base<vku_object_t>());
+    }
+    else if (node["type"] == "lua_var_t") {
+        auto obj = vkc_lua_var_t::create(name);
+        mark_dependency_solved(name, obj->to_base<vku_object_t>());
+    }
+    else if (node["type"] == "vku_window_t") {
+        DBG("Checking failed;...");
+        co_return -1;
+    }
     else if (node["type"] == "vku_surface_t") { /* TODO: */ }
     else if (node["type"] == "vku_device_t") { /* TODO: */ }
     else if (node["type"] == "vku_cmdpool_t") { /* TODO: */ }
@@ -237,19 +483,15 @@ co_t build_object(fkyaml::node& node) {
 
 
 co_t build_schema(fkyaml::node& root) {
-    ASSERT_BOOL_CO(root.is_sequence());
+    ASSERT_BOOL_CO(root.is_mapping());
 
-    for (auto &node : root) {
-        if (!node.is_mapping()) {
-            DBG("warning node: %s not a mapping", fkyaml::node::serialize(node).c_str());
-            continue;
-        }
+    for (auto &[name, node] : root.as_map()) {
         if (!node.contains("type")) {
-            DBG("warning node: %s does not have a type", fkyaml::node::serialize(node).c_str());
-            continue;
+            builder_sched(build_pseudo_object(name.as_str(), node));
         }
-
-        builder_sched(build_object(node));
+        else {
+            builder_sched(build_object(name.as_str(), node));
+        }
     }
 
     co_return 0;
@@ -261,7 +503,14 @@ inline vkc_error_e parse_config(const char *path) {
     try {
         auto config = fkyaml::node::deserialize(file);
 
-        build_schema(config).h.resume();
+        auto coro = build_schema(config).h;
+        coro.resume();
+        auto res = coro.promise().retval;
+        coro.destroy();
+        if (res != VKC_ERROR_OK) {
+            DBG("Failed parse");
+            return VKC_ERROR_GENERIC;
+        }
 
         if (wanted_objects.size()) {
             for (auto &[k, v]: wanted_objects) {
@@ -273,6 +522,10 @@ inline vkc_error_e parse_config(const char *path) {
     catch (fkyaml::exception &e) {
         DBG("fkyaml::exception: %s", e.what());
         return VKC_ERROR_PARSE_YAML;
+    }
+    catch (std::exception &e) {
+        DBG("Exception: %s", e.what());
+        return VKC_ERROR_GENERIC;
     }
 
     return VKC_ERROR_OK;

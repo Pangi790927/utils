@@ -1,7 +1,10 @@
+# Nodes without a type don't construct a clasic vku_object_t, instead they are constructed based on
+# their value: integer are identified by their integer value, shaders by the existance of
+# shader_type, etc.
 vert_spirv:
   shader_type: VKU_SPIRV_VERTEX
   # should also have a posible "path"
-  content: |
+  source: |
     #version 450
 
     layout(binding = 0) uniform ubo_t {
@@ -35,7 +38,7 @@ vert_spirv:
 
 frag_spirv:
   shader_type: VKU_SPIRV_FRAGMENT
-  content: |
+  source: |
     #version 450
 
     layout(location = 0) in vec3 in_color;      // this is referenced by the vert shader
@@ -48,37 +51,51 @@ frag_spirv:
       out_color = vec4(in_color, 1.0);
       out_color = texture(tex_sampler, in_tex_coord);
     }
+
+width: 800
+height: 600
+
+# TODO: figure those out: 
+vertex_source:
+  type: lua_var_t
+index_source:
+  type: lua_var_t
+input_desc_source:
+  type: lua_var_t
+mvp_source:
+  type: lua_var_t
+
 inst:
   type: vku_instance_t
 window:
   type: vku_window_t
-  width: width_var # this var must be declared before parsing this config
-  height: height_var
+  width: !ref width
+  height: !ref height
 surf:
   type: vku_surface_t
-  window: window
-  instance: inst
+  window: !ref window
+  instance: !ref inst
 dev:
   type: vku_device_t
-  surface: surf
+  surface: !ref surf
 cp:
   type: vku_cmdpool_t
-  device: dev
+  device: !ref dev
 img:
   type: vku_image_t
-  cmdpool: cp
+  cmdpool: !ref cp
   path: test_image.png
 view:
   type: vku_img_view_t
-  image: img
+  image: !ref img
   aspect_mask: VK_IMAGE_ASPECT_COLOR_BIT
 sampl:
   type: vku_img_sampl_t
-  device: dev
+  device: !ref dev
 mvp_buff:
   type: vku_buffer_t
-  device: dev
-  source: var_mvp_source
+  device: !ref dev
+  source: !ref mvp_source
   usage_flags: VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
   sharing_mode: VK_SHARING_MODE_EXCLUSIVE
   memory_flags: VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
@@ -89,110 +106,111 @@ bindings:
     # this would be especially usefull here, where we could've instead hust nest view instead of
     # declaring it before it was needed
     - type: vku_binding_desc_t::buff_binding_t
-      buff: mvp_buff
+      buff: !ref mvp_buff
     - type: vku_binding_desc_t::sampl_binding_t
-      view: view
-   sampler: sampl
+      view: !ref view
+      sampler: !ref sampl
 vert:
   type: vku_shader_t
-  device: dev
-  spirv: vert_spirv
+  device: !ref dev
+  spirv: !ref vert_spirv
 frag:
   type: vku_shader_t
-  device: dev
-  spirv: frag_spirv
+  device: !ref dev
+  spirv: !ref frag_spirv
 swc:
   type: vku_swapchain_t
-  device: dev
+  device: !ref dev
 rp:
   type: vku_renderpass_t
-  swapchain: swc
+  swapchain: !ref swc
 pl:
   type: vku_pipeline_t
-  width: width_var
-  height: height_var
-  renderpass: rp
+  width: !ref width
+  height: !ref height
+  renderpass: !ref rp
   shaders:
-    - vert
-    - frag
+    - !ref vert
+    - !ref frag
   topology: VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
-  input_desc: var_input_desc
-  bindings: bindings
+  input_desc: !ref input_desc_source
+  bindings: !ref bindings
 fbs:
   type: vku_framebuffs_t
-  renderpass: rp
+  renderpass: !ref rp
 img_sem:
   type: vku_sem_t
-  device: dev
+  device: !ref dev
 draw_sem:
   type: vku_sem_t
-  device: dev
+  device: !ref dev
 fence:
   type: vku_fence_t
-  device: dev
+  device: !ref dev
 cbuff:
   type: vku_cmdbuff_t
-  cmdpool: cp
+  cmdpool: !ref cp
 vbuff:
   type: vku_buffer_t
-  device: dev
-  source: var_vertex_source
+  device: !ref dev
+  source: !ref vertex_source
   usage_flags: VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
   sharing_mode: VK_SHARING_MODE_EXCLUSIVE
   memory_flags: VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 ibuff:
   type: vku_buffer_t
-  device: dev
-  source: var_index_source
+  device: !ref dev
+  source: !ref index_source
   usage_flags: VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
   sharing_mode: VK_SHARING_MODE_EXCLUSIVE
   memory_flags: VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 desc_pool:
   type: vku_desc_pool_t
-  device: dev
-  bindings: bindings
+  device: !ref dev
+  bindings: !ref bindings
   cnt: 1
 desc_set:
   type: vku_desc_set_t
-  descritpor_pool: desc_pool
-  pipeline: pl
-  bindings: bindings
+  descritpor_pool: !ref desc_pool
+  pipeline: !ref pl
+  bindings: !ref bindings
 
-lua-script: |
-  vku = require("vulkan_utils")
+lua-script:
+  source: |
+    vku = require("vulkan_utils")
 
-  function on_loop_run() do
-    vku.glfw_pool_events() -- needed for keys to be available
-    if vku.get_key(vku.window, vku.GLFW_KEY_ESCAPE) == vku.GLFW_PRESS then
-      vku.signal_close() -- this will close the loop
+    function on_loop_run() do
+      vku.glfw_pool_events() -- needed for keys to be available
+      if vku.get_key(vku.window, vku.GLFW_KEY_ESCAPE) == vku.GLFW_PRESS then
+        vku.signal_close() -- this will close the loop
+      end
+
+      img_idx = vku.aquire_next_img(vku.swc, vku.img_sem)
+
+      -- do mvp update somehow?
+
+      vku.cbuff.begin()
+      vku.cbuff.begin_rpass(vku.fbs, img_idx)
+      vku.cbuff.bind_vert_buffs(0, {{vku.vbuff, 0}});
+      vku.cbuff.bind_idx_buff(vku.ibuff, 0, vku.VK_INDEX_TYPE_UINT16);
+      vku.cbuff.bind_desc_set(vku.VK_PIPELINE_BIND_POINT_GRAPHICS, vku.pl, vku.desc_set);
+      vku.cbuff.draw_idx(vku.pl, indices.size());
+      vku.cbuff.end_rpass();
+      vku.cbuff.end();
+
+      vku.submit_cmdbuff({{vku.img_sem, vku.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
+          vku.cbuff, vku.fence, {vku.draw_sem})
+      vku.present(vku.swc, {vku.draw_sem}, img_idx)
+
+      vku.wait_fences({vku.fence})
+      vku.reset_fences({vku.fence})
     end
 
-    img_idx = vku.aquire_next_img(vku.swc, vku.img_sem)
+    function on_window_resize(w, h)
+      vku.device_wait_handle(vku.dev)
 
-    -- do mvp update somehow?
+      vku.window.set_width(w)
+      vku.window.set_height(h)
 
-    vku.cbuff.begin()
-    vku.cbuff.begin_rpass(vku.fbs, img_idx)
-    vku.cbuff.bind_vert_buffs(0, {{vku.vbuff, 0}});
-    vku.cbuff.bind_idx_buff(vku.ibuff, 0, vku.VK_INDEX_TYPE_UINT16);
-    vku.cbuff.bind_desc_set(vku.VK_PIPELINE_BIND_POINT_GRAPHICS, vku.pl, vku.desc_set);
-    vku.cbuff.draw_idx(vku.pl, indices.size());
-    vku.cbuff.end_rpass();
-    vku.cbuff.end();
-
-    vku.submit_cmdbuff({{vku.img_sem, vku.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
-        vku.cbuff, vku.fence, {vku.draw_sem})
-    vku.present(vku.swc, {vku.draw_sem}, img_idx)
-
-    vku.wait_fences({vku.fence})
-    vku.reset_fences({vku.fence})
-  end
-
-  function on_window_resize(w, h)
-    vku.device_wait_handle(vku.dev)
-
-    vku.window.set_width(w)
-    vku.window.set_height(h)
-
-    -- this will recurse and rebuild all dependees on window
-    vku.window.rebuild()
+      -- this will recurse and rebuild all dependees on window
+      vku.window.rebuild()
