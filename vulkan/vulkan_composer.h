@@ -127,7 +127,7 @@ private:
 };
 
 struct vkc_string_t : public vku_object_t {
-    std::string value = 0;
+    std::string value;
     static vku_ref_p<vkc_string_t> create(const std::string& value) {
         auto ret = vku_ref_t<vkc_string_t>::create_obj_ref(std::make_unique<vkc_string_t>(), {});
         ret->get()->value = value;
@@ -158,6 +158,9 @@ constexpr auto has(T&& data_struct, K&& key) {
             != std::forward<T>(data_struct).end();
 }
 
+inline vkc_error_e vkc_error_g = VKC_ERROR_OK;
+inline int code_incr = 0;
+inline std::exception_ptr vkc_exception_g = nullptr;
 struct co_t {
     struct co_state_t {
         struct final_awaiter_t {
@@ -171,9 +174,18 @@ struct co_t {
                 if (ending_task.promise().caller)
                     return ending_task.promise().caller;
 
-                /* The task that ended is a root task and it errored out, so we return an error */
-                if (ending_task.promise().retval < 0)
+                /* The task ended because of an exception */
+                if (ending_task.promise().exception) {
+                    /* TODO: Unwind old errors */
+                    vkc_exception_g = ending_task.promise().exception;
                     return std::noop_coroutine();
+                }
+
+                /* The task that ended is a root task and it errored out, so we return an error */
+                if (ending_task.promise().retval != VKC_ERROR_OK) {
+                    vkc_error_g = VKC_ERROR_GENERIC;
+                    return std::noop_coroutine();
+                }
 
                 /* Else we check if there is more work to be done, if not we exit the coro-link */
                 if (work.empty())
@@ -203,7 +215,7 @@ struct co_t {
         }
 
         std::coroutine_handle<co_state_t> caller = nullptr;
-        std::exception_ptr exception;
+        std::exception_ptr exception = nullptr;
         vkc_error_e retval = VKC_ERROR_GENERIC;
     };
 
@@ -266,7 +278,22 @@ struct depend_resolver_t {
     }
 
     vku_ref_p<VkuT> await_resume() {
-        return objects[required_depend]->to_derived<VkuT>();
+        if (!has(objects, required_depend)) {
+            DBG("Object not found");
+            throw vku_err_t(std::format("Object not found, {}", required_depend));
+        }
+        if (!objects[required_depend]) {
+            DBG("For some reason this object now holds a nullptr...");
+            throw vku_err_t("nullptr object");
+        }
+        auto ret = objects[required_depend]->to_derived<VkuT>();
+        if (!ret) {
+            DBG("Invalid ref...");
+            throw vku_err_t(sformat("Invalid reference, maybe cast doesn't work?: [cast: %s to: %s]",
+                    demangle<4>(typeid(objects[required_depend]->get()).name()).c_str(),
+                    demangle<VkuT, 4>().c_str()));
+        }
+        return ret;
     }
 
     std::string required_depend;
@@ -274,6 +301,10 @@ struct depend_resolver_t {
 
 void mark_dependency_solved(std::string depend_name, vku_ref_p<vku_object_t> depend) {
     /* First remember the dependency: */
+    if (!depend) {
+        DBG("Object into nullptr");
+        throw vku_err_t{std::format("Object turned into nullptr: {}", depend_name)};
+    }
     objects[depend_name] = depend;
 
     /* Second, awake all the ones waiting for the respective dependency */
@@ -384,7 +415,8 @@ co_t build_pseudo_object(const std::string& name, fkyaml::node& node) {
             std::streamsize size = file.tellg();
 
             if (size % sizeof(uint32_t) != 0) {
-                DBG("File must be a shader, so it must have it's data multiple of %zu", sizeof(uint32_t));
+                DBG("File must be a shader, so it must have it's data multiple of %zu",
+                        sizeof(uint32_t));
                 co_return 0;
             }
 
@@ -438,6 +470,16 @@ co_t build_pseudo_object(const std::string& name, fkyaml::node& node) {
     co_return -1;
 }
 
+#define VKC_RESOLVE_INT(node) \
+    (node).has_tag_name() && (node).get_tag_name() == "!ref" ? \
+              (co_await depend_resolver_t<vkc_integer_t>((node).as_str()))->get()->value \
+            : (node).as_int();
+
+#define VKC_RESOLVE_STR(node) \
+    (node).has_tag_name() && (node).get_tag_name() == "!ref" ? \
+              (co_await depend_resolver_t<vkc_string_t>((node).as_str()))->get()->value \
+            : (node).as_str();
+
 co_t build_object(const std::string& name, fkyaml::node& node) {
     if (!node.is_mapping()) {
         DBG("Error node: %s not a mapping", fkyaml::node::serialize(node).c_str());
@@ -454,8 +496,20 @@ co_t build_object(const std::string& name, fkyaml::node& node) {
         mark_dependency_solved(name, obj->to_base<vku_object_t>());
     }
     else if (node["type"] == "vku_window_t") {
-        DBG("Checking failed;...");
-        co_return -1;
+        if (node["name"].has_tag_name()) {
+            DBG("Has tag name");
+            DBG("serialize: %s", fkyaml::node::serialize(node["width"]).c_str());
+            DBG("content: %s", node["width"].as_str().c_str());
+            DBG("Tag name: %s", (node["width"]).get_tag_name().c_str());
+        }
+        else {
+            DBG("only serialize: %s", fkyaml::node::serialize(node["name"]).c_str());
+        }
+        auto w = VKC_RESOLVE_INT(node["width"]);
+        auto h = VKC_RESOLVE_INT(node["height"]);
+        auto name = VKC_RESOLVE_STR(node["name"]);
+        auto obj = vku_window_t::create(w, h, name);
+        mark_dependency_solved(name, obj->to_base<vku_object_t>());
     }
     else if (node["type"] == "vku_surface_t") { /* TODO: */ }
     else if (node["type"] == "vku_device_t") { /* TODO: */ }
@@ -505,18 +559,22 @@ inline vkc_error_e parse_config(const char *path) {
 
         auto coro = build_schema(config).h;
         coro.resume();
-        auto res = coro.promise().retval;
+
         coro.destroy();
-        if (res != VKC_ERROR_OK) {
-            DBG("Failed parse");
+        if (vkc_exception_g) {
+            DBG("Failed because of an exception");
+            std::rethrow_exception(vkc_exception_g);
+        }
+        if (vkc_error_g != VKC_ERROR_OK) {
+            DBG("Failed parse global");
             return VKC_ERROR_GENERIC;
         }
 
         if (wanted_objects.size()) {
             for (auto &[k, v]: wanted_objects) {
                 DBG("Unknown Object: %s", k.c_str());
-                return VKC_ERROR_PARSE_YAML;
             }
+            return VKC_ERROR_PARSE_YAML;
         }
     }
     catch (fkyaml::exception &e) {

@@ -71,6 +71,7 @@ window:
   type: vku_window_t
   width: !ref width
   height: !ref height
+  name: "Window Name Goes Here"
 surf:
   type: vku_surface_t
   window: !ref window

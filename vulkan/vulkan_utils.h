@@ -308,7 +308,7 @@ public:
     template <typename VkuB> requires std::derived_from<VkuB, VkuT>
     std::shared_ptr<vku_ref_t<VkuB>> to_derived() {
         return std::shared_ptr<vku_ref_t<VkuB>>(
-                shared_from_this(), dynamic_cast<vku_ref_t<VkuB> *>(this));
+                shared_from_this(), reinterpret_cast<vku_ref_t<VkuB> *>(this));
     }
 
     void clean_deps() override {
@@ -3671,3 +3671,4 @@ inline const char *vk_err_str(VkResult res) {
 } /* namespace vku_utils */
 
 #endif
+
