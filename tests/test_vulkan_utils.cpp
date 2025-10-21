@@ -8,7 +8,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-using namespace vku_utils;
+namespace vku = vku_utils;
 
 struct part_t {
     glm::vec2 pos;
@@ -16,49 +16,49 @@ struct part_t {
     glm::vec4 color;
 };
 
-static auto create_vbuff(auto dev, auto cp, const std::vector<vku_vertex3d_t>& vertices) {
+static auto create_vbuff(auto dev, auto cp, const std::vector<vku::vertex3d_t>& vertices) {
     size_t verts_sz = vertices.size() * sizeof(vertices[0]);
-    auto staging_vbuff = vku_buffer_t::create(
+    auto staging_vbuff = vku::buffer_t::create(
         dev,
         verts_sz,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_SHARING_MODE_EXCLUSIVE,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
-    memcpy(staging_vbuff->get()->map_data(0, verts_sz), vertices.data(), verts_sz);
-    staging_vbuff->get()->unmap_data();
+    memcpy(staging_vbuff->map_data(0, verts_sz), vertices.data(), verts_sz);
+    staging_vbuff->unmap_data();
 
-    auto vbuff = vku_buffer_t::create(
+    auto vbuff = vku::buffer_t::create(
         dev,
         verts_sz,
         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         VK_SHARING_MODE_EXCLUSIVE,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     );
-    vku_copy_buff(cp, vbuff, staging_vbuff, verts_sz);
+    vku::copy_buff(cp, vbuff, staging_vbuff, verts_sz, nullptr);
     return vbuff;
 }
 
 static auto create_ibuff(auto dev, auto cp, const std::vector<uint16_t>& indices) {
     size_t idxs_sz = indices.size() * sizeof(indices[0]);
-    auto staging_ibuff = vku_buffer_t::create(
+    auto staging_ibuff = vku::buffer_t::create(
         dev,
         idxs_sz,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_SHARING_MODE_EXCLUSIVE,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
-    memcpy(staging_ibuff->get()->map_data(0, idxs_sz), indices.data(), idxs_sz);
-    staging_ibuff->get()->unmap_data();
+    memcpy(staging_ibuff->map_data(0, idxs_sz), indices.data(), idxs_sz);
+    staging_ibuff->unmap_data();
 
-    auto ibuff = vku_buffer_t::create(
+    auto ibuff = vku::buffer_t::create(
         dev,
         idxs_sz,
         VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         VK_SHARING_MODE_EXCLUSIVE,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     );
-    vku_copy_buff(cp, ibuff, staging_ibuff, idxs_sz);
+    vku::copy_buff(cp, ibuff, staging_ibuff, idxs_sz, nullptr);
     return ibuff;
 }
 
@@ -69,11 +69,11 @@ static auto load_image(auto cp, std::string path) {
     /* TODO: some more logs around here */
     VkDeviceSize imag_sz = w*h*4;
     if (!pixels) {
-        throw vku_err_t("Failed to load image");
+        throw vku::err_t("Failed to load image");
     }
 
-    auto img = vku_image_t::create(cp->get()->dev, w, h, VK_FORMAT_R8G8B8A8_SRGB);
-    img->get()->set_data(cp, pixels, imag_sz);
+    auto img = vku::image_t::create(cp->dev, w, h, VK_FORMAT_R8G8B8A8_SRGB);
+    img->set_data(cp, pixels, imag_sz);
 
     stbi_image_free(pixels);
 
@@ -87,7 +87,7 @@ int main(int argc, char const *argv[])
 
     DBG_SCOPE();
 
-    const std::vector<vku_vertex3d_t> vertices = {
+    const std::vector<vku::vertex3d_t> vertices = {
         {{-0.5f, -0.5f,  0.0f}, {0, 0, 0}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
         {{ 0.5f, -0.5f,  0.0f}, {0, 0, 0}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
         {{ 0.5f,  0.5f,  0.0f}, {0, 0, 0}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
@@ -104,12 +104,12 @@ int main(int argc, char const *argv[])
         4, 5, 6, 6, 7, 4
     };
 
-    vku_mvp_t mvp;
+    vku::mvp_t mvp;
 
-    auto inst = vku_instance_t::create();
+    auto inst = vku::instance_t::create();
     DBG("Done instance init");
 
-    auto vert = vku_spirv_compile(VKU_SPIRV_VERTEX, R"___(
+    auto vert = vku::spirv_compile(VKU_SPIRV_VERTEX, R"___(
         #version 450
 
         layout(binding = 0) uniform ubo_t {
@@ -124,7 +124,7 @@ int main(int argc, char const *argv[])
         #define APPLY_ASSIGN(x, y) x = y
 
         layout(location = 0) in vec3 in_pos;    // those are referenced by
-        layout(location = 1) in vec3 in_normal; // vku_vertex3d_t::get_input_desc()
+        layout(location = 1) in vec3 in_normal; // vku::vertex3d_t::get_input_desc()
         layout(location = 2) in vec3 in_color;
         layout(location = 3) in vec2 in_tex;
 
@@ -139,7 +139,7 @@ int main(int argc, char const *argv[])
 
     )___");
 
-    auto frag = vku_spirv_compile(VKU_SPIRV_FRAGMENT, R"___(
+    auto frag = vku::spirv_compile(VKU_SPIRV_FRAGMENT, R"___(
         #version 450
 
         layout(location = 0) in vec3 in_color;      // this is referenced by the vert shader
@@ -155,85 +155,85 @@ int main(int argc, char const *argv[])
         }
     )___");
 
-    ASSERT_FN(vku_spirv_save(frag, "./frag.bin"));
-    ASSERT_FN(vku_spirv_save(vert, "./vert.bin"));
+    ASSERT_FN(vku::spirv_save(frag, "./frag.bin"));
+    ASSERT_FN(vku::spirv_save(vert, "./vert.bin"));
 
     int width = 800, height = 600;
 
-    auto window =   vku_window_t::create(width, height);
-    auto surf =     vku_surface_t::create(window, inst);
-    auto dev =      vku_device_t::create(surf);
-    auto cp =       vku_cmdpool_t::create(dev);
+    auto window =   vku::window_t::create(width, height);
+    auto surf =     vku::surface_t::create(window, inst);
+    auto dev =      vku::device_t::create(surf);
+    auto cp =       vku::cmdpool_t::create(dev);
 
     auto img = load_image(cp, "test_image.png");
-    auto view = vku_img_view_t::create(img, VK_IMAGE_ASPECT_COLOR_BIT);
-    auto sampl = vku_img_sampl_t::create(dev);
+    auto view = vku::img_view_t::create(img, VK_IMAGE_ASPECT_COLOR_BIT);
+    auto sampl = vku::img_sampl_t::create(dev);
 
-    auto mvp_buff = vku_buffer_t::create(
+    auto mvp_buff = vku::buffer_t::create(
         dev,
         sizeof(mvp),
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         VK_SHARING_MODE_EXCLUSIVE,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
-    auto mvp_pbuff = mvp_buff->get()->map_data(0, sizeof(vku_mvp_t));
+    auto mvp_pbuff = mvp_buff->map_data(0, sizeof(vku::mvp_t));
 
-    auto bindings = vku_binding_desc_t::create({
-        vku_binding_desc_t::buff_binding_t::create(
-            vku_ubo_t::get_desc_set(0, VK_SHADER_STAGE_VERTEX_BIT),
+    auto bindings = vku::binding_desc_set_t::create({
+        vku::binding_desc_set_t::buff_binding_t::create(
+            vku::ubo_t::get_desc_set(0, VK_SHADER_STAGE_VERTEX_BIT),
             mvp_buff
-        ).get()->to_base<vku_binding_desc_t::binding_desc_t>(),
-        vku_binding_desc_t::sampl_binding_t::create(
-            vku_img_sampl_t::get_desc_set(1, VK_SHADER_STAGE_FRAGMENT_BIT),
+        ).to_base<vku::binding_desc_set_t::binding_desc_t>(),
+        vku::binding_desc_set_t::sampl_binding_t::create(
+            vku::img_sampl_t::get_desc_set(1, VK_SHADER_STAGE_FRAGMENT_BIT),
             view,
             sampl
-        ).get()->to_base<vku_binding_desc_t::binding_desc_t>(),
+        ).to_base<vku::binding_desc_set_t::binding_desc_t>(),
     });
 
-    auto sh_vert =  vku_shader_t::create(dev, vert);
-    auto sh_frag =  vku_shader_t::create(dev, frag);
-    auto swc =      vku_swapchain_t::create(dev);
-    auto rp =       vku_renderpass_t::create(swc);
-    auto pl =       vku_pipeline_t::create(
+    auto sh_vert =  vku::shader_t::create(dev, vert);
+    auto sh_frag =  vku::shader_t::create(dev, frag);
+    auto swc =      vku::swapchain_t::create(dev);
+    auto rp =       vku::renderpass_t::create(swc);
+    auto pl =       vku::pipeline_t::create(
         width, height,
         rp,
         {sh_vert, sh_frag},
         VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        vku_vertex3d_t::get_input_desc(),
+        vku::vertex3d_t::get_input_desc(),
         bindings
     );
-    auto fbs =      vku_framebuffs_t::create(rp);
+    auto fbs =      vku::framebuffs_t::create(rp);
 
-    auto img_sem =  vku_sem_t::create(dev);
-    auto draw_sem = vku_sem_t::create(dev);
-    auto fence =    vku_fence_t::create(dev);
+    auto img_sem =  vku::sem_t::create(dev);
+    auto draw_sem = vku::sem_t::create(dev);
+    auto fence =    vku::fence_t::create(dev);
 
-    auto cbuff =    vku_cmdbuff_t::create(cp);
+    auto cbuff =    vku::cmdbuff_t::create(cp);
 
     auto vbuff = create_vbuff(dev, cp, vertices);
     auto ibuff = create_ibuff(dev, cp, indices);
 
-    auto desc_pool = vku_desc_pool_t::create(dev, bindings, 1);
-    auto desc_set = vku_desc_set_t::create(desc_pool, pl->get()->vk_desc_set_layout, bindings);
+    auto desc_pool = vku::desc_pool_t::create(dev, bindings, 1);
+    auto desc_set = vku::desc_set_t::create(desc_pool, pl->vk_desc_set_layout, bindings);
 
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
     /* TODO: the program ever only draws on one image and waits on the fence, we need to use
     at least two images to speed up the draw process */
-    // std::map<uint32_t, vku_sem_t *> img_sems;
-    // std::map<uint32_t, vku_sem_t *> draw_sems;
-    // std::map<uint32_t, vku_fence_t *> fences;
+    // std::map<uint32_t, vku::sem_t *> img_sems;
+    // std::map<uint32_t, vku::sem_t *> draw_sems;
+    // std::map<uint32_t, vku::fence_t *> fences;
     double start_time = get_time_ms();
    
     DBG("Starting main loop"); 
-    while (!glfwWindowShouldClose(window->get()->get_window())) {
-        if (glfwGetKey(window->get()->get_window(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
+    while (!glfwWindowShouldClose(window->get_window())) {
+        if (glfwGetKey(window->get_window(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
             break;
         glfwPollEvents();
 
         try {
             uint32_t img_idx;
-            vku_aquire_next_img(swc, img_sem, &img_idx);
+            vku::aquire_next_img(swc, img_sem, &img_idx);
 
             float curr_time = ((double)get_time_ms() - start_time)/100000.;
             curr_time *= 100;
@@ -242,34 +242,34 @@ int main(int argc, char const *argv[])
             mvp.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
                     glm::vec3(0.0f, 0.0f, 1.0f));
             mvp.proj = glm::perspective(glm::radians(45.0f),
-                    swc->get()->vk_extent.width / (float)swc->get()->vk_extent.height, 0.1f, 10.0f);
+                    swc->vk_extent.width / (float)swc->vk_extent.height, 0.1f, 10.0f);
             mvp.proj[1][1] *= -1;
             memcpy(mvp_pbuff, &mvp, sizeof(mvp));
 
-            cbuff->get()->begin(0);
-            cbuff->get()->begin_rpass(fbs, img_idx);
-            cbuff->get()->bind_vert_buffs(0, {{vbuff, 0}});
-            cbuff->get()->bind_idx_buff(ibuff, 0, VK_INDEX_TYPE_UINT16);
-            cbuff->get()->bind_desc_set(VK_PIPELINE_BIND_POINT_GRAPHICS, pl->get()->vk_layout, desc_set);
-            cbuff->get()->draw_idx(pl, indices.size());
-            cbuff->get()->end_rpass();
-            cbuff->get()->end();
+            cbuff->begin(0);
+            cbuff->begin_rpass(fbs, img_idx);
+            cbuff->bind_vert_buffs(0, {{vbuff, 0}});
+            cbuff->bind_idx_buff(ibuff, 0, VK_INDEX_TYPE_UINT16);
+            cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_GRAPHICS, pl->vk_layout, desc_set);
+            cbuff->draw_idx(pl, indices.size());
+            cbuff->end_rpass();
+            cbuff->end();
 
-            vku_submit_cmdbuff({{img_sem, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
+            vku::submit_cmdbuff({{img_sem, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
                     cbuff, fence, {draw_sem});
-            vku_present(swc, {draw_sem}, img_idx);
+            vku::present(swc, {draw_sem}, img_idx);
 
-            vku_wait_fences({fence});
-            vku_reset_fences({fence});
+            vku::wait_fences({fence});
+            vku::reset_fences({fence});
         }
-        catch (vku_err_t &e) {
+        catch (vku::err_t &e) {
             /* TODO: fix this (next time write what's wrong with it) */
             DBG("resize?");
             if (e.vk_err == VK_SUBOPTIMAL_KHR) {
-                vkDeviceWaitIdle(dev->get()->vk_dev);
+                vkDeviceWaitIdle(dev->vk_dev);
 
                 /* This will rebuild the entire tree following from window */
-                window->rebuild();
+                window.rebuild();
             }
             else
                 throw e;
