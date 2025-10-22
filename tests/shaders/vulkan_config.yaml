@@ -2,9 +2,9 @@
 # their value: integer are identified by their integer value, shaders by the existance of
 # shader_type, etc.
 vert_spirv:
-  shader_type: VKU_SPIRV_VERTEX
+  m_shader_type: VKU_SPIRV_VERTEX
   # should also have a posible "path"
-  source: |
+  m_source: |
     #version 450
 
     layout(binding = 0) uniform ubo_t {
@@ -37,8 +37,8 @@ vert_spirv:
     }
 
 frag_spirv:
-  shader_type: VKU_SPIRV_FRAGMENT
-  source: |
+  m_shader_type: VKU_SPIRV_FRAGMENT
+  m_source: |
     #version 450
 
     layout(location = 0) in vec3 in_color;      // this is referenced by the vert shader
@@ -57,127 +57,127 @@ height: 600
 
 # TODO: figure those out: 
 vertex_source:
-  type: vkc::lua_var_t
+  m_type: vkc::lua_var_t
 index_source:
-  type: vkc::lua_var_t
+  m_type: vkc::lua_var_t
 input_desc_source:
-  type: vkc::lua_var_t
+  m_type: vkc::lua_var_t
 mvp_source:
-  type: vkc::lua_var_t
+  m_type: vkc::lua_var_t
 
 inst:
-  type: vku::instance_t
+  m_type: vku::instance_t
 window:
-  type: vku::window_t
-  width: !ref width
-  height: !ref height
-  name: "Window Name Goes Here"
+  m_type: vku::window_t
+  m_width: !ref width
+  m_height: !ref height
+  m_name: "Window Name Goes Here"
 surf:
-  type: vku::surface_t
-  window: !ref window
-  instance: !ref inst
-dev:
-  type: vku::device_t
-  surface: !ref surf
+  m_type: vku::surface_t
+  m_window: !ref window
+  m_instance: !ref inst
 cp:
-  type: vku::cmdpool_t
-  device: !ref dev
-img:
-  type: vku::image_t
-  cmdpool: !ref cp
-  path: test_image.png
+  m_type: vku::cmdpool_t
+  m_device:
+    dev:
+      m_type: vku::device_t
+      m_surface: !ref surf
 view:
-  type: vku::img_view_t
-  image: !ref img
-  aspect_mask: VK_IMAGE_ASPECT_COLOR_BIT
+  m_type: vku::img_view_t
+  m_image:
+    m_type: vku::image_t
+    m_tag: img
+    m_cmdpool: !ref cp
+    m_path: test_image.png
+  m_aspect_mask: VK_IMAGE_ASPECT_COLOR_BIT
 sampl:
-  type: vku::img_sampl_t
-  device: !ref dev
+  m_type: vku::img_sampl_t
+  m_device: !ref dev
 mvp_buff:
-  type: vku::buffer_t
-  device: !ref dev
-  source: !ref mvp_source
-  usage_flags: VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
-  sharing_mode: VK_SHARING_MODE_EXCLUSIVE
-  memory_flags: VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+  m_type: vku::buffer_t
+  m_device: !ref dev
+  m_source: !ref mvp_source
+  m_usage_flags: VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
+  m_sharing_mode: VK_SHARING_MODE_EXCLUSIVE
+  m_memory_flags: VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
 bindings:
-  type: vku::binding_desc_t
-  descriptors:
+  m_type: vku::binding_desc_set_t
+  m_descriptors:
     # all should have the alternate posibility to be nested and have another "tag" option
     # this would be especially usefull here, where we could've instead hust nest view instead of
     # declaring it before it was needed
-    - type: vku::binding_desc_set_t::buff_binding_t
-      buff: !ref mvp_buff
-    - type: vku::binding_desc_set_t::sampl_binding_t
-      view: !ref view
-      sampler: !ref sampl
+    - m_type: vku::binding_desc_set_t::buff_binding_t
+      m_buff: !ref mvp_buff
+    - m_type: vku::binding_desc_set_t::sampl_binding_t
+      m_view: !ref view
+      m_sampler: !ref sampl
 vert:
-  type: vku::shader_t
-  device: !ref dev
-  spirv: !ref vert_spirv
+  m_type: vku::shader_t
+  m_device: !ref dev
+  m_spirv: !ref vert_spirv
 frag:
-  type: vku::shader_t
-  device: !ref dev
-  spirv: !ref frag_spirv
+  m_type: vku::shader_t
+  m_device: !ref dev
+  m_spirv: !ref frag_spirv
 swc:
-  type: vku::swapchain_t
-  device: !ref dev
+  m_type: vku::swapchain_t
+  m_device: !ref dev
 rp:
-  type: vku::renderpass_t
-  swapchain: !ref swc
+  m_type: vku::renderpass_t
+  m_swapchain: !ref swc
 pl:
-  type: vku::pipeline_t
-  width: !ref width
-  height: !ref height
-  renderpass: !ref rp
-  shaders:
+  m_type: vku::pipeline_t
+  m_width: !ref width
+  m_height: !ref height
+  m_renderpass: !ref rp
+  m_shaders:
     - !ref vert
     - !ref frag
-  topology: VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
-  input_desc: !ref input_desc_source
-  bindings: !ref bindings
+  m_topology: VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+  m_input_desc: !ref input_desc_source
+  m_bindings: !ref bindings
 fbs:
-  type: vku::framebuffs_t
-  renderpass: !ref rp
+  m_type: vku::framebuffs_t
+  m_renderpass: !ref rp
 img_sem:
-  type: vku::sem_t
-  device: !ref dev
+  m_type: vku::sem_t
+  m_device: !ref dev
 draw_sem:
-  type: vku::sem_t
-  device: !ref dev
+  m_type: vku::sem_t
+  m_device: !ref dev
 fence:
-  type: vku::fence_t
-  device: !ref dev
+  m_type: vku::fence_t
+  m_device: !ref dev
 cbuff:
-  type: vku::cmdbuff_t
-  cmdpool: !ref cp
+  m_type: vku::cmdbuff_t
+  m_cmdpool: !ref cp
 vbuff:
-  type: vku::buffer_t
-  device: !ref dev
-  source: !ref vertex_source
-  usage_flags: VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
-  sharing_mode: VK_SHARING_MODE_EXCLUSIVE
-  memory_flags: VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+  m_type: vku::buffer_t
+  m_device: !ref dev
+  m_source: !ref vertex_source
+  m_usage_flags: VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
+  m_sharing_mode: VK_SHARING_MODE_EXCLUSIVE
+  m_memory_flags: VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 ibuff:
-  type: vku::buffer_t
-  device: !ref dev
-  source: !ref index_source
-  usage_flags: VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
-  sharing_mode: VK_SHARING_MODE_EXCLUSIVE
-  memory_flags: VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+  m_type: vku::buffer_t
+  m_device: !ref dev
+  m_source: !ref index_source
+  m_usage_flags: VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
+  m_sharing_mode: VK_SHARING_MODE_EXCLUSIVE
+  m_memory_flags: VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 desc_pool:
-  type: vku::desc_pool_t
-  device: !ref dev
-  bindings: !ref bindings
-  cnt: 1
+  m_type: vku::desc_pool_t
+  m_device: !ref dev
+  m_bindings: !ref bindings
+  m_cnt: 1
 desc_set:
-  type: vku::desc_set_t
-  descritpor_pool: !ref desc_pool
-  pipeline: !ref pl
-  bindings: !ref bindings
+  m_type: vku::desc_set_t
+  m_descritpor_pool: !ref desc_pool
+  m_pipeline: !ref pl
+  m_bindings: !ref bindings
 
-lua-script:
-  source: |
+lua_script:
+  m_source: |
     vku = require("vulkan_utils")
 
     function on_loop_run() do
@@ -215,3 +215,59 @@ lua-script:
 
       -- this will recurse and rebuild all dependees on window
       vku.window.rebuild()
+
+
+# WIP TUTORIAL
+# 
+# 
+# How objects work in the configuration file:
+# ===========================================
+#
+# 1. Declaring a standalone object:
+#    An object can be defined on its own, using a tag name as its identifier:
+#
+#    ```yaml
+#     tag-name:
+#         m_type: object_type
+#         ...
+#    ```
+#
+#    In this form:
+#
+#    * The tag name (e.g., `tag-name`) is automatically treated as the object's type identifier.
+#    * The field `m_type` is required — it marks the entry as an object.
+#    * Other properties or fields may follow.
+#
+# 2. Declaring an object within another object:
+#    An object can also appear as a nested field inside another object:
+#
+#    ```yaml
+#     another-tag-name:
+#         ...
+#         m_field:
+#             tag-name:
+#                 m_type: object_type
+#                 ...
+#    ```
+#
+#    In this case:
+#
+#    * `m_field` contains an object named `tag-name`.
+#    * `tag-name` again includes an `m_type` to specify its type.
+#
+# 3. Declaring an inline (anonymous) object:
+#    You can define an object directly within a field without giving it an outer tag.
+#    However, you may optionally include an `m_tag` if you plan to reference it later:
+#
+#    ```yaml
+#     another-tag-name:
+#         ...
+#         m_field:
+#             m_type: object_type
+#             m_tag: optional-tag-name
+#    ```
+#
+#    Here:
+#
+#    * `m_type` identifies the object type.
+#    * `m_tag` (optional) assigns a reference name so this object can be reused elsewhere.

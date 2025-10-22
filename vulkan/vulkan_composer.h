@@ -129,6 +129,19 @@ private:
     virtual VkResult _uninit() override { return VK_SUCCESS; }
 };
 
+struct float_t : public vku::object_t {
+    double value = 0;
+    static vku::ref_t<float_t> create(double value) {
+        auto ret = vku::ref_t<float_t>::create_obj_ref(std::make_unique<float_t>(), {});
+        ret->value = value;
+        return ret;
+    }
+
+private:
+    virtual VkResult _init() override { return VK_SUCCESS; }
+    virtual VkResult _uninit() override { return VK_SUCCESS; }
+};
+
 struct string_t : public vku::object_t {
     std::string value;
     static vku::ref_t<string_t> create(const std::string& value) {
@@ -270,35 +283,35 @@ co::task_t build_pseudo_object(const std::string& name, fkyaml::node& node) {
         co_return 0;
     }
 
-    if (node.is_mapping() && node.contains("shader_type")) {
+    if (node.is_mapping() && node.contains("m_shader_type")) {
         vku::spirv_t spirv;
 
-        if (node.contains("source")) {
+        if (node.contains("m_source")) {
             spirv = vku::spirv_compile(
-                    get_from_map(shader_stage_from_string, node["shader_type"].as_str()),
-                    node["source"].as_str().c_str());
+                    get_from_map(shader_stage_from_string, node["m_shader_type"].as_str()),
+                    node["m_source"].as_str().c_str());
         }
 
-        if (node.contains("source-path")) {
+        if (node.contains("m_source_path")) {
             if (spirv.content.size()) {
                 DBG("Trying to initialize spirv from 2 sources (only one of source, "
                         "source-path, or spirv-path allowed)");
                 co_return -1;
             }
             spirv = vku::spirv_compile(
-                    get_from_map(shader_stage_from_string, node["shader_type"].as_str()),
-                    get_file_string_content(node["source-path"].as_str()).c_str());
+                    get_from_map(shader_stage_from_string, node["m_shader_type"].as_str()),
+                    get_file_string_content(node["m_source_path"].as_str()).c_str());
         }
 
-        if (node.contains("spirv-path")) {
+        if (node.contains("m_spirv_path")) {
             if (spirv.content.size()) {
                 DBG("Trying to initialize spirv from 2 sources (only one of source, "
                         "source-path, or spirv-path allowed)");
                 co_return -1;
             }
 
-            spirv.type = get_from_map(shader_stage_from_string, node["shader_type"].as_str());
-            std::string file_path = std::filesystem::canonical(node["spirv-path"].as_str());
+            spirv.type = get_from_map(shader_stage_from_string, node["m_shader_type"].as_str());
+            std::string file_path = std::filesystem::canonical(node["m_spirv_path"].as_str());
 
             if (!starts_with(file_path, app_path)) {
                 DBG("The path is restricted to the application main directory");
@@ -333,26 +346,26 @@ co::task_t build_pseudo_object(const std::string& name, fkyaml::node& node) {
         co_return 0;
     }
 
-    if (name == "lua-script") {
-        if (!(node.contains("source") || node.contains("source-path"))) {
+    if (name == "lua_script") {
+        if (!(node.contains("m_source") || node.contains("source_path"))) {
             DBG("lua-script must be a node that has either source or source-path")
             co_return -1;
         }
 
-        if (node.contains("source") && node.contains("source-path")) {
+        if (node.contains("m_source") && node.contains("m_source_path")) {
             DBG("lua-script can be either loaded from inline script or from a specified path, not"
                     "from both!");
             co_return -1;
         }
 
-        if (node.contains("source")) {
-            auto obj = lua_script_t::create(node["source"].as_str());
+        if (node.contains("m_source")) {
+            auto obj = lua_script_t::create(node["m_source"].as_str());
             mark_dependency_solved(name, obj.to_base<vku::object_t>());
             co_return 0;
         }
 
-        if (node.contains("source-path")) {
-            std::string source = get_file_string_content(node["source-path"].as_str());
+        if (node.contains("m_source_path")) {
+            std::string source = get_file_string_content(node["m_source_path"].as_str());
 
             auto obj = lua_script_t::create(source);
             mark_dependency_solved(name, obj.to_base<vku::object_t>());
@@ -364,69 +377,197 @@ co::task_t build_pseudo_object(const std::string& name, fkyaml::node& node) {
     co_return -1;
 }
 
-#define VKC_RESOLVE_INT(node) \
-    (node).has_tag_name() && (node).get_tag_name() == "!ref" ? \
-              (co_await depend_resolver_t<integer_t>((node).as_str()))->value \
-            : (node).as_int();
+/*! This either follows a reference to an integer or it returns the direct value if available */
+co::task<int64_t> resolve_int(fkyaml::node& node) {
+    if (node.has_tag_name() && node.get_tag_name() == "!ref")
+        co_return (co_await depend_resolver_t<integer_t>(node.as_str()))->value;
+    co_return node.as_int();
+}
 
-#define VKC_RESOLVE_STR(node) \
-    (node).has_tag_name() && (node).get_tag_name() == "!ref" ? \
-              (co_await depend_resolver_t<string_t>((node).as_str()))->value \
-            : (node).as_str();
+/*! This either follows a reference to an integer or it returns the direct value if available */
+co::task<double> resolve_float(fkyaml::node& node) {
+    if (node.has_tag_name() && node.get_tag_name() == "!ref")
+        co_return (co_await depend_resolver_t<float_t>(node.as_str()))->value;
+    co_return node.as_float();
+}
 
-co::task_t build_object(const std::string& name, fkyaml::node& node) {
+/*! This either follows a reference to a string or it returns the direct value if available */
+co::task<std::string> resolve_str(fkyaml::node& node) {
+    if (node.has_tag_name() && node.get_tag_name() == "!ref")
+        co_return (co_await depend_resolver_t<string_t>(node.as_str()))->value;
+    co_return node.as_str();
+}
+
+co::task<vku::ref_t<vku::object_t>> build_object(const std::string& name, fkyaml::node& node);
+
+inline int64_t anonymous_increment = 0;
+template <typename VkuT>
+co::task<vku::ref_t<VkuT>> resolve_obj(fkyaml::node& node) {
+    /* Check -- How objects work in the configuration file -- */
+
+    if (node.has_tag_name() && node.get_tag_name() == "!ref") {
+        /* This is simply a reference to an object m_field: !ref tag_name*/
+        co_return co_await depend_resolver_t<VkuT>(node.as_str());
+    }
+    else if (node.is_mapping() && node.as_map().size() == 1
+            && node.as_map().begin()->second.contains("m_type"))
+    {
+        /* This is in the form m_field: tag_name: m_type: "..." */
+        std::string tag = node.as_map().begin()->first.as_str();
+        auto ref = co_await build_object(tag, node.as_map().begin()->second);
+        co_return ref.template to_derived<VkuT>();
+    }
+    else if (node.contains("m_type")) {
+        /* This is in the form m_field: m_type: "...", ie, inlined object */
+        std::string tag = node.contains("m_tag") ?
+                node["m_tag"].as_str() : "anonymous_" + std::to_string(anonymous_increment++);
+        auto ref = co_await build_object(tag, node);
+        co_return ref.template to_derived<VkuT>();
+    }
+
+    /* None of the above */
+    co_return nullptr;
+    // if (node.contains("m_type"))
+    //     co_await build_object
+    // co_return co_await depend_resolver_t<Vkut>();
+}
+
+co::task<vku::ref_t<vku::object_t>> build_object(const std::string& name, fkyaml::node& node) {
     if (!node.is_mapping()) {
         DBG("Error node: %s not a mapping", fkyaml::node::serialize(node).c_str());
-        co_return -1;
+        co_return nullptr;
     }
-
     if (false);
-    else if (node["type"] == "vku::instance_t") {
+    else if (node["m_type"] == "vku::instance_t") {
         auto obj = vku::instance_t::create();
         mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        co_return obj.to_base<vku::object_t>();
     }
-    else if (node["type"] == "vkc::lua_var_t") {
+    else if (node["m_type"] == "vkc::lua_var_t") {
+        /* lua_var has the same tag_name as the var name */
         auto obj = lua_var_t::create(name);
         mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        co_return obj.to_base<vku::object_t>();
     }
-    else if (node["type"] == "vku::window_t") {
-        if (node["name"].has_tag_name()) {
-            DBG("Has tag name");
-            DBG("serialize: %s", fkyaml::node::serialize(node["width"]).c_str());
-            DBG("content: %s", node["width"].as_str().c_str());
-            DBG("Tag name: %s", (node["width"]).get_tag_name().c_str());
-        }
-        else {
-            DBG("only serialize: %s", fkyaml::node::serialize(node["name"]).c_str());
-        }
-        auto w = VKC_RESOLVE_INT(node["width"]);
-        auto h = VKC_RESOLVE_INT(node["height"]);
-        auto name = VKC_RESOLVE_STR(node["name"]);
-        auto obj = vku::window_t::create(w, h, name);
+    else if (node["m_type"] == "vku::window_t") {
+        auto w = co_await resolve_int(node["m_width"]);
+        auto h = co_await resolve_int(node["m_height"]);
+        auto window_name = co_await resolve_str(node["m_name"]);
+        auto obj = vku::window_t::create(w, h, window_name);
         mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        co_return obj.to_base<vku::object_t>();
     }
-    else if (node["type"] == "vku::surface_t") { /* TODO: */ }
-    else if (node["type"] == "vku::device_t") { /* TODO: */ }
-    else if (node["type"] == "vku::cmdpool_t") { /* TODO: */ }
-    else if (node["type"] == "vku::image_t") { /* TODO: */ }
-    else if (node["type"] == "vku::img_view_t") { /* TODO: */ }
-    else if (node["type"] == "vku::img_sampl_t") { /* TODO: */ }
-    else if (node["type"] == "vku::buffer_t") { /* TODO: */ }
-    else if (node["type"] == "vku::binding_desc_set_t") { /* TODO: */ }
-    else if (node["type"] == "vku::binding_desc_set_t::buff_binding_t") { /* TODO: */ }
-    else if (node["type"] == "vku::binding_desc_set_t::sampl_binding_t") { /* TODO: */ }
-    else if (node["type"] == "vku::shader_t") { /* TODO: */ }
-    else if (node["type"] == "vku::swapchain_t") { /* TODO: */ }
-    else if (node["type"] == "vku::renderpass_t") { /* TODO: */ }
-    else if (node["type"] == "vku::pipeline_t") { /* TODO: */ }
-    else if (node["type"] == "vku::framebuffs_t") { /* TODO: */ }
-    else if (node["type"] == "vku::sem_t") { /* TODO: */ }
-    else if (node["type"] == "vku::fence_t") { /* TODO: */ }
-    else if (node["type"] == "vku::cmdbuff_t") { /* TODO: */ }
-    else if (node["type"] == "vku::desc_pool_t") { /* TODO: */ }
-    else if (node["type"] == "vku::desc_set_t") { /* TODO: */ }
+    else if (node["m_type"] == "vku::surface_t") {
+        auto window = co_await resolve_obj<vku::window_t>(node["m_window"]);
+        auto instance = co_await resolve_obj<vku::window_t>(node["m_instance"]);
+        auto obj = vku::surface_t::create(window, instance);
+        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::device_t") {
+        auto surf = co_await resolve_obj<vku::surface_t>(node["m_surface"]);
+        auto obj = vku::device_t::create(surf);
+        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::cmdpool_t") {
+        auto dev = co_await resolve_obj<vku::device_t>(node["m_device"]);
+        auto obj = vku::cmdpool_t::create(dev);
+        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::image_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::img_view_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::img_sampl_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::buffer_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::binding_desc_set_t") {
+        std::vector<vku::ref_t<vku::binding_desc_set_t::binding_desc_t>> bindings;
+        for (auto& subnode : node["m_descriptors"])
+            bindings.push_back(
+                    co_await resolve_obj<vku::binding_desc_set_t::binding_desc_t>(subnode));
+        auto obj = vku::binding_desc_set_t::create(bindings);
+        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::binding_desc_set_t::buff_binding_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::binding_desc_set_t::sampl_binding_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::shader_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::swapchain_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::renderpass_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::pipeline_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::framebuffs_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::sem_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::fence_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::cmdbuff_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::desc_pool_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::desc_set_t") {
+        /* TODO: */
+        // mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        // co_return obj.to_base<vku::object_t>();
+    }
 
-    co_return 0;
+    DBG("Object m_type is not known: %s", node["m_type"].as_str().c_str());
+    throw vku::err_t{"Invalid object type"};
 }
 
 
@@ -434,7 +575,7 @@ co::task_t build_schema(fkyaml::node& root) {
     ASSERT_BOOL_CO(root.is_mapping());
 
     for (auto &[name, node] : root.as_map()) {
-        if (!node.contains("type")) {
+        if (!node.contains("m_type")) {
             co_await co::sched(build_pseudo_object(name.as_str(), node));
         }
         else {

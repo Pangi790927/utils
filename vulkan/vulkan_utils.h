@@ -324,10 +324,18 @@ public:
 
     ref_t(std::nullptr_t) {}
     ref_t() {}
-    ref_t(std::shared_ptr<base_t> obj) : ref_base_t{obj} {}
+    ref_t(std::shared_ptr<base_t> obj) : ref_base_t{obj} {
+        /* We either hold nullptr or an object that can be casted to VkuT */
+        if (obj && !dynamic_cast<VkuT *>(_base->_obj.get()))
+            throw err_t{"Tried to build a reference of invalid type"};
+    }
 
     template <typename U> requires std::derived_from<U, object_t>
-    ref_t(ref_t<U> othr) : ref_base_t{othr._base} {}
+    ref_t(ref_t<U> oth) : ref_base_t{oth._base} {
+        /* We either hold nullptr or an object that can be casted to VkuT */
+        if (oth && !dynamic_cast<VkuT *>(_base->_obj.get()))
+            throw err_t{"Tried to build a reference of invalid type"};
+    }
 
     void rebuild() { _base->rebuild(); }
 
