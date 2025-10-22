@@ -153,7 +153,7 @@ struct err_t : public std::exception {
                 "\n------BACKTRACE------\n"
                 "{}"
                 "\n---------------------\n"
-                "VKU_ERROR: {}[{}]",
+                "EXCEPTION: VKU_ERROR: {}[{}]",
                 cpp_backtrace(),
                 vk_err_str(vk_err), (size_t)vk_err);
     }
@@ -163,7 +163,7 @@ struct err_t : public std::exception {
                 "\n------BACKTRACE------\n"
                 "{}"
                 "\n---------------------\n"
-                "{}",
+                "EXCEPTION: {}",
                 cpp_backtrace(),
                 str);
     }
