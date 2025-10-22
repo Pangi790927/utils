@@ -12,6 +12,8 @@
 #include <glm/vec4.hpp>
 
 #include "debug.h"
+#include "demangle.h"
+#include "backtrace.h"
 
 #if __has_include(<glslang/Include/glslang_c_interface.h>)
 # define VKU_HAS_NEW_GLSLANG
@@ -145,9 +147,26 @@ struct err_t : public std::exception {
     std::string err_str;
 
     err_t(VkResult vk_err)
-    : vk_err(vk_err), err_str(std::format("VKU_ERROR: {}[{}]", vk_err_str(vk_err), (size_t)vk_err)) {}
+    : vk_err(vk_err)
+    {
+        err_str = std::format(
+                "\n------BACKTRACE------\n"
+                "{}"
+                "\n---------------------\n"
+                "VKU_ERROR: {}[{}]",
+                cpp_backtrace(),
+                vk_err_str(vk_err), (size_t)vk_err);
+    }
 
-    err_t(const std::string& str) : err_str(str) {}
+    err_t(const std::string& str) {
+        err_str = std::format(
+                "\n------BACKTRACE------\n"
+                "{}"
+                "\n---------------------\n"
+                "{}",
+                cpp_backtrace(),
+                str);
+    }
     const char *what() const noexcept override { return err_str.c_str(); };
 };
 
@@ -326,15 +345,21 @@ public:
     ref_t() {}
     ref_t(std::shared_ptr<base_t> obj) : ref_base_t{obj} {
         /* We either hold nullptr or an object that can be casted to VkuT */
-        if (obj && !dynamic_cast<VkuT *>(_base->_obj.get()))
-            throw err_t{"Tried to build a reference of invalid type"};
+        if (obj && !dynamic_cast<VkuT *>(_base->_obj.get())) {
+            throw err_t{std::format("Tried to build a reference of invalid type {} to {}",
+                    demangle(typeid(*_base->_obj.get()).name()),
+                    demangle<VkuT>())};
+        }
     }
 
     template <typename U> requires std::derived_from<U, object_t>
     ref_t(ref_t<U> oth) : ref_base_t{oth._base} {
         /* We either hold nullptr or an object that can be casted to VkuT */
-        if (oth && !dynamic_cast<VkuT *>(_base->_obj.get()))
-            throw err_t{"Tried to build a reference of invalid type"};
+        if (oth && !dynamic_cast<VkuT *>(_base->_obj.get())) {
+            throw err_t{std::format("Tried to build a reference of invalid type {} to {}",
+                    demangle(typeid(*_base->_obj.get()).name()),
+                    demangle<VkuT>())};
+        }
     }
 
     void rebuild() { _base->rebuild(); }

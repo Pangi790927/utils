@@ -5,7 +5,7 @@
 #include <memory>
 #include <cxxabi.h>
 
-template <int indent = -1>
+template <int indent = 0>
 inline std::string demangle(const char *name) {
     int status = -4;
     std::unique_ptr<char, void (*)(void *)> res {
@@ -44,12 +44,12 @@ inline std::string demangle(const char *name) {
     return indented + "\n";
 }
 
-template <class T, int indent = -1>
+template <class T, int indent = 0>
 inline std::string demangle() {
     return demangle<indent>(typeid(T).name());
 }
 
-template <class T, int indent = -1>
+template <class T, int indent = 0>
 inline std::string demangle(const T& t) {
     return demangle<T, indent>();
 }
