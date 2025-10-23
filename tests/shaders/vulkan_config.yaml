@@ -91,15 +91,14 @@ view:
     m_path: test_image.png
   m_aspect_mask: VK_IMAGE_ASPECT_COLOR_BIT
 sampl:
-  m_type: vku::img_sampl_t
-  m_device: !ref dev
+  
 mvp_buff:
   m_type: vku::buffer_t
   m_device: !ref dev
-  m_source: !ref mvp_source
+  m_size: 1024
   m_usage_flags: VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
   m_sharing_mode: VK_SHARING_MODE_EXCLUSIVE
-  m_memory_flags: VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+  m_memory_flags: [VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT]
 bindings:
   m_type: vku::binding_desc_set_t
   m_descriptors:
@@ -110,7 +109,9 @@ bindings:
       m_buff: !ref mvp_buff
     - m_type: vku::binding_desc_set_t::sampl_binding_t
       m_view: !ref view
-      m_sampler: !ref sampl
+      m_sampler:
+        m_type: vku::img_sampl_t
+        m_device: !ref dev
 vert:
   m_type: vku::shader_t
   m_device: !ref dev
@@ -134,7 +135,7 @@ pl:
     - !ref vert
     - !ref frag
   m_topology: VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
-  m_input_desc: !ref input_desc_source
+  # m_input_desc: !ref input_desc_source
   m_bindings: !ref bindings
 fbs:
   m_type: vku::framebuffs_t
@@ -154,15 +155,15 @@ cbuff:
 vbuff:
   m_type: vku::buffer_t
   m_device: !ref dev
-  m_source: !ref vertex_source
-  m_usage_flags: VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
+  m_size: 1024
+  m_usage_flags: [VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT]
   m_sharing_mode: VK_SHARING_MODE_EXCLUSIVE
   m_memory_flags: VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 ibuff:
   m_type: vku::buffer_t
   m_device: !ref dev
-  m_source: !ref index_source
-  m_usage_flags: VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
+  m_size: 1024
+  m_usage_flags: [VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT]
   m_sharing_mode: VK_SHARING_MODE_EXCLUSIVE
   m_memory_flags: VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 desc_pool:
@@ -217,57 +218,3 @@ lua_script:
       vku.window.rebuild()
 
 
-# WIP TUTORIAL
-# 
-# 
-# How objects work in the configuration file:
-# ===========================================
-#
-# 1. Declaring a standalone object:
-#    An object can be defined on its own, using a tag name as its identifier:
-#
-#    ```yaml
-#     tag-name:
-#         m_type: object_type
-#         ...
-#    ```
-#
-#    In this form:
-#
-#    * The tag name (e.g., `tag-name`) is automatically treated as the object's type identifier.
-#    * The field `m_type` is required — it marks the entry as an object.
-#    * Other properties or fields may follow.
-#
-# 2. Declaring an object within another object:
-#    An object can also appear as a nested field inside another object:
-#
-#    ```yaml
-#     another-tag-name:
-#         ...
-#         m_field:
-#             tag-name:
-#                 m_type: object_type
-#                 ...
-#    ```
-#
-#    In this case:
-#
-#    * `m_field` contains an object named `tag-name`.
-#    * `tag-name` again includes an `m_type` to specify its type.
-#
-# 3. Declaring an inline (anonymous) object:
-#    You can define an object directly within a field without giving it an outer tag.
-#    However, you may optionally include an `m_tag` if you plan to reference it later:
-#
-#    ```yaml
-#     another-tag-name:
-#         ...
-#         m_field:
-#             m_type: object_type
-#             m_tag: optional-tag-name
-#    ```
-#
-#    Here:
-#
-#    * `m_type` identifies the object type.
-#    * `m_tag` (optional) assigns a reference name so this object can be reused elsewhere.

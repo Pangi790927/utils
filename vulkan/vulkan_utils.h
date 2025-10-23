@@ -152,8 +152,8 @@ struct err_t : public std::exception {
         err_str = std::format(
                 "\n------BACKTRACE------\n"
                 "{}"
-                "\n---------------------\n"
-                "EXCEPTION: VKU_ERROR: {}[{}]",
+                "EXCEPTION: VKU_ERROR: {}[{}]"
+                "\n---------------------",
                 cpp_backtrace(),
                 vk_err_str(vk_err), (size_t)vk_err);
     }
@@ -162,8 +162,8 @@ struct err_t : public std::exception {
         err_str = std::format(
                 "\n------BACKTRACE------\n"
                 "{}"
-                "\n---------------------\n"
-                "EXCEPTION: {}",
+                "EXCEPTION: {}"
+                "\n---------------------",
                 cpp_backtrace(),
                 str);
     }
@@ -808,12 +808,12 @@ struct desc_set_t : public object_t {
     VkDescriptorSet             vk_desc_set;
 
     ref_t<desc_pool_t>          dp;
-    VkDescriptorSetLayout       layout;
+    ref_t<pipeline_t>           pl;
     ref_t<binding_desc_set_t>   bds;
 
     static ref_t<desc_set_t> create(
             ref_t<desc_pool_t>          dp,
-            VkDescriptorSetLayout       layout,
+            ref_t<pipeline_t>           pl,
             ref_t<binding_desc_set_t>   bds);
 
 private:
@@ -2719,12 +2719,12 @@ inline VkResult desc_set_t::_init() {
         .pNext = nullptr,
         .descriptorPool = dp->vk_descpool,
         .descriptorSetCount = 1,
-        .pSetLayouts = &layout,
+        .pSetLayouts = &pl->vk_desc_set_layout,
     };
 
     VK_ASSERT(vkAllocateDescriptorSets(dp->dev->vk_dev, &alloc_info, &vk_desc_set));
     DBGVV("Allocated descriptor set: %p from pool: %p with layout: %p",
-            vk_desc_set, dp->vk_descpool, layout);
+            vk_desc_set, dp->vk_descpool, pl->vk_desc_set_layout);
 
     /* TODO: this sucks, it references the buffer, but doesn't have a mechanism to do something
     if the buffer is freed without it's knowledge. So the buffer and descriptor set must
@@ -2750,13 +2750,13 @@ inline VkResult desc_set_t::_uninit() {
 }
 inline ref_t<desc_set_t> desc_set_t::create(
         ref_t<desc_pool_t> dp,
-        VkDescriptorSetLayout layout,
+        ref_t<pipeline_t> pl,
         ref_t<binding_desc_set_t> bds)
 {
     auto ret = ref_t<desc_set_t>::create_obj_ref(
             std::make_unique<desc_set_t>(), {dp, bds});
     ret->dp = dp;
-    ret->layout = layout;
+    ret->pl = pl;
     ret->bds = bds;
     VK_ASSERT(ret->_call_init());
     return ret;

@@ -214,7 +214,7 @@ int main(int argc, char const *argv[])
     auto ibuff = create_ibuff(dev, cp, indices);
 
     auto desc_pool = vku::desc_pool_t::create(dev, bindings, 1);
-    auto desc_set = vku::desc_set_t::create(desc_pool, pl->vk_desc_set_layout, bindings);
+    auto desc_set = vku::desc_set_t::create(desc_pool, pl, bindings);
 
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
