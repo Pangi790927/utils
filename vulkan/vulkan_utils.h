@@ -2713,6 +2713,27 @@ inline ref_t<desc_pool_t> desc_pool_t::create(
 /* desc_set_t (TODO)
 ================================================================================================= */
 
+/* TODO:
+
+Follow this logical steps (check if they are correct):
+    - The layout describes the structure,
+    - Then you allocate a set,
+    - Then you write into it,
+    - Then you bind it.
+
+(This is nice to finally understand)
+So multiple sets allow you to separate resources logically, e.g.:
+    - Set 0 → global data (camera, lighting)
+    - Set 1 → per-object data (model matrices, material)
+    - Set 2 → textures, etc.
+
+Barriers:
+    A pipeline stage is a big block in the GPU
+        (e.g., transfer engine, vertex shader, fragment shader).
+    An access mask is a specific type of memory operation inside that stage (
+        e.g., writing a buffer, reading a texture, writing a color attachment).
+ */
+
 inline VkResult desc_set_t::_init() {
     VkDescriptorSetAllocateInfo alloc_info {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
