@@ -101,6 +101,13 @@ struct lua_var_t : public vku::object_t {
         return ret;
     }
 
+    virtual vku_object_type_e type_id() const override { return VKC_TYPE_LUA_VARIABLE; }
+
+    inline std::string to_string() const override {
+        return std::format("vkc::lua_var[{}]: m_name={} ", (void*)this, name);
+    }
+
+
 private:
     virtual VkResult _init() override { return VK_SUCCESS; }
     virtual VkResult _uninit() override { return VK_SUCCESS; }
@@ -112,6 +119,12 @@ struct lua_script_t : public vku::object_t {
         auto ret = vku::ref_t<lua_script_t>::create_obj_ref(std::make_unique<lua_script_t>(), {});
         ret->content = content;
         return ret;
+    }
+
+    virtual vku_object_type_e type_id() const override { return VKC_TYPE_LUA_SCRIPT; }
+
+    inline std::string to_string() const override {
+        return std::format("vkc::lua_script[{}]: m_content=\n{}", (void*)this, content);
     }
 
 private:
@@ -128,6 +141,12 @@ struct integer_t : public vku::object_t {
         return ret;
     }
 
+    virtual vku_object_type_e type_id() const override { return VKC_TYPE_INTEGER; }
+
+    inline std::string to_string() const override {
+        return std::format("vkc::integer[{}]: value={} ", (void*)this, value);
+    }
+
 private:
     virtual VkResult _init() override { return VK_SUCCESS; }
     virtual VkResult _uninit() override { return VK_SUCCESS; }
@@ -139,6 +158,12 @@ struct float_t : public vku::object_t {
         auto ret = vku::ref_t<float_t>::create_obj_ref(std::make_unique<float_t>(), {});
         ret->value = value;
         return ret;
+    }
+
+    virtual vku_object_type_e type_id() const override { return VKC_TYPE_FLOAT; }
+
+    inline std::string to_string() const override {
+        return std::format("vkc::float[{}]: value={} ", (void*)this, value);
     }
 
 private:
@@ -154,6 +179,12 @@ struct string_t : public vku::object_t {
         return ret;
     }
 
+    virtual vku_object_type_e type_id() const override { return VKC_TYPE_STRING; }
+
+    inline std::string to_string() const override {
+        return std::format("vkc::string[{}]: value={} ", (void*)this, value);
+    }
+
 private:
     virtual VkResult _init() override { return VK_SUCCESS; }
     virtual VkResult _uninit() override { return VK_SUCCESS; }
@@ -165,6 +196,14 @@ struct spirv_t : public vku::object_t {
         auto ret = vku::ref_t<spirv_t>::create_obj_ref(std::make_unique<spirv_t>(), {});
         ret->spirv = spirv;
         return ret;
+    }
+
+    virtual vku_object_type_e type_id() const override { return VKC_TYPE_SPIRV; }
+
+    inline std::string to_string() const override {
+        return std::format("vkc::spirv[{}]: spirv-type={} spirv-content=\n{}", (void*)this,
+                vku_utils::to_string(spirv.type),
+                hexdump_str((void *)spirv.content.data(), spirv.content.size() * sizeof(uint32_t)));
     }
 
 private:
@@ -225,6 +264,11 @@ void mark_dependency_solved(std::string depend_name, vku::ref_t<vku::object_t> d
         DBG("Object into nullptr");
         throw vku::err_t{std::format("Object turned into nullptr: {}", depend_name)};
     }
+    if (has(objects, depend_name)) {
+        DBG("Name taken");
+        throw vku::err_t{std::format("Tag name already exists: {}", depend_name)};
+    }
+    DBG("Adding object: %s", depend->to_string().c_str());
     objects[depend_name] = depend;
 
     /* Second, awake all the ones waiting for the respective dependency */

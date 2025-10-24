@@ -59,6 +59,47 @@ enum vku_shader_stage_e {
     VKU_SPIRV_TESS_EVAL,
 };
 
+/* This is a common type enumeration for all the types that can be derived from vku_object_t */
+enum vku_object_type_e {
+
+    /* Those are the types from this file: */
+    VKU_TYPE_OBJECT = 0, /* object_t is pure virtual, so no object should have this type */
+    VKU_TYPE_WINDOW,
+    VKU_TYPE_INSTANCE,
+    VKU_TYPE_SURFACE,
+    VKU_TYPE_DEVICE,
+    VKU_TYPE_SWAPCHAIN,
+    VKU_TYPE_SHADER,
+    VKU_TYPE_RENDERPASS,
+    VKU_TYPE_PIPELINE,
+    VKU_TYPE_COMPUTE_PIPELINE,
+    VKU_TYPE_FRAMEBUFFERS,
+    VKU_TYPE_COMMAND_POOL,
+    VKU_TYPE_COMMAND_BUFFER,
+    VKU_TYPE_SEMAPHORE,
+    VKU_TYPE_FENCE,
+    VKU_TYPE_BUFFER,
+    VKU_TYPE_IMAGE,
+    VKU_TYPE_IMAGE_VIEW,
+    VKU_TYPE_IMAGE_SAMPLER,
+    VKU_TYPE_DESCRIPTOR_SET,
+    VKU_TYPE_DESCRIPTOR_POOL,
+    VKU_TYPE_SAMPLER_BINDING,
+    VKU_TYPE_BUFFER_BINDING,
+    VKU_TYPE_BINDING_DESCRIPTOR_SET,
+
+    /* Those are the types from the vulkan composer file: */
+    VKC_TYPE_SPIRV,
+    VKC_TYPE_STRING,
+    VKC_TYPE_FLOAT,
+    VKC_TYPE_INTEGER,
+    VKC_TYPE_LUA_SCRIPT,
+    VKC_TYPE_LUA_VARIABLE,
+
+    /* Total number of different types */
+    VKC_TYPE_CNT,
+};
+
 namespace vku_utils {
 
 /* TODO:
@@ -134,6 +175,36 @@ inline void copy_buff(
         ref_t<buffer_t> src,
         VkDeviceSize sz,
         ref_t<cmdbuff_t> /* optional */ cbuff);
+
+/* To string for own enums: */
+inline std::string to_string(vku_shader_stage_e stage);
+inline std::string to_string(vku_object_type_e type);
+
+/* To string for own objects: */
+template <typename T>
+inline std::string to_string(ref_t<T> ref);
+template <typename T>
+inline std::string to_string(const object_t& ref);
+inline std::string to_string(const vertex_input_desc_t& vid);
+
+/* To string for external types */
+inline std::string to_string(VkVertexInputRate rate);
+inline std::string to_string(VkFormat format);
+inline std::string to_string(VkPrimitiveTopology topol);
+inline std::string to_string(VkSharingMode shmod);
+inline std::string to_string(VkFilter shmod);
+inline std::string to_string(VkDescriptorType dtype);
+inline std::string to_string(const VkDescriptorSetLayoutBinding& bind);
+
+/* To string for external flags */
+/* OBS: You can't use those directly because the actual values are in the form VkFlags not
+VkFlagBits */
+inline std::string to_string(VkFenceCreateFlagBits flags);
+inline std::string to_string(VkBufferUsageFlagBits flags);
+inline std::string to_string(VkMemoryPropertyFlagBits flags);
+inline std::string to_string(VkImageUsageFlagBits flags);
+inline std::string to_string(VkImageAspectFlagBits flags);
+inline std::string to_string(VkShaderStageFlagBits flags);
 
 /* VKU Objects:
 ================================================================================================= */
@@ -215,6 +286,9 @@ struct object_t {
             cbks->post_uninit(this, cbks->usr_ptr);
         return ret;
     }
+
+    virtual vku_object_type_e type_id() const = 0;
+    virtual std::string to_string() const = 0;
 
 private:
     virtual VkResult _init() = 0;
@@ -458,6 +532,9 @@ struct window_t : public object_t {
     static ref_t<window_t> create(int width = 800, int height = 600,
             std::string name = "vku::window_name_placeholder");
 
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_WINDOW; }
+    virtual std::string to_string() const override;
+
     GLFWwindow *get_window() const { return _window; }
 
 private:
@@ -475,6 +552,9 @@ struct instance_t : public object_t {
     std::string engine_name;
     std::vector<std::string> extensions;
     std::vector<std::string> layers;
+
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_INSTANCE; }
+    virtual std::string to_string() const override;
 
     static ref_t<instance_t> create(
             const std::string app_name = "vku::app_name_placeholder",
@@ -494,6 +574,9 @@ struct surface_t : public object_t {
     ref_t<window_t>     window;
     ref_t<instance_t>   inst;
 
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_SURFACE; }
+    virtual std::string to_string() const override;
+
     static ref_t<surface_t> create(ref_t<window_t> window, ref_t<instance_t> inst);
 
 private:
@@ -510,6 +593,9 @@ struct device_t : public object_t {
     gpu_family_ids_t    que_fams;
 
     ref_t<surface_t>    surf;
+
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_DEVICE; }
+    virtual std::string to_string() const override;
 
     static ref_t<device_t> create(ref_t<surface_t> surf);
 
@@ -531,6 +617,9 @@ struct swapchain_t : public object_t {
 
     ref_t<device_t>             dev;
 
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_SWAPCHAIN; }
+    virtual std::string to_string() const override;
+
     static ref_t<swapchain_t> create(ref_t<device_t> dev);
 
 private:
@@ -546,6 +635,9 @@ struct shader_t : public object_t {
     std::string         path = "not-initialized-from-path";
     spirv_t             spirv;
     vku_shader_stage_e  type;
+
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_SHADER; }
+    virtual std::string to_string() const override;
 
     /* not init from path */
     static ref_t<shader_t> create(ref_t<device_t> dev, const spirv_t& spirv);
@@ -563,6 +655,9 @@ struct renderpass_t : public object_t {
     VkRenderPass        vk_render_pass;
 
     ref_t<swapchain_t>  swc;
+
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_RENDERPASS; }
+    virtual std::string to_string() const override;
 
     static ref_t<renderpass_t> create(ref_t<swapchain_t> swc);
 
@@ -583,6 +678,9 @@ struct pipeline_t : public object_t {
     VkPrimitiveTopology             topology;
     vertex_input_desc_t             vid;
     ref_t<binding_desc_set_t>       bds;
+
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_PIPELINE; }
+    virtual std::string to_string() const override;
 
     static ref_t<pipeline_t> create(
             int                                 width,
@@ -607,6 +705,9 @@ struct compute_pipeline_t : public object_t {
     ref_t<shader_t>             shader;
     ref_t<binding_desc_set_t>   bds;
 
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_COMPUTE_PIPELINE; }
+    virtual std::string to_string() const override;
+
     static ref_t<compute_pipeline_t> create(
             ref_t<device_t>             dev,
             ref_t<shader_t>             shader,
@@ -623,6 +724,9 @@ struct framebuffs_t : public object_t {
 
     ref_t<renderpass_t>         rp;
 
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_FRAMEBUFFERS; }
+    virtual std::string to_string() const override;
+
     static ref_t<framebuffs_t> create(ref_t<renderpass_t> rp);
 
 private:
@@ -636,6 +740,9 @@ struct cmdpool_t : public object_t {
 
     ref_t<device_t> dev;
 
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_COMMAND_POOL; }
+    virtual std::string to_string() const override;
+
     static ref_t<cmdpool_t> create(ref_t<device_t> dev);
 
 private:
@@ -648,6 +755,9 @@ struct cmdbuff_t : public object_t {
 
     ref_t<cmdpool_t>    cp;
     bool                host_free;
+
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_COMMAND_BUFFER; }
+    virtual std::string to_string() const override;
 
     static ref_t<cmdbuff_t> create(ref_t<cmdpool_t> cp, bool host_free = false);
 
@@ -677,6 +787,9 @@ struct sem_t : public object_t {
     ref_t<device_t> dev;
     VkSemaphore     vk_sem;
 
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_SEMAPHORE; }
+    virtual std::string to_string() const override;
+
     static ref_t<sem_t> create(ref_t<device_t> dev);
 
 private:
@@ -689,6 +802,9 @@ struct fence_t : public object_t {
     VkFence             vk_fence;
 
     VkFenceCreateFlags  flags;
+
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_FENCE; }
+    virtual std::string to_string() const override;
 
     static ref_t<fence_t> create(ref_t<device_t> dev, VkFenceCreateFlags flags = 0);
 
@@ -708,6 +824,9 @@ struct buffer_t : public object_t {
     VkSharingMode           sh_mode;
     VkMemoryPropertyFlags   mem_flags;
 
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_BUFFER; }
+    virtual std::string to_string() const override;
+
     static ref_t<buffer_t> create(
             ref_t<device_t>         dev,
             size_t                  size,
@@ -723,6 +842,7 @@ private:
     virtual VkResult _uninit() override;
 };
 
+
 struct image_t : public object_t {
     VkImage             vk_img;
     VkDeviceMemory      vk_img_mem;
@@ -732,6 +852,9 @@ struct image_t : public object_t {
     uint32_t            height;
     VkFormat            fmt;
     VkImageUsageFlags   usage;
+
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_IMAGE; }
+    virtual std::string to_string() const override;
 
     static ref_t<image_t> create(
             ref_t<device_t>     dev,
@@ -765,6 +888,9 @@ struct img_view_t : public object_t {
     ref_t<image_t>      img;
     VkImageAspectFlags  aspect_mask;
 
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_IMAGE_VIEW; }
+    virtual std::string to_string() const override;
+
     static ref_t<img_view_t> create(ref_t<image_t> img, VkImageAspectFlags aspect_mask);
 
 private:
@@ -778,8 +904,10 @@ struct img_sampl_t : public object_t {
     ref_t<device_t> dev;
     VkFilter        filter;
 
-    static ref_t<img_sampl_t> create(ref_t<device_t> dev, VkFilter filter = VK_FILTER_LINEAR);
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_IMAGE_SAMPLER; }
+    virtual std::string to_string() const override;
 
+    static ref_t<img_sampl_t> create(ref_t<device_t> dev, VkFilter filter = VK_FILTER_LINEAR);
     static VkDescriptorSetLayoutBinding get_desc_set(uint32_t binding, VkShaderStageFlags stage);
 
 private:
@@ -793,6 +921,9 @@ struct desc_pool_t : public object_t {
     ref_t<device_t>             dev;
     ref_t<binding_desc_set_t>   bds;
     uint32_t                    cnt;
+
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_POOL; }
+    virtual std::string to_string() const override;
 
     static ref_t<desc_pool_t> create(
             ref_t<device_t>             dev,
@@ -811,6 +942,9 @@ struct desc_set_t : public object_t {
     ref_t<pipeline_t>           pl;
     ref_t<binding_desc_set_t>   bds;
 
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET; }
+    virtual std::string to_string() const override;
+
     static ref_t<desc_set_t> create(
             ref_t<desc_pool_t>          dp,
             ref_t<pipeline_t>           pl,
@@ -826,7 +960,6 @@ struct binding_desc_set_t : public object_t {
         VkDescriptorSetLayoutBinding desc;
 
         virtual ~binding_desc_t() {}
-
         virtual VkWriteDescriptorSet get_write() const = 0;
 
     private:
@@ -839,11 +972,13 @@ struct binding_desc_set_t : public object_t {
 
         ref_t<buffer_t>         buff;
 
+        virtual VkWriteDescriptorSet get_write() const override;
+        virtual vku_object_type_e type_id() const override { return VKU_TYPE_BUFFER_BINDING; }
+        virtual std::string to_string() const override;
+
         static ref_t<buff_binding_t> create(
                 VkDescriptorSetLayoutBinding    desc,
                 ref_t<buffer_t>                 buff);
-
-        virtual VkWriteDescriptorSet get_write() const override;
 
     private:
         virtual VkResult _init() override;
@@ -855,18 +990,23 @@ struct binding_desc_set_t : public object_t {
         ref_t<img_view_t>       view;
         ref_t<img_sampl_t>      sampl;
 
+        virtual VkWriteDescriptorSet get_write() const override;
+        virtual vku_object_type_e type_id() const override { return VKU_TYPE_SAMPLER_BINDING; }
+        virtual std::string to_string() const;
+
         static ref_t<sampl_binding_t> create(
                 VkDescriptorSetLayoutBinding    desc,
                 ref_t<img_view_t>               view,
                 ref_t<img_sampl_t>              sampl);
-
-        virtual VkWriteDescriptorSet get_write() const override;
 
     private:
         virtual VkResult _init() override;
     };
 
     std::vector<ref_t<binding_desc_t>> binds;
+
+    virtual vku_object_type_e type_id() const override { return VKU_TYPE_BINDING_DESCRIPTOR_SET; }
+    virtual std::string to_string() const override;
 
     static ref_t<binding_desc_set_t> create(std::vector<ref_t<binding_desc_t>> binds);
 
@@ -1082,6 +1222,11 @@ inline ref_t<window_t> window_t::create(int width, int height, std::string name)
     return ret;
 }
 
+inline std::string window_t::to_string() const {
+    return std::format("vku::window[{}]: m_width={}, m_height={}, m_window_name={}",
+            (void*)this, width, height, window_name);
+}
+
 /* instance_t
 ================================================================================================= */
 
@@ -1233,6 +1378,20 @@ inline ref_t<instance_t> instance_t::create(
     return ret;
 }
 
+inline std::string instance_t::to_string() const {
+    std::string exts = "[";
+    std::string lays;
+    for (auto ext: extensions)
+        exts += ext + ", ";
+    for (auto lay: layers)
+        lays += lay + ", ";
+    exts += "]";
+    lays += "]";
+    return std::format("vku::instance[{}]: m_app_name={}, m_engine_name={}, m_extensions={} "
+            "m_layers={}",
+            (void*)this, app_name, engine_name, exts, lays);
+}
+
 /* surface_t (TODO)
 ================================================================================================= */
 
@@ -1259,6 +1418,11 @@ inline ref_t<surface_t> surface_t::create(
     ret->inst = inst;
     VK_ASSERT(ret->_call_init());
     return ret;
+}
+
+inline std::string surface_t::to_string() const {
+    return std::format("vku::surface[{}]: m_window={}, m_instance={}",
+            (void*)this, (void*)inst.get(), (void*)window.get());
 }
 
 /* device_t (TODO)
@@ -1345,6 +1509,10 @@ inline ref_t<device_t> device_t::create(ref_t<surface_t> surf) {
     ret->surf = surf;
     VK_ASSERT(ret->_call_init());
     return ret;
+}
+
+inline std::string device_t::to_string() const {
+    return std::format("vku::device[{}]: m_surface={}", (void*)this, (void*)surf.get());
 }
 
 /* swapchain_t (TODO)
@@ -1469,6 +1637,10 @@ inline ref_t<swapchain_t> swapchain_t::create(ref_t<device_t> dev) {
     return ret;
 }
 
+inline std::string swapchain_t::to_string() const {
+    return std::format("vku::swapchain[{}]: m_device={}", (void*)this, (void*)dev.get());
+}
+
 /* shader_t (TODO)
 ================================================================================================= */
 
@@ -1538,6 +1710,11 @@ inline ref_t<shader_t> shader_t::create(
     return ret;
 }
 
+inline std::string shader_t::to_string() const {
+    return std::format("vku::shader[{}]: m_device={} m_type={} {}",
+            (void*)this, (void*)dev.get(), vku_utils::to_string(type),
+            init_from_path ? path : std::string("[Initialized from string, holds only spirv.]"));
+}
 
 /* renderpass_t (TODO)
 ================================================================================================= */
@@ -1635,6 +1812,10 @@ inline ref_t<renderpass_t> renderpass_t::create(ref_t<swapchain_t> swc) {
     ret->swc = swc;
     VK_ASSERT(ret->_call_init());
     return ret;
+}
+
+inline std::string renderpass_t::to_string() const {
+    return std::format("vku::renderpass[{}]: m_swapchain={}", (void*)this, (void*)swc.get());
 }
 
 /* pipeline_t (TODO)
@@ -1885,6 +2066,17 @@ inline ref_t<pipeline_t> pipeline_t::create(
     return ret;
 }
 
+inline std::string pipeline_t::to_string() const {
+    std::string sh_str = "[";
+    for (auto sh : shaders)
+        sh_str += std::format("{}, ", (void*)sh.get());
+    sh_str += "]";
+    return std::format("vku::pipeline[{}]: m_width={} m_height={} m_renderpass={} m_shaders={} "
+            "m_topology={} m_vertex_input_descriptor={} m_binding_desc_set={}",
+            (void*)this, width, height, (void*)rp.get(), sh_str,
+            vku_utils::to_string(topology), vku_utils::to_string(vid), (void*)bds.get());
+}
+
 /* compute_pipeline_t (TODO)
 ================================================================================================= */
 
@@ -1977,6 +2169,11 @@ inline ref_t<compute_pipeline_t> compute_pipeline_t::create(
     return ret;
 }
 
+inline std::string compute_pipeline_t::to_string() const {
+    return std::format("vku::compute_pipeline[{}]: m_device={} m_shader={} m_binding_desc_set={}",
+            (void*)this, (void*)dev.get(), (void*)shader.get(), (void*)bds.get());
+}
+
 /* framebuffs_t (TODO)
 ================================================================================================= */
 
@@ -2025,6 +2222,10 @@ inline ref_t<framebuffs_t> framebuffs_t::create(ref_t<renderpass_t> rp){
     return ret;
 }
 
+inline std::string framebuffs_t::to_string() const {
+    return std::format("vku::framebuffs[{}]: m_renderpass={}", (void*)this, (void*)rp.get());
+}
+
 /* cmdpool_t (TODO)
 ================================================================================================= */
 
@@ -2049,6 +2250,10 @@ inline ref_t<cmdpool_t> cmdpool_t::create(ref_t<device_t> dev) {
     ret->dev = dev;
     VK_ASSERT(ret->_call_init());
     return ret;
+}
+
+inline std::string cmdpool_t::to_string() const {
+    return std::format("vku::cmdpool[{}]: m_device={}", (void*)this, (void*)dev.get());
 }
 
 /* cmdbuff_t (TODO)
@@ -2081,6 +2286,11 @@ inline ref_t<cmdbuff_t> cmdbuff_t::create(
     ret->host_free = host_free;
     VK_ASSERT(ret->_call_init());
     return ret;
+}
+
+inline std::string cmdbuff_t::to_string() const {
+    return std::format("vku::cmdbuff[{}]: m_cmdpool={} host_free={}",
+            (void*)this, (void*)cp.get(), host_free);
 }
 
 inline void cmdbuff_t::begin(VkCommandBufferUsageFlags flags) {
@@ -2225,6 +2435,10 @@ inline ref_t<sem_t> sem_t::create(ref_t<device_t> dev) {
     return ret;
 }
 
+inline std::string sem_t::to_string() const {
+    return std::format("vku::sem_t[{}]: m_device={}", (void*)this, (void*)dev.get());
+}
+
 /* fence_t (TODO)
 ================================================================================================= */
 
@@ -2254,9 +2468,13 @@ inline ref_t<fence_t> fence_t::create(
     return ret;
 }
 
+inline std::string fence_t::to_string() const {
+    return std::format("vku::fence_t[{}]: m_device={} m_flags={}",
+            (void*)this, (void*)dev.get(), vku_utils::to_string((VkFenceCreateFlagBits)flags));
+}
+
 /* buffer_t (TODO)
 ================================================================================================= */
-
 
 inline VkResult buffer_t::_init() {
     VkBufferCreateInfo buff_info{
@@ -2309,6 +2527,15 @@ inline ref_t<buffer_t> buffer_t::create(
     ret->mem_flags = mem_flags;
     VK_ASSERT(ret->_call_init());
     return ret;
+}
+
+inline std::string buffer_t::to_string() const {
+    return std::format("vku::buffer_t[{}]: m_device={} m_size={} m_usage={} m_share_mode={} "
+            "m_mem_flags={}",
+            (void*)this, (void*)dev.get(), size,
+            vku_utils::to_string((VkBufferUsageFlagBits)usage),
+            vku_utils::to_string(sh_mode),
+            vku_utils::to_string((VkMemoryPropertyFlagBits)mem_flags));
 }
 
 inline void *buffer_t::map_data(VkDeviceSize offset, VkDeviceSize size) {
@@ -2395,6 +2622,12 @@ inline ref_t<image_t> image_t::create(
     ret->usage = usage;
     VK_ASSERT(ret->_call_init());
     return ret;
+}
+
+inline std::string image_t::to_string() const {
+    return std::format("vku::sem_t[{}]: m_device={} m_width={} m_height={} m_format={} m_usage={}",
+            (void*)this, (void*)dev.get(), width, height, vku_utils::to_string(fmt),
+            vku_utils::to_string((VkImageUsageFlagBits)usage));
 }
 
 inline void image_t::transition_layout(ref_t<cmdpool_t> cp,
@@ -2600,6 +2833,11 @@ inline ref_t<img_view_t> img_view_t::create(
     return ret;
 }
 
+inline std::string img_view_t::to_string() const {
+    return std::format("vku::img_view_t[{}]: m_image={}", (void*)this, (void*)img.get(),
+            vku_utils::to_string((VkImageAspectFlagBits)aspect_mask));
+}
+
 /* img_sampl_t (TODO)
 ================================================================================================= */
 
@@ -2648,6 +2886,11 @@ inline ref_t<img_sampl_t> img_sampl_t::create(
     ret->filter = filter;
     VK_ASSERT(ret->_call_init());
     return ret;
+}
+
+inline std::string img_sampl_t::to_string() const {
+    return std::format("vku::img_sampl[{}]: m_device={} m_filter={}", (void*)this, (void*)dev.get(),
+            vku_utils::to_string(filter));
 }
 
 inline VkDescriptorSetLayoutBinding img_sampl_t::get_desc_set(uint32_t binding,
@@ -2708,6 +2951,11 @@ inline ref_t<desc_pool_t> desc_pool_t::create(
     ret->cnt = cnt;
     VK_ASSERT(ret->_call_init());
     return ret;
+}
+
+inline std::string desc_pool_t::to_string() const {
+    return std::format("vku::desc_pool[{}]: m_device={} m_binding_desc_set={} m_cnt={}",
+            (void*)this, (void*)dev.get(), (void*)bds.get(), cnt);
 }
 
 /* desc_set_t (TODO)
@@ -2783,6 +3031,11 @@ inline ref_t<desc_set_t> desc_set_t::create(
     return ret;
 }
 
+inline std::string desc_set_t::to_string() const {
+    return std::format("vku::desc_set[{}]: m_desc_pool={} m_pipeline={} m_binding_desc_set={}",
+            (void*)this, (void*)dp.get(), (void*)pl.get(), (void*)bds.get());
+}
+
 /* binding_desc_t (TODO):
 ================================================================================================= */
 
@@ -2796,6 +3049,11 @@ inline ref_t<binding_desc_set_t::buff_binding_t> binding_desc_set_t::buff_bindin
     ret->buff = buff;
     VK_ASSERT(ret->_call_init());
     return ret;
+}
+
+inline std::string binding_desc_set_t::buff_binding_t::to_string() const {
+    return std::format("vku::binding_desc_set_t::buff_binding_t[{}]: m_desc={} m_buffer={}",
+            (void*)this, vku_utils::to_string(desc), (void*)buff.get());
 }
 
 inline VkResult binding_desc_set_t::buff_binding_t::_init() {
@@ -2839,6 +3097,12 @@ inline ref_t<binding_desc_set_t::sampl_binding_t> binding_desc_set_t::sampl_bind
     ret->sampl = sampl;
     VK_ASSERT(ret->_call_init()); /* init does nothing */
     return ret;
+}
+
+inline std::string binding_desc_set_t::sampl_binding_t::to_string() const {
+    return std::format("vku::binding_desc_set_t::sampl_binding_t[{}]: m_desc={} m_view={} "
+            "m_sampler={}",
+            (void*)this, vku_utils::to_string(desc), (void*)view.get(), (void*)sampl.get());
 }
 
 inline VkResult binding_desc_set_t::sampl_binding_t::_init() {
@@ -2886,6 +3150,15 @@ inline ref_t<binding_desc_set_t> binding_desc_set_t::create(
     ret->binds = binds;
     VK_ASSERT(ret->_call_init());
     return ret;
+}
+
+inline std::string binding_desc_set_t::to_string() const {
+    std::string binds_str = "[";
+    for (auto b : binds)
+        binds_str += std::format("{}, ", (void*)b.get());
+    binds_str += "]";
+    return std::format("vku::binding_desc_set_t[{}]: m_bindings={} ",
+            (void*)this, binds_str);
 }
 
 inline std::vector<VkWriteDescriptorSet> binding_desc_set_t::get_writes() const {
@@ -3028,6 +3301,521 @@ inline void copy_buff(ref_t<cmdpool_t> cp, ref_t<buffer_t> dst,
         submit_cmdbuff({}, cbuff, fence, {});
         wait_fences({fence});
     }
+}
+
+inline std::string to_string(vku_shader_stage_e stage) {
+    switch (stage) {
+        case VKU_SPIRV_VERTEX: return "VKU_SPIRV_VERTEX";
+        case VKU_SPIRV_FRAGMENT: return "VKU_SPIRV_FRAGMENT";
+        case VKU_SPIRV_COMPUTE: return "VKU_SPIRV_COMPUTE";
+        case VKU_SPIRV_GEOMETRY: return "VKU_SPIRV_GEOMETRY";
+        case VKU_SPIRV_TESS_CTRL: return "VKU_SPIRV_TESS_CTRL";
+        case VKU_SPIRV_TESS_EVAL: return "VKU_SPIRV_TESS_EVAL";
+    }
+    return "VKU_UNKNOWN_SHADER_STAGE";
+}
+
+inline std::string to_string(vku_object_type_e type) {
+    switch (type) {
+        case VKU_TYPE_OBJECT: return "VKU_TYPE_OBJECT";
+        case VKU_TYPE_WINDOW: return "VKU_TYPE_WINDOW";
+        case VKU_TYPE_INSTANCE: return "VKU_TYPE_INSTANCE";
+        case VKU_TYPE_SURFACE: return "VKU_TYPE_SURFACE";
+        case VKU_TYPE_DEVICE: return "VKU_TYPE_DEVICE";
+        case VKU_TYPE_SWAPCHAIN: return "VKU_TYPE_SWAPCHAIN";
+        case VKU_TYPE_SHADER: return "VKU_TYPE_SHADER";
+        case VKU_TYPE_RENDERPASS: return "VKU_TYPE_RENDERPASS";
+        case VKU_TYPE_PIPELINE: return "VKU_TYPE_PIPELINE";
+        case VKU_TYPE_COMPUTE_PIPELINE: return "VKU_TYPE_COMPUTE_PIPELINE";
+        case VKU_TYPE_FRAMEBUFFERS: return "VKU_TYPE_FRAMEBUFFERS";
+        case VKU_TYPE_COMMAND_POOL: return "VKU_TYPE_COMMAND_POOL";
+        case VKU_TYPE_COMMAND_BUFFER: return "VKU_TYPE_COMMAND_BUFFER";
+        case VKU_TYPE_SEMAPHORE: return "VKU_TYPE_SEMAPHORE";
+        case VKU_TYPE_FENCE: return "VKU_TYPE_FENCE";
+        case VKU_TYPE_BUFFER: return "VKU_TYPE_BUFFER";
+        case VKU_TYPE_IMAGE: return "VKU_TYPE_IMAGE";
+        case VKU_TYPE_IMAGE_VIEW: return "VKU_TYPE_IMAGE_VIEW";
+        case VKU_TYPE_IMAGE_SAMPLER: return "VKU_TYPE_IMAGE_SAMPLER";
+        case VKU_TYPE_DESCRIPTOR_SET: return "VKU_TYPE_DESCRIPTOR_SET";
+        case VKU_TYPE_DESCRIPTOR_POOL: return "VKU_TYPE_DESCRIPTOR_POOL";
+        case VKU_TYPE_SAMPLER_BINDING: return "VKU_TYPE_SAMPLER_BINDING";
+        case VKU_TYPE_BUFFER_BINDING: return "VKU_TYPE_BUFFER_BINDING";
+        case VKU_TYPE_BINDING_DESCRIPTOR_SET: return "VKU_TYPE_BINDING_DESCRIPTOR_SET";
+        case VKC_TYPE_SPIRV: return "VKC_TYPE_SPIRV";
+        case VKC_TYPE_STRING: return "VKC_TYPE_STRING";
+        case VKC_TYPE_FLOAT: return "VKC_TYPE_FLOAT";
+        case VKC_TYPE_INTEGER: return "VKC_TYPE_INTEGER";
+        case VKC_TYPE_LUA_SCRIPT: return "VKC_TYPE_LUA_SCRIPT";
+        case VKC_TYPE_LUA_VARIABLE: return "VKC_TYPE_LUA_VARIABLE";
+        case VKC_TYPE_CNT: return "VKC_INVALID_TYPE_CNT"; /* object can't be of this type */
+    }
+    return "VKC_TYPE_UNKNOWN";
+}
+
+template <typename T>
+inline std::string to_string(ref_t<T> ref) {
+    return "ref: " + ref->to_string();
+}
+
+template <typename T>
+inline std::string to_string(const object_t& ref) {
+    return ref.to_string();
+}
+
+inline std::string to_string(const vertex_input_desc_t& vid) {
+    std::string ret = "vertex_input_desc_t{";
+    ret += std::format(" .binding={}, .stride={}, input_rate={}, .attrs=[",
+            vid.bind_desc.binding, vid.bind_desc.stride, to_string(vid.bind_desc.inputRate));
+    for (auto &adesc : vid.attr_desc)
+        ret += std::format("{{.location={}, .binding={}, format={}, .offset={}}},",
+                adesc.location, adesc.binding, to_string(adesc.format), adesc.offset);
+    return ret + "}";
+}
+
+inline std::string to_string(VkVertexInputRate rate) {
+    switch (rate) {
+        case VK_VERTEX_INPUT_RATE_VERTEX: return "VK_VERTEX_INPUT_RATE_VERTEX";
+        case VK_VERTEX_INPUT_RATE_INSTANCE: return "VK_VERTEX_INPUT_RATE_INSTANCE";
+        default: return "VK_UNKNOWN_TYPE";
+    }
+}
+
+inline std::string to_string(VkFormat format) {
+    switch (format) {
+        case VK_FORMAT_UNDEFINED: return "VK_FORMAT_UNDEFINED";
+        case VK_FORMAT_R4G4_UNORM_PACK8: return "VK_FORMAT_R4G4_UNORM_PACK8";
+        case VK_FORMAT_R4G4B4A4_UNORM_PACK16: return "VK_FORMAT_R4G4B4A4_UNORM_PACK16";
+        case VK_FORMAT_B4G4R4A4_UNORM_PACK16: return "VK_FORMAT_B4G4R4A4_UNORM_PACK16";
+        case VK_FORMAT_R5G6B5_UNORM_PACK16: return "VK_FORMAT_R5G6B5_UNORM_PACK16";
+        case VK_FORMAT_B5G6R5_UNORM_PACK16: return "VK_FORMAT_B5G6R5_UNORM_PACK16";
+        case VK_FORMAT_R5G5B5A1_UNORM_PACK16: return "VK_FORMAT_R5G5B5A1_UNORM_PACK16";
+        case VK_FORMAT_B5G5R5A1_UNORM_PACK16: return "VK_FORMAT_B5G5R5A1_UNORM_PACK16";
+        case VK_FORMAT_A1R5G5B5_UNORM_PACK16: return "VK_FORMAT_A1R5G5B5_UNORM_PACK16";
+        case VK_FORMAT_R8_UNORM: return "VK_FORMAT_R8_UNORM";
+        case VK_FORMAT_R8_SNORM: return "VK_FORMAT_R8_SNORM";
+        case VK_FORMAT_R8_USCALED: return "VK_FORMAT_R8_USCALED";
+        case VK_FORMAT_R8_SSCALED: return "VK_FORMAT_R8_SSCALED";
+        case VK_FORMAT_R8_UINT: return "VK_FORMAT_R8_UINT";
+        case VK_FORMAT_R8_SINT: return "VK_FORMAT_R8_SINT";
+        case VK_FORMAT_R8_SRGB: return "VK_FORMAT_R8_SRGB";
+        case VK_FORMAT_R8G8_UNORM: return "VK_FORMAT_R8G8_UNORM";
+        case VK_FORMAT_R8G8_SNORM: return "VK_FORMAT_R8G8_SNORM";
+        case VK_FORMAT_R8G8_USCALED: return "VK_FORMAT_R8G8_USCALED";
+        case VK_FORMAT_R8G8_SSCALED: return "VK_FORMAT_R8G8_SSCALED";
+        case VK_FORMAT_R8G8_UINT: return "VK_FORMAT_R8G8_UINT";
+        case VK_FORMAT_R8G8_SINT: return "VK_FORMAT_R8G8_SINT";
+        case VK_FORMAT_R8G8_SRGB: return "VK_FORMAT_R8G8_SRGB";
+        case VK_FORMAT_R8G8B8_UNORM: return "VK_FORMAT_R8G8B8_UNORM";
+        case VK_FORMAT_R8G8B8_SNORM: return "VK_FORMAT_R8G8B8_SNORM";
+        case VK_FORMAT_R8G8B8_USCALED: return "VK_FORMAT_R8G8B8_USCALED";
+        case VK_FORMAT_R8G8B8_SSCALED: return "VK_FORMAT_R8G8B8_SSCALED";
+        case VK_FORMAT_R8G8B8_UINT: return "VK_FORMAT_R8G8B8_UINT";
+        case VK_FORMAT_R8G8B8_SINT: return "VK_FORMAT_R8G8B8_SINT";
+        case VK_FORMAT_R8G8B8_SRGB: return "VK_FORMAT_R8G8B8_SRGB";
+        case VK_FORMAT_B8G8R8_UNORM: return "VK_FORMAT_B8G8R8_UNORM";
+        case VK_FORMAT_B8G8R8_SNORM: return "VK_FORMAT_B8G8R8_SNORM";
+        case VK_FORMAT_B8G8R8_USCALED: return "VK_FORMAT_B8G8R8_USCALED";
+        case VK_FORMAT_B8G8R8_SSCALED: return "VK_FORMAT_B8G8R8_SSCALED";
+        case VK_FORMAT_B8G8R8_UINT: return "VK_FORMAT_B8G8R8_UINT";
+        case VK_FORMAT_B8G8R8_SINT: return "VK_FORMAT_B8G8R8_SINT";
+        case VK_FORMAT_B8G8R8_SRGB: return "VK_FORMAT_B8G8R8_SRGB";
+        case VK_FORMAT_R8G8B8A8_UNORM: return "VK_FORMAT_R8G8B8A8_UNORM";
+        case VK_FORMAT_R8G8B8A8_SNORM: return "VK_FORMAT_R8G8B8A8_SNORM";
+        case VK_FORMAT_R8G8B8A8_USCALED: return "VK_FORMAT_R8G8B8A8_USCALED";
+        case VK_FORMAT_R8G8B8A8_SSCALED: return "VK_FORMAT_R8G8B8A8_SSCALED";
+        case VK_FORMAT_R8G8B8A8_UINT: return "VK_FORMAT_R8G8B8A8_UINT";
+        case VK_FORMAT_R8G8B8A8_SINT: return "VK_FORMAT_R8G8B8A8_SINT";
+        case VK_FORMAT_R8G8B8A8_SRGB: return "VK_FORMAT_R8G8B8A8_SRGB";
+        case VK_FORMAT_B8G8R8A8_UNORM: return "VK_FORMAT_B8G8R8A8_UNORM";
+        case VK_FORMAT_B8G8R8A8_SNORM: return "VK_FORMAT_B8G8R8A8_SNORM";
+        case VK_FORMAT_B8G8R8A8_USCALED: return "VK_FORMAT_B8G8R8A8_USCALED";
+        case VK_FORMAT_B8G8R8A8_SSCALED: return "VK_FORMAT_B8G8R8A8_SSCALED";
+        case VK_FORMAT_B8G8R8A8_UINT: return "VK_FORMAT_B8G8R8A8_UINT";
+        case VK_FORMAT_B8G8R8A8_SINT: return "VK_FORMAT_B8G8R8A8_SINT";
+        case VK_FORMAT_B8G8R8A8_SRGB: return "VK_FORMAT_B8G8R8A8_SRGB";
+        case VK_FORMAT_A8B8G8R8_UNORM_PACK32: return "VK_FORMAT_A8B8G8R8_UNORM_PACK32";
+        case VK_FORMAT_A8B8G8R8_SNORM_PACK32: return "VK_FORMAT_A8B8G8R8_SNORM_PACK32";
+        case VK_FORMAT_A8B8G8R8_USCALED_PACK32: return "VK_FORMAT_A8B8G8R8_USCALED_PACK32";
+        case VK_FORMAT_A8B8G8R8_SSCALED_PACK32: return "VK_FORMAT_A8B8G8R8_SSCALED_PACK32";
+        case VK_FORMAT_A8B8G8R8_UINT_PACK32: return "VK_FORMAT_A8B8G8R8_UINT_PACK32";
+        case VK_FORMAT_A8B8G8R8_SINT_PACK32: return "VK_FORMAT_A8B8G8R8_SINT_PACK32";
+        case VK_FORMAT_A8B8G8R8_SRGB_PACK32: return "VK_FORMAT_A8B8G8R8_SRGB_PACK32";
+        case VK_FORMAT_A2R10G10B10_UNORM_PACK32: return "VK_FORMAT_A2R10G10B10_UNORM_PACK32";
+        case VK_FORMAT_A2R10G10B10_SNORM_PACK32: return "VK_FORMAT_A2R10G10B10_SNORM_PACK32";
+        case VK_FORMAT_A2R10G10B10_USCALED_PACK32: return "VK_FORMAT_A2R10G10B10_USCALED_PACK32";
+        case VK_FORMAT_A2R10G10B10_SSCALED_PACK32: return "VK_FORMAT_A2R10G10B10_SSCALED_PACK32";
+        case VK_FORMAT_A2R10G10B10_UINT_PACK32: return "VK_FORMAT_A2R10G10B10_UINT_PACK32";
+        case VK_FORMAT_A2R10G10B10_SINT_PACK32: return "VK_FORMAT_A2R10G10B10_SINT_PACK32";
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32: return "VK_FORMAT_A2B10G10R10_UNORM_PACK32";
+        case VK_FORMAT_A2B10G10R10_SNORM_PACK32: return "VK_FORMAT_A2B10G10R10_SNORM_PACK32";
+        case VK_FORMAT_A2B10G10R10_USCALED_PACK32: return "VK_FORMAT_A2B10G10R10_USCALED_PACK32";
+        case VK_FORMAT_A2B10G10R10_SSCALED_PACK32: return "VK_FORMAT_A2B10G10R10_SSCALED_PACK32";
+        case VK_FORMAT_A2B10G10R10_UINT_PACK32: return "VK_FORMAT_A2B10G10R10_UINT_PACK32";
+        case VK_FORMAT_A2B10G10R10_SINT_PACK32: return "VK_FORMAT_A2B10G10R10_SINT_PACK32";
+        case VK_FORMAT_R16_UNORM: return "VK_FORMAT_R16_UNORM";
+        case VK_FORMAT_R16_SNORM: return "VK_FORMAT_R16_SNORM";
+        case VK_FORMAT_R16_USCALED: return "VK_FORMAT_R16_USCALED";
+        case VK_FORMAT_R16_SSCALED: return "VK_FORMAT_R16_SSCALED";
+        case VK_FORMAT_R16_UINT: return "VK_FORMAT_R16_UINT";
+        case VK_FORMAT_R16_SINT: return "VK_FORMAT_R16_SINT";
+        case VK_FORMAT_R16_SFLOAT: return "VK_FORMAT_R16_SFLOAT";
+        case VK_FORMAT_R16G16_UNORM: return "VK_FORMAT_R16G16_UNORM";
+        case VK_FORMAT_R16G16_SNORM: return "VK_FORMAT_R16G16_SNORM";
+        case VK_FORMAT_R16G16_USCALED: return "VK_FORMAT_R16G16_USCALED";
+        case VK_FORMAT_R16G16_SSCALED: return "VK_FORMAT_R16G16_SSCALED";
+        case VK_FORMAT_R16G16_UINT: return "VK_FORMAT_R16G16_UINT";
+        case VK_FORMAT_R16G16_SINT: return "VK_FORMAT_R16G16_SINT";
+        case VK_FORMAT_R16G16_SFLOAT: return "VK_FORMAT_R16G16_SFLOAT";
+        case VK_FORMAT_R16G16B16_UNORM: return "VK_FORMAT_R16G16B16_UNORM";
+        case VK_FORMAT_R16G16B16_SNORM: return "VK_FORMAT_R16G16B16_SNORM";
+        case VK_FORMAT_R16G16B16_USCALED: return "VK_FORMAT_R16G16B16_USCALED";
+        case VK_FORMAT_R16G16B16_SSCALED: return "VK_FORMAT_R16G16B16_SSCALED";
+        case VK_FORMAT_R16G16B16_UINT: return "VK_FORMAT_R16G16B16_UINT";
+        case VK_FORMAT_R16G16B16_SINT: return "VK_FORMAT_R16G16B16_SINT";
+        case VK_FORMAT_R16G16B16_SFLOAT: return "VK_FORMAT_R16G16B16_SFLOAT";
+        case VK_FORMAT_R16G16B16A16_UNORM: return "VK_FORMAT_R16G16B16A16_UNORM";
+        case VK_FORMAT_R16G16B16A16_SNORM: return "VK_FORMAT_R16G16B16A16_SNORM";
+        case VK_FORMAT_R16G16B16A16_USCALED: return "VK_FORMAT_R16G16B16A16_USCALED";
+        case VK_FORMAT_R16G16B16A16_SSCALED: return "VK_FORMAT_R16G16B16A16_SSCALED";
+        case VK_FORMAT_R16G16B16A16_UINT: return "VK_FORMAT_R16G16B16A16_UINT";
+        case VK_FORMAT_R16G16B16A16_SINT: return "VK_FORMAT_R16G16B16A16_SINT";
+        case VK_FORMAT_R16G16B16A16_SFLOAT: return "VK_FORMAT_R16G16B16A16_SFLOAT";
+        case VK_FORMAT_R32_UINT: return "VK_FORMAT_R32_UINT";
+        case VK_FORMAT_R32_SINT: return "VK_FORMAT_R32_SINT";
+        case VK_FORMAT_R32_SFLOAT: return "VK_FORMAT_R32_SFLOAT";
+        case VK_FORMAT_R32G32_UINT: return "VK_FORMAT_R32G32_UINT";
+        case VK_FORMAT_R32G32_SINT: return "VK_FORMAT_R32G32_SINT";
+        case VK_FORMAT_R32G32_SFLOAT: return "VK_FORMAT_R32G32_SFLOAT";
+        case VK_FORMAT_R32G32B32_UINT: return "VK_FORMAT_R32G32B32_UINT";
+        case VK_FORMAT_R32G32B32_SINT: return "VK_FORMAT_R32G32B32_SINT";
+        case VK_FORMAT_R32G32B32_SFLOAT: return "VK_FORMAT_R32G32B32_SFLOAT";
+        case VK_FORMAT_R32G32B32A32_UINT: return "VK_FORMAT_R32G32B32A32_UINT";
+        case VK_FORMAT_R32G32B32A32_SINT: return "VK_FORMAT_R32G32B32A32_SINT";
+        case VK_FORMAT_R32G32B32A32_SFLOAT: return "VK_FORMAT_R32G32B32A32_SFLOAT";
+        case VK_FORMAT_R64_UINT: return "VK_FORMAT_R64_UINT";
+        case VK_FORMAT_R64_SINT: return "VK_FORMAT_R64_SINT";
+        case VK_FORMAT_R64_SFLOAT: return "VK_FORMAT_R64_SFLOAT";
+        case VK_FORMAT_R64G64_UINT: return "VK_FORMAT_R64G64_UINT";
+        case VK_FORMAT_R64G64_SINT: return "VK_FORMAT_R64G64_SINT";
+        case VK_FORMAT_R64G64_SFLOAT: return "VK_FORMAT_R64G64_SFLOAT";
+        case VK_FORMAT_R64G64B64_UINT: return "VK_FORMAT_R64G64B64_UINT";
+        case VK_FORMAT_R64G64B64_SINT: return "VK_FORMAT_R64G64B64_SINT";
+        case VK_FORMAT_R64G64B64_SFLOAT: return "VK_FORMAT_R64G64B64_SFLOAT";
+        case VK_FORMAT_R64G64B64A64_UINT: return "VK_FORMAT_R64G64B64A64_UINT";
+        case VK_FORMAT_R64G64B64A64_SINT: return "VK_FORMAT_R64G64B64A64_SINT";
+        case VK_FORMAT_R64G64B64A64_SFLOAT: return "VK_FORMAT_R64G64B64A64_SFLOAT";
+        case VK_FORMAT_B10G11R11_UFLOAT_PACK32: return "VK_FORMAT_B10G11R11_UFLOAT_PACK32";
+        case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32: return "VK_FORMAT_E5B9G9R9_UFLOAT_PACK32";
+        case VK_FORMAT_D16_UNORM: return "VK_FORMAT_D16_UNORM";
+        case VK_FORMAT_X8_D24_UNORM_PACK32: return "VK_FORMAT_X8_D24_UNORM_PACK32";
+        case VK_FORMAT_D32_SFLOAT: return "VK_FORMAT_D32_SFLOAT";
+        case VK_FORMAT_S8_UINT: return "VK_FORMAT_S8_UINT";
+        case VK_FORMAT_D16_UNORM_S8_UINT: return "VK_FORMAT_D16_UNORM_S8_UINT";
+        case VK_FORMAT_D24_UNORM_S8_UINT: return "VK_FORMAT_D24_UNORM_S8_UINT";
+        case VK_FORMAT_D32_SFLOAT_S8_UINT: return "VK_FORMAT_D32_SFLOAT_S8_UINT";
+        case VK_FORMAT_BC1_RGB_UNORM_BLOCK: return "VK_FORMAT_BC1_RGB_UNORM_BLOCK";
+        case VK_FORMAT_BC1_RGB_SRGB_BLOCK: return "VK_FORMAT_BC1_RGB_SRGB_BLOCK";
+        case VK_FORMAT_BC1_RGBA_UNORM_BLOCK: return "VK_FORMAT_BC1_RGBA_UNORM_BLOCK";
+        case VK_FORMAT_BC1_RGBA_SRGB_BLOCK: return "VK_FORMAT_BC1_RGBA_SRGB_BLOCK";
+        case VK_FORMAT_BC2_UNORM_BLOCK: return "VK_FORMAT_BC2_UNORM_BLOCK";
+        case VK_FORMAT_BC2_SRGB_BLOCK: return "VK_FORMAT_BC2_SRGB_BLOCK";
+        case VK_FORMAT_BC3_UNORM_BLOCK: return "VK_FORMAT_BC3_UNORM_BLOCK";
+        case VK_FORMAT_BC3_SRGB_BLOCK: return "VK_FORMAT_BC3_SRGB_BLOCK";
+        case VK_FORMAT_BC4_UNORM_BLOCK: return "VK_FORMAT_BC4_UNORM_BLOCK";
+        case VK_FORMAT_BC4_SNORM_BLOCK: return "VK_FORMAT_BC4_SNORM_BLOCK";
+        case VK_FORMAT_BC5_UNORM_BLOCK: return "VK_FORMAT_BC5_UNORM_BLOCK";
+        case VK_FORMAT_BC5_SNORM_BLOCK: return "VK_FORMAT_BC5_SNORM_BLOCK";
+        case VK_FORMAT_BC6H_UFLOAT_BLOCK: return "VK_FORMAT_BC6H_UFLOAT_BLOCK";
+        case VK_FORMAT_BC6H_SFLOAT_BLOCK: return "VK_FORMAT_BC6H_SFLOAT_BLOCK";
+        case VK_FORMAT_BC7_UNORM_BLOCK: return "VK_FORMAT_BC7_UNORM_BLOCK";
+        case VK_FORMAT_BC7_SRGB_BLOCK: return "VK_FORMAT_BC7_SRGB_BLOCK";
+        case VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK: return "VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK";
+        case VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK: return "VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK";
+        case VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK: return "VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK";
+        case VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK: return "VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK";
+        case VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK: return "VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK";
+        case VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK: return "VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK";
+        case VK_FORMAT_EAC_R11_UNORM_BLOCK: return "VK_FORMAT_EAC_R11_UNORM_BLOCK";
+        case VK_FORMAT_EAC_R11_SNORM_BLOCK: return "VK_FORMAT_EAC_R11_SNORM_BLOCK";
+        case VK_FORMAT_EAC_R11G11_UNORM_BLOCK: return "VK_FORMAT_EAC_R11G11_UNORM_BLOCK";
+        case VK_FORMAT_EAC_R11G11_SNORM_BLOCK: return "VK_FORMAT_EAC_R11G11_SNORM_BLOCK";
+        case VK_FORMAT_ASTC_4x4_UNORM_BLOCK: return "VK_FORMAT_ASTC_4x4_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_4x4_SRGB_BLOCK: return "VK_FORMAT_ASTC_4x4_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_5x4_UNORM_BLOCK: return "VK_FORMAT_ASTC_5x4_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_5x4_SRGB_BLOCK: return "VK_FORMAT_ASTC_5x4_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_5x5_UNORM_BLOCK: return "VK_FORMAT_ASTC_5x5_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_5x5_SRGB_BLOCK: return "VK_FORMAT_ASTC_5x5_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_6x5_UNORM_BLOCK: return "VK_FORMAT_ASTC_6x5_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_6x5_SRGB_BLOCK: return "VK_FORMAT_ASTC_6x5_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_6x6_UNORM_BLOCK: return "VK_FORMAT_ASTC_6x6_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_6x6_SRGB_BLOCK: return "VK_FORMAT_ASTC_6x6_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_8x5_UNORM_BLOCK: return "VK_FORMAT_ASTC_8x5_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_8x5_SRGB_BLOCK: return "VK_FORMAT_ASTC_8x5_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_8x6_UNORM_BLOCK: return "VK_FORMAT_ASTC_8x6_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_8x6_SRGB_BLOCK: return "VK_FORMAT_ASTC_8x6_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_8x8_UNORM_BLOCK: return "VK_FORMAT_ASTC_8x8_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_8x8_SRGB_BLOCK: return "VK_FORMAT_ASTC_8x8_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_10x5_UNORM_BLOCK: return "VK_FORMAT_ASTC_10x5_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_10x5_SRGB_BLOCK: return "VK_FORMAT_ASTC_10x5_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_10x6_UNORM_BLOCK: return "VK_FORMAT_ASTC_10x6_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_10x6_SRGB_BLOCK: return "VK_FORMAT_ASTC_10x6_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_10x8_UNORM_BLOCK: return "VK_FORMAT_ASTC_10x8_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_10x8_SRGB_BLOCK: return "VK_FORMAT_ASTC_10x8_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_10x10_UNORM_BLOCK: return "VK_FORMAT_ASTC_10x10_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_10x10_SRGB_BLOCK: return "VK_FORMAT_ASTC_10x10_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_12x10_UNORM_BLOCK: return "VK_FORMAT_ASTC_12x10_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_12x10_SRGB_BLOCK: return "VK_FORMAT_ASTC_12x10_SRGB_BLOCK";
+        case VK_FORMAT_ASTC_12x12_UNORM_BLOCK: return "VK_FORMAT_ASTC_12x12_UNORM_BLOCK";
+        case VK_FORMAT_ASTC_12x12_SRGB_BLOCK: return "VK_FORMAT_ASTC_12x12_SRGB_BLOCK";
+        default: return "VK_UNKNOWN_TYPE";
+    }
+}
+
+inline std::string to_string(VkPrimitiveTopology topol) {
+    switch (topol) {
+        case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
+                return "VK_PRIMITIVE_TOPOLOGY_POINT_LIST";
+        case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
+                return "VK_PRIMITIVE_TOPOLOGY_LINE_LIST";
+        case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
+                return "VK_PRIMITIVE_TOPOLOGY_LINE_STRIP";
+        case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:
+                return "VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST";
+        case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
+                return "VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP";
+        case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN:
+                return "VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN";
+        case VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY:
+                return "VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY";
+        case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY:
+                return "VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY";
+        case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY:
+                return "VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY";
+        case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY:
+                return "VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY";
+        case VK_PRIMITIVE_TOPOLOGY_PATCH_LIST:
+                return "VK_PRIMITIVE_TOPOLOGY_PATCH_LIST";
+        default: return "VK_UNKNOWN_TYPE";
+    }
+}
+
+inline std::string to_string(VkSharingMode shmod) {
+    switch (shmod) {
+        case VK_SHARING_MODE_EXCLUSIVE: return "VK_SHARING_MODE_EXCLUSIVE";
+        case VK_SHARING_MODE_CONCURRENT: return "VK_SHARING_MODE_CONCURRENT";
+        default: return "VK_UNKNOWN_TYPE";
+    }
+}
+
+inline std::string to_string(VkFilter shmod) {
+    switch (shmod) {
+        case VK_FILTER_NEAREST: return "VK_FILTER_NEAREST";
+        case VK_FILTER_LINEAR: return "VK_FILTER_LINEAR";
+        case VK_FILTER_CUBIC_EXT: return "VK_FILTER_CUBIC_EXT";
+        default: return "VK_UNKNOWN_TYPE";
+    }
+}
+
+inline std::string to_string(VkDescriptorType dtype) {
+    switch (dtype) {
+        case VK_DESCRIPTOR_TYPE_SAMPLER: 
+                return "VK_DESCRIPTOR_TYPE_SAMPLER";
+        case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: 
+                return "VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER";
+        case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: 
+                return "VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE";
+        case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: 
+                return "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE";
+        case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER: 
+                return "VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER";
+        case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: 
+                return "VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER";
+        case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: 
+                return "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER";
+        case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: 
+                return "VK_DESCRIPTOR_TYPE_STORAGE_BUFFER";
+        case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: 
+                return "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC";
+        case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: 
+                return "VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC";
+        case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: 
+                return "VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT";
+        case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV:
+                return "VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV";
+        case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT:
+                return "VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT";
+        default: return "VK_UNKNOWN_TYPE";
+    }
+}
+
+inline std::string to_string(const VkDescriptorSetLayoutBinding& bind) {
+    return std::format("VkDescriptorSetLayoutBinding{{ .binding={} .type={} .count={} "
+            ".stage_flags={} .immutable_samplers={} }}",
+            bind.binding,
+            vku_utils::to_string(bind.descriptorType),
+            bind.descriptorCount,
+            vku_utils::to_string(VkShaderStageFlagBits(bind.stageFlags)),
+            (void*)bind.pImmutableSamplers);
+}
+
+
+inline std::string to_string(VkFenceCreateFlagBits flags) {
+    std::string ret = "[";
+    if (flags & VK_FENCE_CREATE_SIGNALED_BIT) ret += "VK_FENCE_CREATE_SIGNALED_BIT, ";
+    return ret + "]";
+}
+
+inline std::string to_string(VkBufferUsageFlagBits flags) {
+    std::string ret = "[";
+    if (flags & VK_BUFFER_USAGE_TRANSFER_SRC_BIT)
+        ret += "VK_BUFFER_USAGE_TRANSFER_SRC_BIT, ";
+    if (flags & VK_BUFFER_USAGE_TRANSFER_DST_BIT)
+        ret += "VK_BUFFER_USAGE_TRANSFER_DST_BIT, ";
+    if (flags & VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT)
+        ret += "VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT, ";
+    if (flags & VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT)
+        ret += "VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT, ";
+    if (flags & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)
+        ret += "VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, ";
+    if (flags & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+        ret += "VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, ";
+    if (flags & VK_BUFFER_USAGE_INDEX_BUFFER_BIT)
+        ret += "VK_BUFFER_USAGE_INDEX_BUFFER_BIT, ";
+    if (flags & VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)
+        ret += "VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, ";
+    if (flags & VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)
+        ret += "VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, ";
+    if (flags & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
+        ret += "VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, ";
+    if (flags & VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT)
+        ret += "VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT, ";
+    if (flags & VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT)
+        ret += "VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT, ";
+    if (flags & VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT)
+        ret += "VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT, ";
+    if (flags & VK_BUFFER_USAGE_RAY_TRACING_BIT_NV)
+        ret += "VK_BUFFER_USAGE_RAY_TRACING_BIT_NV, ";
+    if (flags & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_EXT)
+        ret += "VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_EXT, ";
+    if (flags & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR)
+        ret += "VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR, ";
+    return ret + "]";
+}
+
+inline std::string to_string(VkMemoryPropertyFlagBits flags) {
+    std::string ret = "[";
+    if (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+        ret += "VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT";
+    if (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
+        ret += "VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT";
+    if (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+        ret += "VK_MEMORY_PROPERTY_HOST_COHERENT_BIT";
+    if (flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+        ret += "VK_MEMORY_PROPERTY_HOST_CACHED_BIT";
+    if (flags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)
+        ret += "VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT";
+    if (flags & VK_MEMORY_PROPERTY_PROTECTED_BIT)
+        ret += "VK_MEMORY_PROPERTY_PROTECTED_BIT";
+    if (flags & VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD)
+        ret += "VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD";
+    if (flags & VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD)
+        ret += "VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD";
+    return ret + "]";
+}
+
+inline std::string to_string(VkImageUsageFlagBits flags) {
+    std::string ret = "[";
+    if (flags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
+        ret += "VK_IMAGE_USAGE_TRANSFER_SRC_BIT";
+    if (flags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+        ret += "VK_IMAGE_USAGE_TRANSFER_DST_BIT";
+    if (flags & VK_IMAGE_USAGE_SAMPLED_BIT)
+        ret += "VK_IMAGE_USAGE_SAMPLED_BIT";
+    if (flags & VK_IMAGE_USAGE_STORAGE_BIT)
+        ret += "VK_IMAGE_USAGE_STORAGE_BIT";
+    if (flags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+        ret += "VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT";
+    if (flags & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+        ret += "VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT";
+    if (flags & VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT)
+        ret += "VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT";
+    if (flags & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)
+        ret += "VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT";
+    if (flags & VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT)
+        ret += "VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT";
+    if (flags & VK_IMAGE_USAGE_SHADING_RATE_IMAGE_BIT_NV)
+        ret += "VK_IMAGE_USAGE_SHADING_RATE_IMAGE_BIT_NV";
+    return ret + "]";
+}
+
+inline std::string to_string(VkImageAspectFlagBits flags) {
+    std::string ret = "[";
+    if (flags & VK_IMAGE_ASPECT_COLOR_BIT)
+        ret += "VK_IMAGE_ASPECT_COLOR_BIT";
+    if (flags & VK_IMAGE_ASPECT_DEPTH_BIT)
+        ret += "VK_IMAGE_ASPECT_DEPTH_BIT";
+    if (flags & VK_IMAGE_ASPECT_STENCIL_BIT)
+        ret += "VK_IMAGE_ASPECT_STENCIL_BIT";
+    if (flags & VK_IMAGE_ASPECT_METADATA_BIT)
+        ret += "VK_IMAGE_ASPECT_METADATA_BIT";
+    if (flags & VK_IMAGE_ASPECT_PLANE_0_BIT)
+        ret += "VK_IMAGE_ASPECT_PLANE_0_BIT";
+    if (flags & VK_IMAGE_ASPECT_PLANE_1_BIT)
+        ret += "VK_IMAGE_ASPECT_PLANE_1_BIT";
+    if (flags & VK_IMAGE_ASPECT_PLANE_2_BIT)
+        ret += "VK_IMAGE_ASPECT_PLANE_2_BIT";
+    if (flags & VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT)
+        ret += "VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT";
+    if (flags & VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT)
+        ret += "VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT";
+    if (flags & VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT)
+        ret += "VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT";
+    if (flags & VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT)
+        ret += "VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT";
+    if (flags & VK_IMAGE_ASPECT_PLANE_0_BIT_KHR)
+        ret += "VK_IMAGE_ASPECT_PLANE_0_BIT_KHR";
+    if (flags & VK_IMAGE_ASPECT_PLANE_1_BIT_KHR)
+        ret += "VK_IMAGE_ASPECT_PLANE_1_BIT_KHR";
+    if (flags & VK_IMAGE_ASPECT_PLANE_2_BIT_KHR)
+        ret += "VK_IMAGE_ASPECT_PLANE_2_BIT_KHR";
+    return ret + "]";
+}
+
+inline std::string to_string(VkShaderStageFlagBits flags) {
+    std::string ret = "[";
+    if (flags & VK_SHADER_STAGE_VERTEX_BIT)
+        ret += "VK_SHADER_STAGE_VERTEX_BIT";
+    if (flags & VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT)
+        ret += "VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT";
+    if (flags & VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT)
+        ret += "VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT";
+    if (flags & VK_SHADER_STAGE_GEOMETRY_BIT)
+        ret += "VK_SHADER_STAGE_GEOMETRY_BIT";
+    if (flags & VK_SHADER_STAGE_FRAGMENT_BIT)
+        ret += "VK_SHADER_STAGE_FRAGMENT_BIT";
+    if (flags & VK_SHADER_STAGE_COMPUTE_BIT)
+        ret += "VK_SHADER_STAGE_COMPUTE_BIT";
+    if (flags & VK_SHADER_STAGE_ALL_GRAPHICS)
+        ret += "VK_SHADER_STAGE_ALL_GRAPHICS";
+    if (flags & VK_SHADER_STAGE_ALL)
+        ret += "VK_SHADER_STAGE_ALL";
+    if (flags & VK_SHADER_STAGE_RAYGEN_BIT_NV)
+        ret += "VK_SHADER_STAGE_RAYGEN_BIT_NV";
+    if (flags & VK_SHADER_STAGE_ANY_HIT_BIT_NV)
+        ret += "VK_SHADER_STAGE_ANY_HIT_BIT_NV";
+    if (flags & VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV)
+        ret += "VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV";
+    if (flags & VK_SHADER_STAGE_MISS_BIT_NV)
+        ret += "VK_SHADER_STAGE_MISS_BIT_NV";
+    if (flags & VK_SHADER_STAGE_INTERSECTION_BIT_NV)
+        ret += "VK_SHADER_STAGE_INTERSECTION_BIT_NV";
+    if (flags & VK_SHADER_STAGE_CALLABLE_BIT_NV)
+        ret += "VK_SHADER_STAGE_CALLABLE_BIT_NV";
+    if (flags & VK_SHADER_STAGE_TASK_BIT_NV)
+        ret += "VK_SHADER_STAGE_TASK_BIT_NV";
+    if (flags & VK_SHADER_STAGE_MESH_BIT_NV)
+        ret += "VK_SHADER_STAGE_MESH_BIT_NV";
+    return ret + "]";
 }
 
 /* Internal Functions: (TODO)
