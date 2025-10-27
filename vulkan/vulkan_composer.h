@@ -86,10 +86,27 @@ enum vkc_error_e : int32_t {
 
 namespace vkc {
 
+inline constexpr const int MAX_NUMBER_OF_OBJECTS = 16384;
 
 inline std::string app_path = std::filesystem::canonical("./");
 
-inline std::map<std::string, vku::ref_t<vku::object_t>> objects;
+inline std::stack<int> free_objects = [](){
+    std::stack<int> ret;
+    for (int i = MAX_NUMBER_OF_OBJECTS-1; i >= 1; i--)
+        ret.push(i);
+    return ret;
+}();
+
+/* This holds the obhects reference such that lua can use them */
+struct object_ref_t {
+    vku::ref_t<vku::object_t> obj;  /* The actual reference to the vku/vkc object */
+
+    std::string name;               /* this is required such that when this object gets removed it
+                                       also gets removed from objects_map */
+};
+
+inline std::vector<object_ref_t> objects(MAX_NUMBER_OF_OBJECTS);
+inline std::map<std::string, int> objects_map;
 inline std::map<std::string, std::vector<co::state_t *>> wanted_objects;
 inline std::deque<std::coroutine_handle<void>> work;
 
@@ -223,7 +240,7 @@ struct depend_resolver_t {
     depend_resolver_t(std::string required_depend) : required_depend(required_depend) {}
 
     /* If we already have the dependency we can already retur */
-    bool await_ready() noexcept { return has(objects, required_depend); }
+    bool await_ready() noexcept { return has(objects_map, required_depend); }
 
     /* Else we place ourselves on the waiting queue */
     template <typename P>
@@ -237,19 +254,19 @@ struct depend_resolver_t {
     }
 
     vku::ref_t<VkuT> await_resume() {
-        if (!has(objects, required_depend)) {
+        if (!has(objects_map, required_depend)) {
             DBG("Object not found");
             throw vku::err_t(std::format("Object not found, {}", required_depend));
         }
-        if (!objects[required_depend]) {
+        if (!objects[objects_map[required_depend]].obj) {
             DBG("For some reason this object now holds a nullptr...");
             throw vku::err_t("nullptr object");
         }
-        auto ret = objects[required_depend].to_derived<VkuT>();
+        auto ret = objects[objects_map[required_depend]].obj.to_derived<VkuT>();
         if (!ret) {
             DBG("Invalid ref...");
             throw vku::err_t(sformat("Invalid reference, maybe cast doesn't work?: [cast: %s to: %s]",
-                    demangle<4>(typeid(objects[required_depend].get()).name()).c_str(),
+                    demangle<4>(typeid(objects[objects_map[required_depend]].obj.get()).name()).c_str(),
                     demangle<VkuT, 4>().c_str()));
         }
         return ret;
@@ -264,12 +281,17 @@ void mark_dependency_solved(std::string depend_name, vku::ref_t<vku::object_t> d
         DBG("Object into nullptr");
         throw vku::err_t{std::format("Object turned into nullptr: {}", depend_name)};
     }
-    if (has(objects, depend_name)) {
+    if (has(objects_map, depend_name)) {
         DBG("Name taken");
         throw vku::err_t{std::format("Tag name already exists: {}", depend_name)};
     }
-    DBG("Adding object: %s", depend->to_string().c_str());
-    objects[depend_name] = depend;
+    int new_id = free_objects.top();
+    free_objects.pop();
+
+    DBG("Adding object: %s [%d]", depend->to_string().c_str(), new_id);
+    objects_map[depend_name] = new_id;
+    objects[new_id].obj = depend;
+    objects[new_id].name = depend_name;
 
     /* Second, awake all the ones waiting for the respective dependency */
     if (vkc::has(wanted_objects, depend_name)) {
@@ -897,6 +919,8 @@ inline vkc_error_e parse_config(const char *path) {
 inline std::string lua_example_str = R"___(
 vku = require("vulkan_utils")
 
+print(debug.getregistry())
+
 function on_loop_run()
     vku.glfw_pool_events() -- needed for keys to be available
     if vku.get_key(vku.window, vku.GLFW_KEY_ESCAPE) == vku.GLFW_PRESS then
@@ -907,14 +931,14 @@ function on_loop_run()
 
     -- do mvp update somehow?
 
-    vku.cbuff.begin()
-    vku.cbuff.begin_rpass(vku.fbs, img_idx)
-    vku.cbuff.bind_vert_buffs(0, {{vku.vbuff, 0}})
-    vku.cbuff.bind_idx_buff(vku.ibuff, 0, vku.VK_INDEX_TYPE_UINT16)
-    vku.cbuff.bind_desc_set(vku.VK_PIPELINE_BIND_POINT_GRAPHICS, vku.pl, vku.desc_set)
-    vku.cbuff.draw_idx(vku.pl, indices.size())
-    vku.cbuff.end_rpass()
-    vku.cbuff.end_begin()
+    vku.cbuff:begin()
+    vku.cbuff:begin_rpass(vku.fbs, img_idx)
+    vku.cbuff:bind_vert_buffs(0, {{vku.vbuff, 0}})
+    vku.cbuff:bind_idx_buff(vku.ibuff, 0, vku.VK_INDEX_TYPE_UINT16)
+    vku.cbuff:bind_desc_set(vku.VK_PIPELINE_BIND_POINT_GRAPHICS, vku.pl, vku.desc_set)
+    vku.cbuff:draw_idx(vku.pl, indices.size())
+    vku.cbuff:end_rpass()
+    vku.cbuff:end_begin()
 
     vku.submit_cmdbuff({{vku.img_sem, vku.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
         vku.cbuff, vku.fence, {vku.draw_sem})
@@ -953,6 +977,39 @@ inline int impl_TODO(lua_State *L) {
     return 0;
 }
 
+// inline lua_metatable_t lua_metatable[VKU_TYPE_CNT];
+// inline int init_lua_meta() {
+//     lua_metatable[VKU_TYPE_WINDOW].cbk =                 [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_INSTANCE].cbk =               [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_SURFACE].cbk =                [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_DEVICE].cbk =                 [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_SWAPCHAIN].cbk =              [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_SHADER].cbk =                 [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_RENDERPASS].cbk =             [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_PIPELINE].cbk =               [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_COMPUTE_PIPELINE].cbk =       [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_FRAMEBUFFERS].cbk =           [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_COMMAND_POOL].cbk =           [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_COMMAND_BUFFER].cbk =         [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_SEMAPHORE].cbk =              [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_FENCE].cbk =                  [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_BUFFER].cbk =                 [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_IMAGE].cbk =                  [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_IMAGE_VIEW].cbk =             [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_IMAGE_SAMPLER].cbk =          [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_DESCRIPTOR_SET].cbk =         [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_DESCRIPTOR_POOL].cbk =        [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_SAMPLER_BINDING].cbk =        [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_BUFFER_BINDING].cbk =         [](lua_State *L){ return 0; };
+//     lua_metatable[VKU_TYPE_BINDING_DESCRIPTOR_SET].cbk = [](lua_State *L){ return 0; };
+//     lua_metatable[VKC_TYPE_SPIRV].cbk =                  [](lua_State *L){ return 0; };
+//     lua_metatable[VKC_TYPE_STRING].cbk =                 [](lua_State *L){ return 0; };
+//     lua_metatable[VKC_TYPE_FLOAT].cbk =                  [](lua_State *L){ return 0; };
+//     lua_metatable[VKC_TYPE_INTEGER].cbk =                [](lua_State *L){ return 0; };
+//     lua_metatable[VKC_TYPE_LUA_SCRIPT].cbk =             [](lua_State *L){ return 0; };
+//     lua_metatable[VKC_TYPE_LUA_VARIABLE].cbk =           [](lua_State *L){ return 0; };
+// }
+
 inline const luaL_Reg vku_tab_funcs[] = {
     {"glfw_pool_events", impl_TODO},
     {"get_key", impl_TODO},
@@ -961,8 +1018,87 @@ inline const luaL_Reg vku_tab_funcs[] = {
     {NULL, NULL}
 };
 
+inline void* luaw_to_user_data(int index) { return (void*)(intptr_t)(index); }
+inline int luaw_from_user_data(void *val) { return (int)(intptr_t)(val); }
+
+/* This is here just to hold the diverse bitmaps */
+template <typename T>
+struct bm_t { using type = T; };
+
+template <typename Param, size_t index>
+struct luaw_poper_t{
+    void luaw_pop_single_param(lua_State *L) {
+        /* What a parameter can be:
+        1. vku::ref_t of some object
+        2. a std::string
+        3. an integer bitmap
+        4. an integer */
+
+        /* If this is resolved to a void it will error out, which is ok, because this case is either way
+        an error */
+    }
+};
+
+template <typename T, size_t index>
+struct luaw_poper_t<vku::ref_t<T>, index> {
+    vku::ref_t<T> luaw_pop_single_param(lua_State *L) {
+        int obj_index = luaw_from_user_data(lua_touserdata(L, index));
+        /* TODO: checks */
+        return objects[obj_index].obj.to_derived<T>();
+    }
+};
+
+
+template <typename T, size_t index>
+struct luaw_poper_t<bm_t<T>, index> {
+    T luaw_pop_single_param(lua_State *L) {
+        /* TODO checks */
+        int64_t intval = lua_tointeger(L, index);
+        return (T)intval;
+    }
+};
+
+template <size_t index>
+struct luaw_poper_t<char *, index> {
+    char *luaw_pop_single_param(lua_State *L) {
+        /* TODO checks */
+        return lua_tostring(L, index);
+    }
+};
+
+template <typename VkuT, auto member_ptr, typename ...Params, size_t ...I>
+int luaw_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
+    int index = luaw_from_user_data(lua_touserdata(L, 1));
+    if (index == 0) {
+        lua_pushstring(L, "Invalid user object!");
+        lua_error(L);
+    }
+    auto &o = objects[index];
+    if (!o.obj) {
+        lua_pushstring(L, "internal_error: Malformed user object!");
+        lua_error(L);
+    }
+    auto obj = o.obj.to_derived<VkuT>();
+
+    /* TODO: Check if error returned and maybe add more types of returns */
+    (obj.get()->*member_ptr)(luaw_poper_t<Params, I + 2>{}.luaw_pop_single_param(L)...);
+    return 0;
+}
+
+template <typename VkuT, auto member_ptr, typename ...Params>
+int luaw_function_wrapper(lua_State *L) {
+    return luaw_function_wrapper_impl<VkuT, member_ptr, Params...>(
+            L, std::index_sequence_for<Params...>{});
+}
+
+template <typename VkuT, auto member_ptr, typename ...Params>
+void luaw_register_function(lua_State *L, const char *function_name) {
+    lua_CFunction f = &luaw_function_wrapper<VkuT, member_ptr, Params...>;
+    lua_pushcfunction(L, f);
+    lua_setfield(L, -2, function_name);
+}
+
 inline int luaopen_vku (lua_State *L) {
-    luaL_newlib(L, vku_tab_funcs);
 
     /* This is also a great example of how to register all the types:
         - all the nmes will be registered and depending of their types
@@ -971,32 +1107,74 @@ inline int luaopen_vku (lua_State *L) {
         - each type that is not a constant will have a _t that holds the user ptr
         */
 
-    /* this makes vulkan_utils.cbuff = {} */
-    lua_createtable(L, 0, 0);
-    lua_setfield(L, -2, "cbuff");
+    /* w */
 
-    /* This pushes the reference of vulkan_utils.cbuff on the stack */
-    lua_getfield(L, -1, "cbuff");
+    int top = lua_gettop(L);
 
-    /* this makes vulkan_utils.cbuff.begin = begin_fn */
-    lua_pushcfunction(L, impl_TODO);
-    lua_setfield(L, -2, "begin");
+    {
+        luaL_newmetatable(L, "__vku_metatable");
 
-    /* this makes vulkan_utils.cbuff.begin_rpass = begin_rpass_fn */
-    lua_pushcfunction(L, impl_TODO);
-    lua_setfield(L, -2, "begin_rpass");
+        /* params: 1.usrptr, 2.key -> returns: 1.value */
+        lua_pushcfunction(L, [](lua_State *L) {
+            DBG("__index: %d", lua_gettop(L));
 
-    /* this makes vulkan_utils.cbuff.bind_vert_buffs = bind_vert_buffs_fn */
-    lua_pushcfunction(L, impl_TODO);
-    lua_setfield(L, -2, "bind_vert_buffs");
+            lua_getmetatable(L, 1);             /* Get current object metatable */
+            lua_getfield(L, -1, "cbuff:begin"); /* Get the function from inside the metatable */
+            lua_remove(L, -2);                  /* pop lua_getmetatable */
 
-    /* this makes vulkan_utils.cbuff._this = &false_user_data */
-    char false_user_data;
-    lua_pushlightuserdata(L, &false_user_data);
-    lua_setfield(L, -2, "_t");
+            return 1;   /* we return the function */
+        });
+        lua_setfield(L, -2, "__index");
 
-    /* Poping the reference of cbuff from the stack */
-    lua_pop(L, 1);
+        /* params: 1.usrptr */
+        lua_pushcfunction(L, [](lua_State *L) {
+            DBG("__gc");
+            (void)L;
+            return 0;
+        });
+        lua_setfield(L, -2, "__gc");
+
+        /* params: 1.usrptr [2.error] */
+        lua_pushcfunction(L, [](lua_State *L) {
+            DBG("__close");
+            (void)L;
+            return 0;
+        });
+        lua_setfield(L, -2, "__close");
+
+        /* This is like so: 1.object, 2.function from 1, 3... parameter types */
+        luaw_register_function<
+            vku::cmdbuff_t, &vku::cmdbuff_t::begin, bm_t<VkCommandBufferUsageFlags>>(L, "cbuff:begin");
+
+        lua_pushstring(L, "locked");
+        lua_setfield(L, -2, "__metatable");
+
+        lua_pop(L, 1); /* pop luaL_newmetatable */
+    }
+
+    DBG("top: %d gettop: %d", top, lua_gettop(L));
+    ASSERT_FN(CHK_BOOL(top == lua_gettop(L))); /* sanity check */
+
+    {
+        /* TODO: all loaded, named types must also be registered here, such that the lua object
+        holds it's only reference, and upon __gc, it frees it (that is creates a reference, deletes
+        it from the mapping and gives lua the pointer to that reference) */
+        /* TODO: all enum types must be here registered as integers inside this library */
+        /* TODO: create some sor of creator function, that can be given a description as the ones
+        above, transforms it into yaml and finally uses the functions above to generate the
+        object */
+
+        luaL_newlib(L, vku_tab_funcs);
+
+        /* this makes vulkan_utils.cbuff = &false_user_data and sets it's metadata */
+        int false_user_data = 22;
+        lua_pushlightuserdata(L, luaw_to_user_data(false_user_data));
+        luaL_setmetatable(L, "__vku_metatable");
+        lua_setfield(L, -2, "cbuff");
+    }
+
+    DBG("top: %d gettop: %d", top, lua_gettop(L));
+    ASSERT_FN(CHK_BOOL(top + 1 == lua_gettop(L))); /* sanity check */
 
     return 1;
 }
