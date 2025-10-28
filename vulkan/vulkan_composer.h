@@ -921,6 +921,18 @@ vku = require("vulkan_utils")
 
 print(debug.getregistry())
 
+function f1()
+    vku.cbuff:begin()
+end
+
+function f2()
+    f1()
+end
+
+function f3()
+    f2()
+end
+
 function on_loop_run()
     vku.glfw_pool_events() -- needed for keys to be available
     if vku.get_key(vku.window, vku.GLFW_KEY_ESCAPE) == vku.GLFW_PRESS then
@@ -931,6 +943,7 @@ function on_loop_run()
 
     -- do mvp update somehow?
 
+    f3()
     vku.cbuff:begin()
     vku.cbuff:begin_rpass(vku.fbs, img_idx)
     vku.cbuff:bind_vert_buffs(0, {{vku.vbuff, 0}})
@@ -1026,32 +1039,39 @@ template <typename T>
 struct bm_t { using type = T; };
 
 template <typename Param, size_t index>
-struct luaw_poper_t{
-    void luaw_pop_single_param(lua_State *L) {
+struct luaw_param_t{
+    void luaw_single_param(lua_State *L) {
         /* What a parameter can be:
         1. vku::ref_t of some object
         2. a std::string
         3. an integer bitmap
         4. an integer */
 
-        /* If this is resolved to a void it will error out, which is ok, because this case is either way
-        an error */
+        /* If this is resolved to a void it will error out, which is ok, because this case is either
+        way an error */
+        demangle_static_assert<false, Param>(" - Is not a valid parameter type");
     }
 };
 
 template <typename T, size_t index>
-struct luaw_poper_t<vku::ref_t<T>, index> {
-    vku::ref_t<T> luaw_pop_single_param(lua_State *L) {
+struct luaw_param_t<vku::ref_t<T>, index> {
+    vku::ref_t<T> luaw_single_param(lua_State *L) {
+        if (lua_isnil(L, index))
+            return vku::ref_t<T>{}; /* if the user intended to pass a nill, we give it as a nullptr */
         int obj_index = luaw_from_user_data(lua_touserdata(L, index));
-        /* TODO: checks */
+        if (obj_index == 0) {
+            luaw_push_error(L, std::format("Invalid parameter at index {} of expected type {}",
+                    index, demangle<T>));
+            lua_error(L);
+        }
         return objects[obj_index].obj.to_derived<T>();
     }
 };
 
 
 template <typename T, size_t index>
-struct luaw_poper_t<bm_t<T>, index> {
-    T luaw_pop_single_param(lua_State *L) {
+struct luaw_param_t<bm_t<T>, index> {
+    T luaw_single_param(lua_State *L) {
         /* TODO checks */
         int64_t intval = lua_tointeger(L, index);
         return (T)intval;
@@ -1059,41 +1079,124 @@ struct luaw_poper_t<bm_t<T>, index> {
 };
 
 template <size_t index>
-struct luaw_poper_t<char *, index> {
-    char *luaw_pop_single_param(lua_State *L) {
+struct luaw_param_t<char *, index> {
+    char *luaw_single_param(lua_State *L) {
         /* TODO checks */
         return lua_tostring(L, index);
     }
 };
 
+template <typename T>
+void luaw_ret_push(lua_State *L, T&& t) {
+    (void)t;
+    demangle_static_assert<false, T>(" - Is not a valid return type");
+}
+
+template <>
+void luaw_ret_push<int>(lua_State *L, int&& x) {
+    lua_pushinteger(L, x);
+}
+
+void luaw_push_error(lua_State *L, std::string err_str) {
+    lua_Debug ar;
+    std::string context;
+    int i = 2;
+    auto line_source = [](const char *src, int N) -> std::string {
+        if (!src)
+            return "<unknown>";
+        std::istringstream stream(src);
+        std::string line;
+        int current = 1;
+
+        while (std::getline(stream, line)) {
+            if (current == N)
+                return line;
+            current++;
+        }
+        return "<unknown>";
+    };
+
+    while (lua_getstack(L, i, &ar)) {
+        lua_getinfo(L, "nSl", &ar);
+        context = std::format("      at {:>20}:{:<4}, in '{}':\n",
+                ar.short_src, ar.currentline, line_source(ar.source, ar.currentline)) + context;
+        i++;
+    }
+    if (lua_getstack(L, 1, &ar)) {
+        lua_getinfo(L, "nSl", &ar);
+        context += std::format("Error at {:>20}:{:<4}, in '{}':\n",
+                ar.short_src, ar.currentline, line_source(ar.source, ar.currentline));
+    }
+    context += err_str;
+    lua_pushstring(L, context.c_str());
+}
+
 template <typename VkuT, auto member_ptr, typename ...Params, size_t ...I>
-int luaw_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
+int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     int index = luaw_from_user_data(lua_touserdata(L, 1));
     if (index == 0) {
-        lua_pushstring(L, "Invalid user object!");
+        luaw_push_error(L, "Nil user object can't call member function!");
         lua_error(L);
     }
     auto &o = objects[index];
     if (!o.obj) {
-        lua_pushstring(L, "internal_error: Malformed user object!");
+        luaw_push_error(L, "internal_error: Nil user object can't call member function!");
         lua_error(L);
     }
     auto obj = o.obj.to_derived<VkuT>();
 
-    /* TODO: Check if error returned and maybe add more types of returns */
-    (obj.get()->*member_ptr)(luaw_poper_t<Params, I + 2>{}.luaw_pop_single_param(L)...);
+    using RetType = decltype((obj.get()->*member_ptr)(
+            luaw_param_t<Params, I + 2>{}.luaw_single_param(L)...));
+
+    if constexpr (std::is_void_v<RetType>) {
+        (obj.get()->*member_ptr)(luaw_param_t<Params, I + 2>{}.luaw_single_param(L)...);
+        return 0;
+    }
+    else {
+        luaw_ret_push(L, (obj.get()->*member_ptr)(
+                luaw_param_t<Params, I + 2>{}.luaw_single_param(L)...));
+        return 1;
+    }    
+}
+
+/* TODO: all function(LUA ONES) calls should redirect exceptions through this */
+int luaw_catch_exception(lua_State *L) {
+    /* We don't let errors get out of the call because we don't want to break lua. As such, we catch
+    any error and propagate it as a lua error. */
+    try {
+        throw ; // re-throw the current exception
+    }
+    catch (vku::err_t &vkerr) {
+        luaw_push_error(L, std::format("Invalid call: {}", vkerr.what()));
+        lua_error(L);
+    }
+    catch (fkyaml::exception &e) {
+        luaw_push_error(L, std::format("fkyaml::exception: {}", e.what()));
+        lua_error(L);
+    }
+    catch (std::exception &e) {
+        luaw_push_error(L, std::format("std::exception: {}", e.what()));
+        lua_error(L);
+    }
+    catch (...) {
+        throw ; /* most probably the lua string */
+    }
+
     return 0;
 }
 
 template <typename VkuT, auto member_ptr, typename ...Params>
-int luaw_function_wrapper(lua_State *L) {
-    return luaw_function_wrapper_impl<VkuT, member_ptr, Params...>(
-            L, std::index_sequence_for<Params...>{});
+int luaw_member_function_wrapper(lua_State *L) {
+    try {
+        return luaw_member_function_wrapper_impl<VkuT, member_ptr, Params...>(
+                L, std::index_sequence_for<Params...>{});
+    }
+    catch (...) { return luaw_catch_exception(L); }
 }
 
 template <typename VkuT, auto member_ptr, typename ...Params>
 void luaw_register_function(lua_State *L, const char *function_name) {
-    lua_CFunction f = &luaw_function_wrapper<VkuT, member_ptr, Params...>;
+    lua_CFunction f = &luaw_member_function_wrapper<VkuT, member_ptr, Params...>;
     lua_pushcfunction(L, f);
     lua_setfield(L, -2, function_name);
 }
@@ -1106,8 +1209,6 @@ inline int luaopen_vku (lua_State *L) {
         - all the numbers will be also registered as integers
         - each type that is not a constant will have a _t that holds the user ptr
         */
-
-    /* w */
 
     int top = lua_gettop(L);
 
@@ -1129,6 +1230,8 @@ inline int luaopen_vku (lua_State *L) {
         /* params: 1.usrptr */
         lua_pushcfunction(L, [](lua_State *L) {
             DBG("__gc");
+
+            /* TODO: garbage collect the obhect */
             (void)L;
             return 0;
         });
@@ -1142,9 +1245,9 @@ inline int luaopen_vku (lua_State *L) {
         });
         lua_setfield(L, -2, "__close");
 
-        /* This is like so: 1.object, 2.function from 1, 3... parameter types */
         luaw_register_function<
-            vku::cmdbuff_t, &vku::cmdbuff_t::begin, bm_t<VkCommandBufferUsageFlags>>(L, "cbuff:begin");
+        /* self, fn */  vku::cmdbuff_t, &vku::cmdbuff_t::begin,
+        /* params   */  bm_t<VkCommandBufferUsageFlags>>(L, "cbuff:begin");
 
         lua_pushstring(L, "locked");
         lua_setfield(L, -2, "__metatable");

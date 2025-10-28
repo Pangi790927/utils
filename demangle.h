@@ -54,4 +54,11 @@ inline std::string demangle(const T& t) {
     return demangle<T, indent>();
 }
 
+template <bool B, typename T>
+consteval void demangle_static_assert(const char *description) {
+    if constexpr (!B)
+        throw description; /* This throw forces the termination of compilation */
+}
+
+
 #endif
