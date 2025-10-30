@@ -1247,7 +1247,7 @@ inline int luaopen_vku (lua_State *L) {
 
         luaw_register_function<
         /* self, fn */  vku::cmdbuff_t, &vku::cmdbuff_t::begin,
-        /* params   */  bm_t<VkCommandBufferUsageFlags>>(L, "cbuff:begin");
+        /* params   */  bm_t<VkCommandBufferUsageFlagBits>>(L, "cbuff:begin");
 
         lua_pushstring(L, "locked");
         lua_setfield(L, -2, "__metatable");

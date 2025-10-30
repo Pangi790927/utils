@@ -1,3 +1,18 @@
+#ifndef CPP_BACKTRACE_H
+#define CPP_BACKTRACE_H
+
+#include <cxxabi.h>
+
+#if __has_include(<boost/stacktrace.hpp>)
+# if __has_include(<backtrace.h>)
+#  include <backtrace.h>
+#  define BOOST_STACKTRACE_USE_BACKTRACE
+# endif
+# include <boost/stacktrace.hpp>
+# define HAS_BOOST_STACKTRACE 
+#endif
+
+/* OBS: The code is modified to fallback on the original code if no boost available */
 /*
  * Copyright (c) 2009-2017, Farooq Mela
  * All rights reserved.
@@ -32,8 +47,12 @@
 #include <sstream>
 
 // This function produces a stack backtrace with demangled function & method names.
-inline std::string cpp_backtrace(int skip = 1)
+inline std::string cpp_backtrace(int skip = 0)
 {
+#ifdef HAS_BOOST_STACKTRACE
+    return boost::stacktrace::to_string(boost::stacktrace::stacktrace{
+            static_cast<std::size_t>(skip), static_cast<std::size_t>(-1)});
+#else /* !HAS_BOOST_STACKTRACE */
     void *callstack[128];
     const int nMaxFrames = sizeof(callstack) / sizeof(callstack[0]);
     char buf[1024];
@@ -65,4 +84,7 @@ inline std::string cpp_backtrace(int skip = 1)
     if (nFrames == nMaxFrames)
         trace_buf << "[truncated]\n";
     return trace_buf.str();
+#endif /* HAS_BOOST_STACKTRACE */
 }
+
+#endif /* CPP_BACKTRACE_H */

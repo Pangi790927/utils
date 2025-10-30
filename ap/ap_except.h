@@ -1,7 +1,7 @@
 #ifndef AP_EXCEPT_H
 #define AP_EXCEPT_H
 
-#include "backtrace.h"
+#include "cpp_backtrace.h"
 
 /* TODO: add more info to message exception, for example backtrace and other stuff like that */
 struct ap_except_info_t {

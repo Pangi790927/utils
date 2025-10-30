@@ -16,6 +16,7 @@ LIBS 	  += -lSPIRV-Tools -lSPIRV-Tools-opt -lSPVRemapper -lHLSL
 LIBS 	  += ${GLSL_ADDITIONAL_LIB}
 LIBS 	  += -Wl,--end-group
 LIBS      += -lpthread
+LIBS      += -lbacktrace
 
 CXX       := g++-13
 

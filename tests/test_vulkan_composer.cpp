@@ -3,7 +3,7 @@
 int main(int argc, char const *argv[])
 {
     (void)argc, (void)argv;
-    // ASSERT_FN(vkc::parse_config("shaders/vulkan_config.yaml"));
+    ASSERT_FN(vkc::parse_config("shaders/vulkan_config.yaml"));
 
     ASSERT_FN(vkc::luaw_init());
     ASSERT_FN(vkc::luaw_execute_loop_run());

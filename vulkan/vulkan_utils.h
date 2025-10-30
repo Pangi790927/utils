@@ -13,7 +13,7 @@
 
 #include "debug.h"
 #include "demangle.h"
-#include "backtrace.h"
+#include "cpp_backtrace.h"
 
 #if __has_include(<glslang/Include/glslang_c_interface.h>)
 # define VKU_HAS_NEW_GLSLANG
