@@ -112,6 +112,8 @@ inline std::deque<std::coroutine_handle<void>> work;
 
 struct lua_var_t : public vku::object_t {
     std::string name;
+
+    static  vku_object_type_e type_id_static() { return VKC_TYPE_LUA_VARIABLE; }
     static vku::ref_t<lua_var_t> create(std::string name) {
         auto ret = vku::ref_t<lua_var_t>::create_obj_ref(std::make_unique<lua_var_t>(), {});
         ret->name = name;
@@ -132,6 +134,8 @@ private:
 
 struct lua_script_t : public vku::object_t {
     std::string content;
+
+    static  vku_object_type_e type_id_static() { return VKC_TYPE_LUA_SCRIPT; }
     static vku::ref_t<lua_script_t> create(std::string content) {
         auto ret = vku::ref_t<lua_script_t>::create_obj_ref(std::make_unique<lua_script_t>(), {});
         ret->content = content;
@@ -152,6 +156,8 @@ private:
 
 struct integer_t : public vku::object_t {
     int64_t value = 0;
+
+    static  vku_object_type_e type_id_static() { return VKC_TYPE_INTEGER; }
     static vku::ref_t<integer_t> create(int64_t value) {
         auto ret = vku::ref_t<integer_t>::create_obj_ref(std::make_unique<integer_t>(), {});
         ret->value = value;
@@ -171,6 +177,8 @@ private:
 
 struct float_t : public vku::object_t {
     double value = 0;
+
+    static  vku_object_type_e type_id_static() { return VKC_TYPE_FLOAT; }
     static vku::ref_t<float_t> create(double value) {
         auto ret = vku::ref_t<float_t>::create_obj_ref(std::make_unique<float_t>(), {});
         ret->value = value;
@@ -190,6 +198,8 @@ private:
 
 struct string_t : public vku::object_t {
     std::string value;
+
+    static  vku_object_type_e type_id_static() { return VKC_TYPE_STRING; }
     static vku::ref_t<string_t> create(const std::string& value) {
         auto ret = vku::ref_t<string_t>::create_obj_ref(std::make_unique<string_t>(), {});
         ret->value = value;
@@ -209,6 +219,8 @@ private:
 
 struct spirv_t : public vku::object_t {
     vku::spirv_t spirv;
+
+    static  vku_object_type_e type_id_static() { return VKC_TYPE_SPIRV; }
     static vku::ref_t<spirv_t> create(const vku::spirv_t& spirv) {
         auto ret = vku::ref_t<spirv_t>::create_obj_ref(std::make_unique<spirv_t>(), {});
         ret->spirv = spirv;
@@ -290,6 +302,8 @@ void mark_dependency_solved(std::string depend_name, vku::ref_t<vku::object_t> d
 
     DBG("Adding object: %s [%d]", depend->to_string().c_str(), new_id);
     objects_map[depend_name] = new_id;
+    depend->cbks = std::make_shared<vku::object_cbks_t>();
+    depend->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
     objects[new_id].obj = depend;
     objects[new_id].name = depend_name;
 
@@ -337,6 +351,7 @@ inline T get_enum_val(fkyaml::node &n) {
 }
 
 inline std::unordered_map<std::string, VkBufferUsageFlagBits> vk_buffer_usage_flag_bits_from_str = {
+    {"VK_BUFFER_USAGE_NONE", (VkBufferUsageFlagBits)0},
     {"VK_BUFFER_USAGE_TRANSFER_SRC_BIT",
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT},
     {"VK_BUFFER_USAGE_TRANSFER_DST_BIT",
@@ -417,6 +432,7 @@ template <> inline VkSharingMode get_enum_val<VkSharingMode>(fkyaml::node &n) {
 inline std::unordered_map<std::string, VkMemoryPropertyFlagBits>
         vk_memory_property_flag_bits_from_str =
 {
+    {"VK_MEMORY_PROPERTY_NONE", (VkMemoryPropertyFlagBits)0},
     {"VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT", VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT},
     {"VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT", VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT},
     {"VK_MEMORY_PROPERTY_HOST_COHERENT_BIT", VK_MEMORY_PROPERTY_HOST_COHERENT_BIT},
@@ -462,6 +478,7 @@ template <> inline VkPrimitiveTopology get_enum_val<VkPrimitiveTopology>(fkyaml:
 }
 
 inline std::unordered_map<std::string, VkImageAspectFlagBits> vk_image_aspect_flag_bits_from_str = {
+    {"VK_IMAGE_ASPECT_NONE", (VkImageAspectFlagBits)0},
     {"VK_IMAGE_ASPECT_COLOR_BIT", VK_IMAGE_ASPECT_COLOR_BIT},
     {"VK_IMAGE_ASPECT_DEPTH_BIT", VK_IMAGE_ASPECT_DEPTH_BIT},
     {"VK_IMAGE_ASPECT_STENCIL_BIT", VK_IMAGE_ASPECT_STENCIL_BIT},
@@ -481,6 +498,25 @@ inline std::unordered_map<std::string, VkImageAspectFlagBits> vk_image_aspect_fl
 template <> inline VkImageAspectFlagBits get_enum_val<VkImageAspectFlagBits>(fkyaml::node &n) {
     return get_enum_val(n, vk_image_aspect_flag_bits_from_str);
 }
+
+inline std::unordered_map<std::string, VkCommandBufferUsageFlagBits>
+        vk_command_buffer_usage_flag_bits_from_str =
+{
+    {"VK_COMMAND_BUFFER_USAGE_NONE", (VkCommandBufferUsageFlagBits)0},
+    {"VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT",
+            VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT},
+    {"VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT",
+            VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT},
+    {"VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT",
+            VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT},
+};
+
+template <> inline VkCommandBufferUsageFlagBits get_enum_val<VkCommandBufferUsageFlagBits>(
+        fkyaml::node &n)
+{
+    return get_enum_val(n, vk_command_buffer_usage_flag_bits_from_str);
+}
+
 
 inline auto get_from_map(auto &m, const std::string& str) {
     if (!has(m, str))
@@ -921,18 +957,6 @@ vku = require("vulkan_utils")
 
 print(debug.getregistry())
 
-function f1()
-    vku.cbuff:begin()
-end
-
-function f2()
-    f1()
-end
-
-function f3()
-    f2()
-end
-
 function on_loop_run()
     vku.glfw_pool_events() -- needed for keys to be available
     if vku.get_key(vku.window, vku.GLFW_KEY_ESCAPE) == vku.GLFW_PRESS then
@@ -943,8 +967,7 @@ function on_loop_run()
 
     -- do mvp update somehow?
 
-    f3()
-    vku.cbuff:begin()
+    vku.cbuff:begin(vku.VK_COMMAND_BUFFER_USAGE_NONE)
     vku.cbuff:begin_rpass(vku.fbs, img_idx)
     vku.cbuff:bind_vert_buffs(0, {{vku.vbuff, 0}})
     vku.cbuff:bind_idx_buff(vku.ibuff, 0, vku.VK_INDEX_TYPE_UINT16)
@@ -990,112 +1013,22 @@ inline int impl_TODO(lua_State *L) {
     return 0;
 }
 
-// inline lua_metatable_t lua_metatable[VKU_TYPE_CNT];
-// inline int init_lua_meta() {
-//     lua_metatable[VKU_TYPE_WINDOW].cbk =                 [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_INSTANCE].cbk =               [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_SURFACE].cbk =                [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_DEVICE].cbk =                 [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_SWAPCHAIN].cbk =              [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_SHADER].cbk =                 [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_RENDERPASS].cbk =             [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_PIPELINE].cbk =               [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_COMPUTE_PIPELINE].cbk =       [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_FRAMEBUFFERS].cbk =           [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_COMMAND_POOL].cbk =           [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_COMMAND_BUFFER].cbk =         [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_SEMAPHORE].cbk =              [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_FENCE].cbk =                  [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_BUFFER].cbk =                 [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_IMAGE].cbk =                  [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_IMAGE_VIEW].cbk =             [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_IMAGE_SAMPLER].cbk =          [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_DESCRIPTOR_SET].cbk =         [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_DESCRIPTOR_POOL].cbk =        [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_SAMPLER_BINDING].cbk =        [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_BUFFER_BINDING].cbk =         [](lua_State *L){ return 0; };
-//     lua_metatable[VKU_TYPE_BINDING_DESCRIPTOR_SET].cbk = [](lua_State *L){ return 0; };
-//     lua_metatable[VKC_TYPE_SPIRV].cbk =                  [](lua_State *L){ return 0; };
-//     lua_metatable[VKC_TYPE_STRING].cbk =                 [](lua_State *L){ return 0; };
-//     lua_metatable[VKC_TYPE_FLOAT].cbk =                  [](lua_State *L){ return 0; };
-//     lua_metatable[VKC_TYPE_INTEGER].cbk =                [](lua_State *L){ return 0; };
-//     lua_metatable[VKC_TYPE_LUA_SCRIPT].cbk =             [](lua_State *L){ return 0; };
-//     lua_metatable[VKC_TYPE_LUA_VARIABLE].cbk =           [](lua_State *L){ return 0; };
-// }
+inline int impl_TODO_ret0(lua_State *L) {
+    DBG_SCOPE();
+    lua_pushinteger(L, 0);
+    return 1;
+}
 
 inline const luaL_Reg vku_tab_funcs[] = {
     {"glfw_pool_events", impl_TODO},
     {"get_key", impl_TODO},
     {"signal_close", impl_TODO},
-    {"aquire_next_img", impl_TODO},
+    {"aquire_next_img", impl_TODO_ret0},
     {NULL, NULL}
 };
 
 inline void* luaw_to_user_data(int index) { return (void*)(intptr_t)(index); }
 inline int luaw_from_user_data(void *val) { return (int)(intptr_t)(val); }
-
-/* This is here just to hold the diverse bitmaps */
-template <typename T>
-struct bm_t { using type = T; };
-
-template <typename Param, size_t index>
-struct luaw_param_t{
-    void luaw_single_param(lua_State *L) {
-        /* What a parameter can be:
-        1. vku::ref_t of some object
-        2. a std::string
-        3. an integer bitmap
-        4. an integer */
-
-        /* If this is resolved to a void it will error out, which is ok, because this case is either
-        way an error */
-        demangle_static_assert<false, Param>(" - Is not a valid parameter type");
-    }
-};
-
-template <typename T, size_t index>
-struct luaw_param_t<vku::ref_t<T>, index> {
-    vku::ref_t<T> luaw_single_param(lua_State *L) {
-        if (lua_isnil(L, index))
-            return vku::ref_t<T>{}; /* if the user intended to pass a nill, we give it as a nullptr */
-        int obj_index = luaw_from_user_data(lua_touserdata(L, index));
-        if (obj_index == 0) {
-            luaw_push_error(L, std::format("Invalid parameter at index {} of expected type {}",
-                    index, demangle<T>));
-            lua_error(L);
-        }
-        return objects[obj_index].obj.to_derived<T>();
-    }
-};
-
-
-template <typename T, size_t index>
-struct luaw_param_t<bm_t<T>, index> {
-    T luaw_single_param(lua_State *L) {
-        /* TODO checks */
-        int64_t intval = lua_tointeger(L, index);
-        return (T)intval;
-    }
-};
-
-template <size_t index>
-struct luaw_param_t<char *, index> {
-    char *luaw_single_param(lua_State *L) {
-        /* TODO checks */
-        return lua_tostring(L, index);
-    }
-};
-
-template <typename T>
-void luaw_ret_push(lua_State *L, T&& t) {
-    (void)t;
-    demangle_static_assert<false, T>(" - Is not a valid return type");
-}
-
-template <>
-void luaw_ret_push<int>(lua_State *L, int&& x) {
-    lua_pushinteger(L, x);
-}
 
 void luaw_push_error(lua_State *L, std::string err_str) {
     lua_Debug ar;
@@ -1129,6 +1062,188 @@ void luaw_push_error(lua_State *L, std::string err_str) {
     }
     context += err_str;
     lua_pushstring(L, context.c_str());
+}
+
+const char *luaw_str_type(int luatype) {
+    switch (luatype) {
+        case LUA_TNONE:          return "none";
+        case LUA_TNIL:           return "nil";
+        case LUA_TBOOLEAN:       return "boolean";
+        case LUA_TLIGHTUSERDATA: return "lightuserdata";
+        case LUA_TNUMBER:        return "number";
+        case LUA_TSTRING:        return "string";
+        case LUA_TTABLE:         return "table";
+        case LUA_TFUNCTION:      return "function";
+        case LUA_TUSERDATA:      return "userdata";
+        case LUA_TTHREAD:        return "thread";
+        default: return "unknown_lua_type";
+    }
+}
+
+/* This is here just to hold the diverse bitmaps */
+template <typename T>
+struct bm_t { using type = T; };
+
+template <typename Param, size_t index>
+struct luaw_param_t{
+    void luaw_single_param(lua_State *L) {
+        /* What a parameter can be:
+        1. vku::ref_t of some object
+        2. a std::string
+        3. an integer bitmap
+        4. an integer */
+
+        /* If this is resolved to a void it will error out, which is ok, because this case is either
+        way an error */
+        demangle_static_assert<false, Param>(" - Is not a valid parameter type");
+    }
+};
+
+/* This resolves userdata(vku::ref) received from lua to an vku parameter */
+template <typename T, size_t index>
+struct luaw_param_t<vku::ref_t<T>, index> {
+    vku::ref_t<T> luaw_single_param(lua_State *L) {
+        if (lua_isnil(L, index))
+            return vku::ref_t<T>{}; /* if the user intended to pass a nill, we give it as a nullptr */
+        int obj_index = luaw_from_user_data(lua_touserdata(L, index));
+        if (obj_index == 0) {
+            luaw_push_error(L, std::format("Invalid parameter at index {} of expected type {} but "
+                    "got [{}] instead",
+                    index, demangle<T>(), luaw_str_type(lua_type(L, index))));
+            lua_error(L);
+        }
+        return objects[obj_index].obj.to_derived<T>();
+    }
+};
+
+/* This resolves bitmasks received from lua to an vku parameter */
+template <typename T, size_t index>
+struct luaw_param_t<bm_t<T>, index> {
+    T luaw_single_param(lua_State *L) {
+        /* There are 2 options here (maybe later we will also add numbers, but not for now):
+            1. This is a string that converts to the respective type bitmask
+            2. An integer, this will be converted to T
+            3. This is an enum value, either like 1. or 2. */
+        auto from_string = [](lua_State *L, int idx) -> T {
+            const char *val = lua_tostring(L, idx);
+            if (!val) {
+                luaw_push_error(L, std::format(
+                        "Invalid parameter at index {}, failed conversion to [vku-bitmask] "
+                        "object is an invalid string: [{}]",
+                        idx, luaw_str_type(lua_type(L, idx))));
+                lua_error(L);
+            }
+            fkyaml::node str_enum_val{val};
+            return get_enum_val<T>(str_enum_val);
+        };
+        auto from_integer = [](lua_State *L, int idx) -> T {
+            int valid = 0;
+            uint32_t val = lua_tointegerx(L, idx, &valid);
+            if (!valid) {
+                luaw_push_error(L, std::format(
+                        "Invalid parameter at index {}, failed conversion to [vku-bitmask] "
+                        "object is an invalid integer: [{}]",
+                        idx, luaw_str_type(lua_type(L, idx))));
+                lua_error(L);
+            }
+            return (T)val;
+        };
+        if (lua_isinteger(L, index)) {
+            return from_integer(L, (int)index);
+        }
+        else if (lua_isstring(L, index)) {
+            return from_string(L, (int)index);
+        } 
+        else if (lua_istable(L, index)) {
+            int len = lua_rawlen(L, index);
+            T ret = (T)0;
+            for (int i = 1; i <= len; i++) {
+                lua_rawgeti(L, index, i);
+                if (lua_isinteger(L, -1))
+                    ret = (T)(ret | from_integer(L, -1));
+                else if (lua_isstring(L, -1))
+                    ret = (T)(ret | from_string(L, -1));
+                else {
+                    luaw_push_error(L, std::format(
+                            "Invalid parameter at index {}, failed conversion to [vku-bitmask] "
+                            "object is an invalid string or integer: [{}]",
+                            index, luaw_str_type(lua_type(L, index))));
+                    lua_error(L);
+                }
+                lua_pop(L, 1);
+            }
+            return ret;
+        }
+        else {
+            luaw_push_error(L, std::format(
+                    "Invalid parameter at index {}, failed conversion to [vku-bitmask] "
+                    "object is neither table, integer or string: [{}]",
+                    index, luaw_str_type(lua_type(L, index))));
+            lua_error(L);
+            return (T)0;
+        }
+    }
+};
+
+/* This resolves integers received from lua to an vku parameter */
+template <std::integral Integer, size_t index>
+struct luaw_param_t<Integer, index> {
+    Integer luaw_single_param(lua_State *L) {
+        int valid = 0;
+        Integer ret = lua_tointegerx(L, index, &valid);
+        if (!valid) {
+            luaw_push_error(L,
+                    std::format("Invalid parameter at index {}, failed conversion to integer from "
+                    "[{}]",
+                    index, luaw_str_type(lua_type(L, index))));
+            lua_error(L);
+        }
+        return ret;
+    }
+};
+
+/* This resolves floats received from lua to an vku parameter */
+template <std::floating_point Float, size_t index>
+struct luaw_param_t<Float, index> {
+    Float luaw_single_param(lua_State *L) {
+        int valid = 0;
+        Float ret = lua_tonumberx(L, index, &valid);
+        if (!valid) {
+            luaw_push_error(L,
+                    std::format("Invalid parameter at index {}, failed conversion to integer from "
+                    "[{}]",
+                    index, luaw_str_type(lua_type(L, index))));
+            lua_error(L);
+        }
+        return ret;
+    }
+};
+
+/* This resolves strings received from lua to an vku parameter */
+template <size_t index>
+struct luaw_param_t<char *, index> {
+    char *luaw_single_param(lua_State *L) {
+        char *ret = lua_tostring(L, index);
+        if (!ret) {
+            luaw_push_error(L,
+                    std::format("Invalid parameter at index {}, failed conversion to string from "
+                    "[{}]",
+                    index, luaw_str_type(lua_type(L, index))));
+            lua_error(L);
+        }
+        return ret;
+    }
+};
+
+template <typename T>
+void luaw_ret_push(lua_State *L, T&& t) {
+    (void)t;
+    demangle_static_assert<false, T>(" - Is not a valid return type");
+}
+
+template <>
+void luaw_ret_push<int>(lua_State *L, int&& x) {
+    lua_pushinteger(L, x);
 }
 
 template <typename VkuT, auto member_ptr, typename ...Params, size_t ...I>
@@ -1194,22 +1309,113 @@ int luaw_member_function_wrapper(lua_State *L) {
     catch (...) { return luaw_catch_exception(L); }
 }
 
-template <typename VkuT, auto member_ptr, typename ...Params>
-void luaw_register_function(lua_State *L, const char *function_name) {
-    lua_CFunction f = &luaw_member_function_wrapper<VkuT, member_ptr, Params...>;
-    lua_pushcfunction(L, f);
-    lua_setfield(L, -2, function_name);
+
+// helper to detect if a type is vku::ref_t<...>
+template <typename>
+struct is_vku_ref_t : std::false_type {};
+
+template <typename T>
+struct is_vku_ref_t<vku::ref_t<T>> : std::true_type {};
+
+template <typename VkuT, auto member_ptr>
+int luaw_member_object_wrapper(lua_State *L) {
+    try {
+        int index = luaw_from_user_data(lua_touserdata(L, -2)); /* an int, ok on unwind */
+        if (index == 0) {
+            luaw_push_error(L, "Nil user object can't call member function!");
+            lua_error(L);
+        }
+        auto &o = objects[index];
+        if (!o.obj) {
+            luaw_push_error(L, "internal_error: Nil user object can't call member function!");
+            lua_error(L);
+        }
+        auto obj = o.obj.to_derived<VkuT>();
+        auto &member = obj.get()->*member_ptr;
+
+        using member_type = std::decay_t<decltype(member)>;
+
+        if constexpr (std::is_same_v<member_type, std::string>) {
+            lua_pushstring(L, member.c_str());
+            return 1;
+        }
+        else if constexpr (std::is_integral_v<member_type>) {
+            lua_pushinteger(L, member);
+            return 1;
+        }
+        else if constexpr (std::is_floating_point_v<member_type>) {
+            lua_pushnumber(L, member);
+            return 1;
+        }
+        else if constexpr (std::is_same_v<member_type, std::vector<std::string>>) {
+            lua_createtable(L, member.size(), 0);
+            for (size_t i = 1; auto &str : member) {
+                lua_pushstring(L, str.c_str());
+                lua_rawseti(L, -2, i++);
+            }
+            return 1;
+        }
+        else if constexpr (is_vku_ref_t<member_type>::value) {
+            if (!member) {
+                lua_pushnil(L);
+                return 1;
+            }
+            int member_id = (intptr_t)member->cbks->usr_ptr.get();
+            if (member_id >= objects.size() || member_id < 0) {
+                luaw_push_error(L, "internal_error: Integrity check failed");
+                lua_error(L);
+            }
+            lua_pushlightuserdata(L, luaw_to_user_data(member_id));
+            return 1;
+        }
+        else {
+            demangle_static_assert<false, decltype(member)>(" - Is not a valid member type");
+            return 0;
+        }
+    }
+    catch (...) { return luaw_catch_exception(L); }
 }
 
+enum luaw_member_e {
+    LUAW_MEMBER_FUNCTION,
+    LUAW_MEMBER_OBJECT,
+};
+struct luaw_member_t {
+    lua_CFunction fn;
+    luaw_member_e member_type;
+};
+inline std::unordered_map<std::string, luaw_member_t> lua_class_members[VKU_TYPE_CNT];
+
+template <typename VkuT, auto member_ptr, typename ...Params>
+void luaw_register_function(const char *function_name) {
+    lua_class_members[VkuT::type_id_static()][function_name] = luaw_member_t{
+        .fn = &luaw_member_function_wrapper<VkuT, member_ptr, Params...>,
+        .member_type = LUAW_MEMBER_FUNCTION
+    };
+}
+
+template <typename VkuT, auto member_ptr>
+void luaw_register_member_object(const char *member_name) {
+    lua_class_members[VkuT::type_id_static()][member_name] = luaw_member_t{
+        .fn = &luaw_member_object_wrapper<VkuT, member_ptr>,
+        .member_type = LUAW_MEMBER_OBJECT
+    };
+}
+
+#define VKC_REG_MEMB(obj_type, memb)    \
+luaw_register_member_object<            \
+/* self        */   obj_type,           \
+/* member      */   &obj_type::memb>    \
+/* member name */   (#memb)
+
+#define VKC_REG_FN(obj_type, fn, ...)   \
+luaw_register_function<                 \
+/* self     */  obj_type,               \
+/* function */  &obj_type::fn,          \
+/* params   */  ##__VA_ARGS__>          \
+/* fn name  */  (#fn)
+
 inline int luaopen_vku (lua_State *L) {
-
-    /* This is also a great example of how to register all the types:
-        - all the nmes will be registered and depending of their types
-        - all their members and functions will also be registered
-        - all the numbers will be also registered as integers
-        - each type that is not a constant will have a _t that holds the user ptr
-        */
-
     int top = lua_gettop(L);
 
     {
@@ -1218,12 +1424,41 @@ inline int luaopen_vku (lua_State *L) {
         /* params: 1.usrptr, 2.key -> returns: 1.value */
         lua_pushcfunction(L, [](lua_State *L) {
             DBG("__index: %d", lua_gettop(L));
+            int id = luaw_from_user_data(lua_touserdata(L, -2)); /* an int, ok on unwind */
+            const char *member_name = lua_tostring(L, -1); /* an const char *, ok on unwind */
 
-            lua_getmetatable(L, 1);             /* Get current object metatable */
-            lua_getfield(L, -1, "cbuff:begin"); /* Get the function from inside the metatable */
-            lua_remove(L, -2);                  /* pop lua_getmetatable */
+            DBG("usr_id: %d", id);
+            DBG("member_name: %s", member_name);
 
-            return 1;   /* we return the function */
+            auto &o = objects[id]; /* a reference, ok on unwind? (if err) */
+            if (!o.obj) {
+                luaw_push_error(L, std::format("invalid object id: {}", id));
+                lua_error(L);
+            }
+            vku_object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
+            if (class_id < 0 || class_id >= VKU_TYPE_CNT) {
+                luaw_push_error(L, std::format("invalid class id: {}", vku::to_string(class_id)));
+                lua_error(L);
+            }
+            if (!has(lua_class_members[class_id], member_name)) {
+                luaw_push_error(L, std::format("class id {} doesn't have member: {}",
+                        vku::to_string(class_id), member_name));
+                lua_error(L);
+            }
+            auto &member = lua_class_members[class_id][member_name];
+            if (member.member_type == LUAW_MEMBER_FUNCTION) {
+                lua_pushcfunction(L, member.fn);
+                return 1;
+            }
+            else if (member.member_type == LUAW_MEMBER_OBJECT) {
+                return member.fn(L);
+            } else {
+                luaw_push_error(L, std::format("NOT IMPLEMENTED YET: non-function member access"));
+                lua_error(L);
+            }
+            luaw_push_error(L, std::format("INTERNAL ERROR: shouldn't reach here"));
+            lua_error(L);
+            return 0;
         });
         lua_setfield(L, -2, "__index");
 
@@ -1231,23 +1466,56 @@ inline int luaopen_vku (lua_State *L) {
         lua_pushcfunction(L, [](lua_State *L) {
             DBG("__gc");
 
-            /* TODO: garbage collect the obhect */
-            (void)L;
+            int id = luaw_from_user_data(lua_touserdata(L, -1)); /* an int, ok on unwind */
+            auto &o = objects[id]; /* a reference, ok on unwind? (if err) */
+            if (!o.obj) {
+                return 0;
+            }
+
+            /* we clean it's name mapping, it's reference and free it's id */
+            objects_map.erase(o.name);
+            o = object_ref_t{};
+            free_objects.push(id);
             return 0;
         });
         lua_setfield(L, -2, "__gc");
 
-        /* params: 1.usrptr [2.error] */
-        lua_pushcfunction(L, [](lua_State *L) {
-            DBG("__close");
-            (void)L;
-            return 0;
-        });
-        lua_setfield(L, -2, "__close");
+        /* vku::window_t
+        ----------------------------------------------------------------------------------------- */
 
-        luaw_register_function<
-        /* self, fn */  vku::cmdbuff_t, &vku::cmdbuff_t::begin,
-        /* params   */  bm_t<VkCommandBufferUsageFlagBits>>(L, "cbuff:begin");
+        VKC_REG_MEMB(vku::window_t, window_name);
+        VKC_REG_MEMB(vku::window_t, width);
+        VKC_REG_MEMB(vku::window_t, height);
+
+        /* vku::instance_t
+        ----------------------------------------------------------------------------------------- */
+
+        VKC_REG_MEMB(vku::instance_t, app_name);
+        VKC_REG_MEMB(vku::instance_t, engine_name);
+        VKC_REG_MEMB(vku::instance_t, extensions);
+        VKC_REG_MEMB(vku::instance_t, layers);
+
+        /* vku::cmdbuff_t
+        ----------------------------------------------------------------------------------------- */
+
+        VKC_REG_FN(vku::cmdbuff_t, begin, bm_t<VkCommandBufferUsageFlagBits>);
+        VKC_REG_FN(vku::cmdbuff_t, begin_rpass, vku::ref_t<vku::framebuffs_t>, uint32_t);
+
+    // void begin_rpass(ref_t<framebuffs_t> fbs, uint32_t img_idx);
+    // void bind_vert_buffs(uint32_t first_bind,
+    //         std::vector<std::pair<ref_t<buffer_t>, VkDeviceSize>> buffs);
+    // void bind_desc_set(VkPipelineBindPoint bind_point, VkPipelineLayout pipeline_alyout,
+    //         ref_t<desc_set_t> desc_set);
+    // void bind_idx_buff(ref_t<buffer_t> ibuff, uint64_t off, VkIndexType idx_type);
+    // void draw(ref_t<pipeline_t> pl, uint64_t vert_cnt);
+    // void draw_idx(ref_t<pipeline_t> pl, uint64_t vert_cnt);
+    // void end_rpass();
+    // void end();
+
+    // void reset();
+
+    // void bind_compute(ref_t<compute_pipeline_t> cpl);
+    // void dispatch_compute(uint32_t x, uint32_t y = 1, uint32_t z = 1);
 
         lua_pushstring(L, "locked");
         lua_setfield(L, -2, "__metatable");
@@ -1269,11 +1537,31 @@ inline int luaopen_vku (lua_State *L) {
 
         luaL_newlib(L, vku_tab_funcs);
 
-        /* this makes vulkan_utils.cbuff = &false_user_data and sets it's metadata */
-        int false_user_data = 22;
-        lua_pushlightuserdata(L, luaw_to_user_data(false_user_data));
-        luaL_setmetatable(L, "__vku_metatable");
-        lua_setfield(L, -2, "cbuff");
+        for (auto &[k, id] : objects_map) {
+            if (!objects[id].obj) {
+                DBG("Null user object?");
+            }
+            DBG("Registering object: %s", k.c_str());
+            /* this makes vulkan_utils.key = object_id and sets it's metadata */
+            lua_pushlightuserdata(L, luaw_to_user_data(id));
+            luaL_setmetatable(L, "__vku_metatable");
+            lua_setfield(L, -2, k.c_str());
+        }
+
+        auto register_flag_mapping = [](lua_State *L, auto &mapping) {
+            for (auto& [k, v] : mapping) {
+                lua_pushinteger(L, (uint32_t)v);
+                lua_setfield(L, -2, k.c_str());
+            }
+        };
+
+        register_flag_mapping(L, vk_command_buffer_usage_flag_bits_from_str);
+        register_flag_mapping(L, vk_image_aspect_flag_bits_from_str);
+        register_flag_mapping(L, vk_primitive_topology_from_str);
+        register_flag_mapping(L, vk_memory_property_flag_bits_from_str);
+        register_flag_mapping(L, vk_sharing_mode_from_str);
+        register_flag_mapping(L, vk_buffer_usage_flag_bits_from_str);
+        register_flag_mapping(L, shader_stage_from_string);
     }
 
     DBG("top: %d gettop: %d", top, lua_gettop(L));
@@ -1281,6 +1569,9 @@ inline int luaopen_vku (lua_State *L) {
 
     return 1;
 }
+
+#undef VKC_REG_MEMB
+#undef VKC_REG_FN
 
 inline lua_State *lua_state;
 inline vkc_error_e luaw_init() {

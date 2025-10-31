@@ -44,11 +44,31 @@
 # include <unistd.h>
 # include <sys/mman.h>
 #elif (defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__NT__))
-# define NOMINMAX
+# ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN   // Exclude rarely-used Windows headers
+#  define MMCB_UNDEF_WIN32_LEAN_AND_MEAN
+# endif
+# ifndef NOMINMAX
+#  define NOMINMAX              // Prevent Windows from defining min/max macros
+#  define MMCB_UNDEF_WIN32_NOMINMAX
+# endif
+# ifndef _WIN32_WINNT
+#  define _WIN32_WINNT 0x0501   // Windows XP
+#  define COLIB_UNDEF_WIN32_WINNT
+# endif
 # include <Windows.h>
 # include <memoryapi.h>
-# ifndef VirtualAlloc2
-#  define MMCB_LOAD_OWN_MEMFNS
+# ifdef MMCB_UNDEF_WIN32_LEAN_AND_MEAN
+#  undef WIN32_LEAN_AND_MEAN
+#  undef MMCB_UNDEF_WIN32_LEAN_AND_MEAN
+# endif
+# ifdef MMCB_UNDEF_WIN32_NOMINMAX
+#  undef NOMINMAX
+#  undef MMCB_UNDEF_WIN32_NOMINMAX
+# endif
+# ifdef MMCB_UNDEF_WIN32_WINNT
+#  undef _WIN32_WINNT
+#  undef MMCB_UNDEF_WIN32_WINNT
 # endif
 #endif
 
@@ -88,19 +108,6 @@ protected:
     int _mem_fd = -1;
 #elif (defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__NT__))
     HANDLE _mem_fd = NULL;
-
-#ifdef MMCB_LOAD_OWN_MEMFNS
-    using VirtualAlloc2_t = PVOID(*)(HANDLE, PVOID, SIZE_T, ULONG, ULONG,
-            MEM_EXTENDED_PARAMETER*, ULONG);
-    using UnmapViewOfFileEx_t = BOOL(*)(PVOID, ULONG);
-    using MapViewOfFile3_t = PVOID(*)(HANDLE, HANDLE, PVOID, ULONG64, SIZE_T, ULONG, ULONG,
-            MEM_EXTENDED_PARAMETER*, ULONG);
-
-    static HMODULE kernel32_lib;
-    static VirtualAlloc2_t VirtualAlloc2;
-    static UnmapViewOfFileEx_t UnmapViewOfFileEx;
-    static MapViewOfFile3_t MapViewOfFile3;
-#endif
 
 #endif
 };
@@ -201,13 +208,6 @@ inline int mmcb_t::uninit() {
 #elif (defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__NT__)) /* end linux */
 
 
-#ifdef MMCB_LOAD_OWN_MEMFNS
-inline HMODULE mmcb_t::kernel32_lib = nullptr;
-inline mmcb_t::VirtualAlloc2_t mmcb_t::VirtualAlloc2 = nullptr;
-inline mmcb_t::UnmapViewOfFileEx_t mmcb_t::UnmapViewOfFileEx = nullptr;
-inline mmcb_t::MapViewOfFile3_t mmcb_t::MapViewOfFile3 = nullptr;
-#endif
-
 inline int mmcb_t::init(size_t size, mmcb_e flags) {
     SYSTEM_INFO sys_info;
 
@@ -228,19 +228,6 @@ inline int mmcb_t::init(size_t size, mmcb_e flags) {
     }
     _size = size;
     _flags = flags;
-
-#ifdef MMCB_LOAD_OWN_MEMFNS
-    if (!kernel32_lib) {
-        kernel32_lib = LoadLibraryA("kernel32.dll");
-        VirtualAlloc2 = (VirtualAlloc2_t)GetProcAddress(kernel32_lib, "VirtualAlloc2");
-        UnmapViewOfFileEx = (UnmapViewOfFileEx_t)GetProcAddress(kernel32_lib, "UnmapViewOfFileEx");
-        MapViewOfFile3 = (MapViewOfFile3_t)GetProcAddress(kernel32_lib, "MapViewOfFile3");
-        if (!VirtualAlloc2 || !UnmapViewOfFileEx || !MapViewOfFile3) {
-            DBGE("Failed to get memory functions");
-            return -1;
-        }
-    }
-#endif
 
     _mem_fd = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, (DWORD)(_size >> 32),
             (DWORD)(_size & 0xffffffff), NULL);

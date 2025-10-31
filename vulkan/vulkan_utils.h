@@ -290,11 +290,11 @@ struct object_t {
     virtual vku_object_type_e type_id() const = 0;
     virtual std::string to_string() const = 0;
 
+    std::shared_ptr<object_cbks_t> cbks;
+
 private:
     virtual VkResult _init() = 0;
     virtual VkResult _uninit() { return VK_SUCCESS; };
-
-    std::shared_ptr<object_cbks_t> cbks;
 };
 
 /*!
@@ -535,6 +535,7 @@ struct window_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_WINDOW; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_WINDOW; }
     GLFWwindow *get_window() const { return _window; }
 
 private:
@@ -548,14 +549,15 @@ struct instance_t : public object_t {
     VkInstance                  vk_instance; /* TODO: figure out if those need getter */
     VkDebugUtilsMessengerEXT    vk_dbg_messenger;
 
-    std::string app_name;
-    std::string engine_name;
-    std::vector<std::string> extensions;
-    std::vector<std::string> layers;
+    std::string                 app_name;
+    std::string                 engine_name;
+    std::vector<std::string>    extensions;
+    std::vector<std::string>    layers;
 
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_INSTANCE; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_INSTANCE; }
     static ref_t<instance_t> create(
             const std::string app_name = "vku::app_name_placeholder",
             const std::string engine_name = "vku::engine_name_placeholder",
@@ -577,6 +579,7 @@ struct surface_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_SURFACE; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_SURFACE; }
     static ref_t<surface_t> create(ref_t<window_t> window, ref_t<instance_t> inst);
 
 private:
@@ -597,6 +600,7 @@ struct device_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_DEVICE; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_DEVICE; }
     static ref_t<device_t> create(ref_t<surface_t> surf);
 
 private:
@@ -620,6 +624,7 @@ struct swapchain_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_SWAPCHAIN; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_SWAPCHAIN; }
     static ref_t<swapchain_t> create(ref_t<device_t> dev);
 
 private:
@@ -639,6 +644,7 @@ struct shader_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_SHADER; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_SHADER; }
     /* not init from path */
     static ref_t<shader_t> create(ref_t<device_t> dev, const spirv_t& spirv);
 
@@ -659,6 +665,7 @@ struct renderpass_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_RENDERPASS; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_RENDERPASS; }
     static ref_t<renderpass_t> create(ref_t<swapchain_t> swc);
 
 private:
@@ -682,6 +689,7 @@ struct pipeline_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_PIPELINE; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_PIPELINE; }
     static ref_t<pipeline_t> create(
             int                                 width,
             int                                 height,
@@ -708,6 +716,7 @@ struct compute_pipeline_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_COMPUTE_PIPELINE; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_COMPUTE_PIPELINE; }
     static ref_t<compute_pipeline_t> create(
             ref_t<device_t>             dev,
             ref_t<shader_t>             shader,
@@ -727,6 +736,7 @@ struct framebuffs_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_FRAMEBUFFERS; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_FRAMEBUFFERS; }
     static ref_t<framebuffs_t> create(ref_t<renderpass_t> rp);
 
 private:
@@ -743,6 +753,7 @@ struct cmdpool_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_COMMAND_POOL; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_COMMAND_POOL; }
     static ref_t<cmdpool_t> create(ref_t<device_t> dev);
 
 private:
@@ -759,6 +770,7 @@ struct cmdbuff_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_COMMAND_BUFFER; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_COMMAND_BUFFER; }
     static ref_t<cmdbuff_t> create(ref_t<cmdpool_t> cp, bool host_free = false);
 
     void begin(VkCommandBufferUsageFlags flags);
@@ -806,6 +818,7 @@ struct fence_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_FENCE; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_FENCE; }
     static ref_t<fence_t> create(ref_t<device_t> dev, VkFenceCreateFlags flags = 0);
 
 private:
@@ -827,6 +840,7 @@ struct buffer_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_BUFFER; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_BUFFER; }
     static ref_t<buffer_t> create(
             ref_t<device_t>         dev,
             size_t                  size,
@@ -856,6 +870,7 @@ struct image_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_IMAGE; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_IMAGE; }
     static ref_t<image_t> create(
             ref_t<device_t>     dev,
             uint32_t            width,
@@ -891,6 +906,7 @@ struct img_view_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_IMAGE_VIEW; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_IMAGE_VIEW; }
     static ref_t<img_view_t> create(ref_t<image_t> img, VkImageAspectFlags aspect_mask);
 
 private:
@@ -907,6 +923,7 @@ struct img_sampl_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_IMAGE_SAMPLER; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_IMAGE_SAMPLER; }
     static ref_t<img_sampl_t> create(ref_t<device_t> dev, VkFilter filter = VK_FILTER_LINEAR);
     static VkDescriptorSetLayoutBinding get_desc_set(uint32_t binding, VkShaderStageFlags stage);
 
@@ -925,6 +942,7 @@ struct desc_pool_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_POOL; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_POOL; }
     static ref_t<desc_pool_t> create(
             ref_t<device_t>             dev,
             ref_t<binding_desc_set_t>   bds,
@@ -945,6 +963,7 @@ struct desc_set_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET; }
     static ref_t<desc_set_t> create(
             ref_t<desc_pool_t>          dp,
             ref_t<pipeline_t>           pl,
@@ -976,6 +995,7 @@ struct binding_desc_set_t : public object_t {
         virtual vku_object_type_e type_id() const override { return VKU_TYPE_BUFFER_BINDING; }
         virtual std::string to_string() const override;
 
+        static  vku_object_type_e type_id_static() { return VKU_TYPE_BUFFER_BINDING; }
         static ref_t<buff_binding_t> create(
                 VkDescriptorSetLayoutBinding    desc,
                 ref_t<buffer_t>                 buff);
@@ -994,6 +1014,7 @@ struct binding_desc_set_t : public object_t {
         virtual vku_object_type_e type_id() const override { return VKU_TYPE_SAMPLER_BINDING; }
         virtual std::string to_string() const;
 
+        static  vku_object_type_e type_id_static() { return VKU_TYPE_SAMPLER_BINDING; }
         static ref_t<sampl_binding_t> create(
                 VkDescriptorSetLayoutBinding    desc,
                 ref_t<img_view_t>               view,
@@ -1008,6 +1029,7 @@ struct binding_desc_set_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_BINDING_DESCRIPTOR_SET; }
     virtual std::string to_string() const override;
 
+    static  vku_object_type_e type_id_static() { return VKU_TYPE_BINDING_DESCRIPTOR_SET; }
     static ref_t<binding_desc_set_t> create(std::vector<ref_t<binding_desc_t>> binds);
 
     std::vector<VkWriteDescriptorSet> get_writes() const;
