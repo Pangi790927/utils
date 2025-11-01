@@ -974,6 +974,19 @@ inline vkc_error_e parse_config(const char *path) {
     return VKC_ERROR_OK;
 }
 
+/* TODO:
+    - We need to be able to parse dicts to yaml and build objects from it (same as initial parse)
+    - We still need to fix some functions
+    - We need a generic way to store some special types (mvp for example)
+    - We need to fix the stupidity that is descriptors
+    - We need a way to set buffers (based on descripors maybe?)
+    - We need some new types (matrices, vectors)
+    - We need to make std::vector and std::map an acceptable parameter/return type
+    - We need to make std::tuple an acceptable parameter
+    - We need to expose the way that we pack functions and members to the outside
+            (so that an user can use them to add his own functions (that user is me))
+
+    Once those are done, I think this is done */
 
 inline std::string lua_example_str = R"___(
 vku = require("vulkan_utils")
@@ -995,7 +1008,7 @@ function on_loop_run()
     vku.cbuff:bind_vert_buffs(0, {{vku.vbuff, 0}})
     vku.cbuff:bind_idx_buff(vku.ibuff, 0, vku.VK_INDEX_TYPE_UINT16)
     vku.cbuff:bind_desc_set(vku.VK_PIPELINE_BIND_POINT_GRAPHICS, vku.pl, vku.desc_set)
-    vku.cbuff:draw_idx(vku.pl, indices.size())
+    vku.cbuff:draw_idx(vku.pl, 3)
     vku.cbuff:end_rpass()
     vku.cbuff:end_begin()
 
@@ -1018,37 +1031,29 @@ function on_window_resize(w, h)
 end
 )___";
 
-inline int impl_glfw_pool_events(lua_State *L) {
-    DBG_SCOPE();
-    (void)L;
-    return 0;
-}
+// inline int impl_glfw_pool_events(lua_State *L) {
+//     DBG_SCOPE();
+//     (void)L;
+//     return 0;
+// }
 
-inline int impl_get_key(lua_State *L) {
-    DBG_SCOPE();
-    (void)L;
-    return 0;
-}
+// inline int impl_get_key(lua_State *L) {
+//     DBG_SCOPE();
+//     (void)L;
+//     return 0;
+// }
 
-inline int impl_TODO(lua_State *L) {
-    DBG_SCOPE();
-    (void)L;
-    return 0;
-}
+// inline int impl_TODO(lua_State *L) {
+//     DBG_SCOPE();
+//     (void)L;
+//     return 0;
+// }
 
-inline int impl_TODO_ret0(lua_State *L) {
-    DBG_SCOPE();
-    lua_pushinteger(L, 0);
-    return 1;
-}
-
-inline const luaL_Reg vku_tab_funcs[] = {
-    {"glfw_pool_events", impl_TODO},
-    {"get_key", impl_TODO},
-    {"signal_close", impl_TODO},
-    {"aquire_next_img", impl_TODO_ret0},
-    {NULL, NULL}
-};
+// inline int impl_TODO_ret0(lua_State *L) {
+//     DBG_SCOPE();
+//     lua_pushinteger(L, 0);
+//     return 1;
+// }
 
 inline void* luaw_to_user_data(int index) { return (void*)(intptr_t)(index); }
 inline int luaw_from_user_data(void *val) { return (int)(intptr_t)(val); }
@@ -1315,14 +1320,34 @@ struct luaw_param_t<char *, index> {
 };
 
 template <typename T>
-void luaw_ret_push(lua_State *L, T&& t) {
-    (void)t;
-    demangle_static_assert<false, T>(" - Is not a valid return type");
-}
+struct luaw_returner_t {
+    void luaw_ret_push(lua_State *L, T&& t) {
+        (void)t;
+        demangle_static_assert<false, T>(" - Is not a valid return type");
+    }
+};
 
-template <>
-void luaw_ret_push<int>(lua_State *L, int&& x) {
-    lua_pushinteger(L, x);
+template <std::integral Integer>
+struct luaw_returner_t<Integer> {
+    void luaw_ret_push(lua_State *L, Integer&& x) {
+        lua_pushinteger(L, x);
+    }
+};
+
+template <auto function, typename ...Params, size_t ...I>
+int luaw_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
+    using RetType = decltype(function(
+            luaw_param_t<Params, I + 1>{}.luaw_single_param(L)...));
+
+    if constexpr (std::is_void_v<RetType>) {
+        function(luaw_param_t<Params, I + 1>{}.luaw_single_param(L)...);
+        return 0;
+    }
+    else {
+        luaw_returner_t<RetType>{}.luaw_ret_push(L, function(
+                luaw_param_t<Params, I + 1>{}.luaw_single_param(L)...));
+        return 1;
+    }    
 }
 
 template <typename VkuT, auto member_ptr, typename ...Params, size_t ...I>
@@ -1347,7 +1372,7 @@ int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
         return 0;
     }
     else {
-        luaw_ret_push(L, (obj.get()->*member_ptr)(
+        luaw_returner_t<RetType>{}.luaw_ret_push(L, (obj.get()->*member_ptr)(
                 luaw_param_t<Params, I + 2>{}.luaw_single_param(L)...));
         return 1;
     }    
@@ -1377,6 +1402,15 @@ int luaw_catch_exception(lua_State *L) {
     }
 
     return 0;
+}
+
+template <auto function, typename ...Params>
+int luaw_function_wrapper(lua_State *L) {
+    try {
+        return luaw_function_wrapper_impl<function, Params...>(
+                L, std::index_sequence_for<Params...>{});
+    }
+    catch (...) { return luaw_catch_exception(L); }
 }
 
 template <typename VkuT, auto member_ptr, typename ...Params>
@@ -1466,7 +1500,7 @@ struct luaw_member_t {
 inline std::unordered_map<std::string, luaw_member_t> lua_class_members[VKU_TYPE_CNT];
 
 template <typename VkuT, auto member_ptr, typename ...Params>
-void luaw_register_function(const char *function_name) {
+void luaw_register_member_function(const char *function_name) {
     lua_class_members[VkuT::type_id_static()][function_name] = luaw_member_t{
         .fn = &luaw_member_function_wrapper<VkuT, member_ptr, Params...>,
         .member_type = LUAW_MEMBER_FUNCTION
@@ -1488,11 +1522,43 @@ luaw_register_member_object<            \
 /* member name */   (#memb)
 
 #define VKC_REG_FN(obj_type, fn, ...)   \
-luaw_register_function<                 \
+luaw_register_member_function<          \
 /* self     */  obj_type,               \
 /* function */  &obj_type::fn,          \
 /* params   */  ##__VA_ARGS__>          \
 /* fn name  */  (#fn)
+
+inline void glfw_pool_events() {
+    glfwPollEvents();
+}
+
+inline uint32_t glfw_get_key(vku::ref_t<vku::window_t> window, uint32_t key) {
+    return glfwGetKey(window->get_window(), key);
+}
+
+inline void internal_signal_close() {
+    /* TODO: set loop closed */
+    DBG("TODO: set loop closed");
+}
+
+inline uint32_t internal_aquire_next_img(
+        vku::ref_t<vku::swapchain_t> swc, vku::ref_t<vku::sem_t> sem)
+{
+    uint32_t ret;
+    vku::aquire_next_img(swc, sem, &ret);
+    return ret;
+}
+
+inline const luaL_Reg vku_tab_funcs[] = {
+    {"glfw_pool_events", luaw_function_wrapper<glfw_pool_events> },
+    {"get_key", luaw_function_wrapper<glfw_get_key, vku::ref_t<vku::window_t>, uint32_t> },
+    {"signal_close", luaw_function_wrapper<internal_signal_close>},
+    {"aquire_next_img", luaw_function_wrapper<internal_aquire_next_img,
+            vku::ref_t<vku::swapchain_t>, vku::ref_t<vku::sem_t>>},
+    {NULL, NULL}
+};
+
+inline void luaw_set_glfw_fields(lua_State *L);
 
 inline int luaopen_vku (lua_State *L) {
     int top = lua_gettop(L);
@@ -1616,6 +1682,8 @@ inline int luaopen_vku (lua_State *L) {
 
         luaL_newlib(L, vku_tab_funcs);
 
+        luaw_set_glfw_fields(L); /* This adds all glfw enums tokens */
+
         for (auto &[k, id] : objects_map) {
             if (!objects[id].obj) {
                 DBG("Null user object?");
@@ -1713,6 +1781,591 @@ inline vkc_error_e luaw_execute_window_resize(int width, int height) {
         return VKC_ERROR_FAILED_CALL;
     }
     return VKC_ERROR_OK;
+}
+
+inline void luaw_set_glfw_fields(lua_State *L) {
+    lua_pushinteger(L, GLFW_VERSION_MAJOR);
+    lua_setfield(L, -2, "GLFW_VERSION_MAJOR"); 
+    lua_pushinteger(L, GLFW_VERSION_MINOR);
+    lua_setfield(L, -2, "GLFW_VERSION_MINOR"); 
+    lua_pushinteger(L, GLFW_VERSION_REVISION);
+    lua_setfield(L, -2, "GLFW_VERSION_REVISION"); 
+    lua_pushinteger(L, GLFW_TRUE);
+    lua_setfield(L, -2, "GLFW_TRUE"); 
+    lua_pushinteger(L, GLFW_FALSE);
+    lua_setfield(L, -2, "GLFW_FALSE"); 
+    lua_pushinteger(L, GLFW_RELEASE);
+    lua_setfield(L, -2, "GLFW_RELEASE"); 
+    lua_pushinteger(L, GLFW_PRESS);
+    lua_setfield(L, -2, "GLFW_PRESS"); 
+    lua_pushinteger(L, GLFW_REPEAT);
+    lua_setfield(L, -2, "GLFW_REPEAT"); 
+    lua_pushinteger(L, GLFW_HAT_CENTERED);
+    lua_setfield(L, -2, "GLFW_HAT_CENTERED"); 
+    lua_pushinteger(L, GLFW_HAT_UP);
+    lua_setfield(L, -2, "GLFW_HAT_UP"); 
+    lua_pushinteger(L, GLFW_HAT_RIGHT);
+    lua_setfield(L, -2, "GLFW_HAT_RIGHT"); 
+    lua_pushinteger(L, GLFW_HAT_DOWN);
+    lua_setfield(L, -2, "GLFW_HAT_DOWN"); 
+    lua_pushinteger(L, GLFW_HAT_LEFT);
+    lua_setfield(L, -2, "GLFW_HAT_LEFT"); 
+    lua_pushinteger(L, GLFW_HAT_RIGHT_UP);
+    lua_setfield(L, -2, "GLFW_HAT_RIGHT_UP"); 
+    lua_pushinteger(L, GLFW_HAT_RIGHT_DOWN);
+    lua_setfield(L, -2, "GLFW_HAT_RIGHT_DOWN"); 
+    lua_pushinteger(L, GLFW_HAT_LEFT_UP);
+    lua_setfield(L, -2, "GLFW_HAT_LEFT_UP"); 
+    lua_pushinteger(L, GLFW_HAT_LEFT_DOWN);
+    lua_setfield(L, -2, "GLFW_HAT_LEFT_DOWN"); 
+    lua_pushinteger(L, GLFW_KEY_UNKNOWN);
+    lua_setfield(L, -2, "GLFW_KEY_UNKNOWN"); 
+    lua_pushinteger(L, GLFW_KEY_SPACE);
+    lua_setfield(L, -2, "GLFW_KEY_SPACE"); 
+    lua_pushinteger(L, GLFW_KEY_APOSTROPHE);
+    lua_setfield(L, -2, "GLFW_KEY_APOSTROPHE"); 
+    lua_pushinteger(L, GLFW_KEY_COMMA);
+    lua_setfield(L, -2, "GLFW_KEY_COMMA"); 
+    lua_pushinteger(L, GLFW_KEY_MINUS);
+    lua_setfield(L, -2, "GLFW_KEY_MINUS"); 
+    lua_pushinteger(L, GLFW_KEY_PERIOD);
+    lua_setfield(L, -2, "GLFW_KEY_PERIOD"); 
+    lua_pushinteger(L, GLFW_KEY_SLASH);
+    lua_setfield(L, -2, "GLFW_KEY_SLASH"); 
+    lua_pushinteger(L, GLFW_KEY_0);
+    lua_setfield(L, -2, "GLFW_KEY_0"); 
+    lua_pushinteger(L, GLFW_KEY_1);
+    lua_setfield(L, -2, "GLFW_KEY_1"); 
+    lua_pushinteger(L, GLFW_KEY_2);
+    lua_setfield(L, -2, "GLFW_KEY_2"); 
+    lua_pushinteger(L, GLFW_KEY_3);
+    lua_setfield(L, -2, "GLFW_KEY_3"); 
+    lua_pushinteger(L, GLFW_KEY_4);
+    lua_setfield(L, -2, "GLFW_KEY_4"); 
+    lua_pushinteger(L, GLFW_KEY_5);
+    lua_setfield(L, -2, "GLFW_KEY_5"); 
+    lua_pushinteger(L, GLFW_KEY_6);
+    lua_setfield(L, -2, "GLFW_KEY_6"); 
+    lua_pushinteger(L, GLFW_KEY_7);
+    lua_setfield(L, -2, "GLFW_KEY_7"); 
+    lua_pushinteger(L, GLFW_KEY_8);
+    lua_setfield(L, -2, "GLFW_KEY_8"); 
+    lua_pushinteger(L, GLFW_KEY_9);
+    lua_setfield(L, -2, "GLFW_KEY_9"); 
+    lua_pushinteger(L, GLFW_KEY_SEMICOLON);
+    lua_setfield(L, -2, "GLFW_KEY_SEMICOLON"); 
+    lua_pushinteger(L, GLFW_KEY_EQUAL);
+    lua_setfield(L, -2, "GLFW_KEY_EQUAL"); 
+    lua_pushinteger(L, GLFW_KEY_A);
+    lua_setfield(L, -2, "GLFW_KEY_A"); 
+    lua_pushinteger(L, GLFW_KEY_B);
+    lua_setfield(L, -2, "GLFW_KEY_B"); 
+    lua_pushinteger(L, GLFW_KEY_C);
+    lua_setfield(L, -2, "GLFW_KEY_C"); 
+    lua_pushinteger(L, GLFW_KEY_D);
+    lua_setfield(L, -2, "GLFW_KEY_D"); 
+    lua_pushinteger(L, GLFW_KEY_E);
+    lua_setfield(L, -2, "GLFW_KEY_E"); 
+    lua_pushinteger(L, GLFW_KEY_F);
+    lua_setfield(L, -2, "GLFW_KEY_F"); 
+    lua_pushinteger(L, GLFW_KEY_G);
+    lua_setfield(L, -2, "GLFW_KEY_G"); 
+    lua_pushinteger(L, GLFW_KEY_H);
+    lua_setfield(L, -2, "GLFW_KEY_H"); 
+    lua_pushinteger(L, GLFW_KEY_I);
+    lua_setfield(L, -2, "GLFW_KEY_I"); 
+    lua_pushinteger(L, GLFW_KEY_J);
+    lua_setfield(L, -2, "GLFW_KEY_J"); 
+    lua_pushinteger(L, GLFW_KEY_K);
+    lua_setfield(L, -2, "GLFW_KEY_K"); 
+    lua_pushinteger(L, GLFW_KEY_L);
+    lua_setfield(L, -2, "GLFW_KEY_L"); 
+    lua_pushinteger(L, GLFW_KEY_M);
+    lua_setfield(L, -2, "GLFW_KEY_M"); 
+    lua_pushinteger(L, GLFW_KEY_N);
+    lua_setfield(L, -2, "GLFW_KEY_N"); 
+    lua_pushinteger(L, GLFW_KEY_O);
+    lua_setfield(L, -2, "GLFW_KEY_O"); 
+    lua_pushinteger(L, GLFW_KEY_P);
+    lua_setfield(L, -2, "GLFW_KEY_P"); 
+    lua_pushinteger(L, GLFW_KEY_Q);
+    lua_setfield(L, -2, "GLFW_KEY_Q"); 
+    lua_pushinteger(L, GLFW_KEY_R);
+    lua_setfield(L, -2, "GLFW_KEY_R"); 
+    lua_pushinteger(L, GLFW_KEY_S);
+    lua_setfield(L, -2, "GLFW_KEY_S"); 
+    lua_pushinteger(L, GLFW_KEY_T);
+    lua_setfield(L, -2, "GLFW_KEY_T"); 
+    lua_pushinteger(L, GLFW_KEY_U);
+    lua_setfield(L, -2, "GLFW_KEY_U"); 
+    lua_pushinteger(L, GLFW_KEY_V);
+    lua_setfield(L, -2, "GLFW_KEY_V"); 
+    lua_pushinteger(L, GLFW_KEY_W);
+    lua_setfield(L, -2, "GLFW_KEY_W"); 
+    lua_pushinteger(L, GLFW_KEY_X);
+    lua_setfield(L, -2, "GLFW_KEY_X"); 
+    lua_pushinteger(L, GLFW_KEY_Y);
+    lua_setfield(L, -2, "GLFW_KEY_Y"); 
+    lua_pushinteger(L, GLFW_KEY_Z);
+    lua_setfield(L, -2, "GLFW_KEY_Z"); 
+    lua_pushinteger(L, GLFW_KEY_LEFT_BRACKET);
+    lua_setfield(L, -2, "GLFW_KEY_LEFT_BRACKET"); 
+    lua_pushinteger(L, GLFW_KEY_BACKSLASH);
+    lua_setfield(L, -2, "GLFW_KEY_BACKSLASH"); 
+    lua_pushinteger(L, GLFW_KEY_RIGHT_BRACKET);
+    lua_setfield(L, -2, "GLFW_KEY_RIGHT_BRACKET"); 
+    lua_pushinteger(L, GLFW_KEY_GRAVE_ACCENT);
+    lua_setfield(L, -2, "GLFW_KEY_GRAVE_ACCENT"); 
+    lua_pushinteger(L, GLFW_KEY_WORLD_1);
+    lua_setfield(L, -2, "GLFW_KEY_WORLD_1"); 
+    lua_pushinteger(L, GLFW_KEY_WORLD_2);
+    lua_setfield(L, -2, "GLFW_KEY_WORLD_2"); 
+    lua_pushinteger(L, GLFW_KEY_ESCAPE);
+    lua_setfield(L, -2, "GLFW_KEY_ESCAPE"); 
+    lua_pushinteger(L, GLFW_KEY_ENTER);
+    lua_setfield(L, -2, "GLFW_KEY_ENTER"); 
+    lua_pushinteger(L, GLFW_KEY_TAB);
+    lua_setfield(L, -2, "GLFW_KEY_TAB"); 
+    lua_pushinteger(L, GLFW_KEY_BACKSPACE);
+    lua_setfield(L, -2, "GLFW_KEY_BACKSPACE"); 
+    lua_pushinteger(L, GLFW_KEY_INSERT);
+    lua_setfield(L, -2, "GLFW_KEY_INSERT"); 
+    lua_pushinteger(L, GLFW_KEY_DELETE);
+    lua_setfield(L, -2, "GLFW_KEY_DELETE"); 
+    lua_pushinteger(L, GLFW_KEY_RIGHT);
+    lua_setfield(L, -2, "GLFW_KEY_RIGHT"); 
+    lua_pushinteger(L, GLFW_KEY_LEFT);
+    lua_setfield(L, -2, "GLFW_KEY_LEFT"); 
+    lua_pushinteger(L, GLFW_KEY_DOWN);
+    lua_setfield(L, -2, "GLFW_KEY_DOWN"); 
+    lua_pushinteger(L, GLFW_KEY_UP);
+    lua_setfield(L, -2, "GLFW_KEY_UP"); 
+    lua_pushinteger(L, GLFW_KEY_PAGE_UP);
+    lua_setfield(L, -2, "GLFW_KEY_PAGE_UP"); 
+    lua_pushinteger(L, GLFW_KEY_PAGE_DOWN);
+    lua_setfield(L, -2, "GLFW_KEY_PAGE_DOWN"); 
+    lua_pushinteger(L, GLFW_KEY_HOME);
+    lua_setfield(L, -2, "GLFW_KEY_HOME"); 
+    lua_pushinteger(L, GLFW_KEY_END);
+    lua_setfield(L, -2, "GLFW_KEY_END"); 
+    lua_pushinteger(L, GLFW_KEY_CAPS_LOCK);
+    lua_setfield(L, -2, "GLFW_KEY_CAPS_LOCK"); 
+    lua_pushinteger(L, GLFW_KEY_SCROLL_LOCK);
+    lua_setfield(L, -2, "GLFW_KEY_SCROLL_LOCK"); 
+    lua_pushinteger(L, GLFW_KEY_NUM_LOCK);
+    lua_setfield(L, -2, "GLFW_KEY_NUM_LOCK"); 
+    lua_pushinteger(L, GLFW_KEY_PRINT_SCREEN);
+    lua_setfield(L, -2, "GLFW_KEY_PRINT_SCREEN"); 
+    lua_pushinteger(L, GLFW_KEY_PAUSE);
+    lua_setfield(L, -2, "GLFW_KEY_PAUSE"); 
+    lua_pushinteger(L, GLFW_KEY_F1);
+    lua_setfield(L, -2, "GLFW_KEY_F1"); 
+    lua_pushinteger(L, GLFW_KEY_F2);
+    lua_setfield(L, -2, "GLFW_KEY_F2"); 
+    lua_pushinteger(L, GLFW_KEY_F3);
+    lua_setfield(L, -2, "GLFW_KEY_F3"); 
+    lua_pushinteger(L, GLFW_KEY_F4);
+    lua_setfield(L, -2, "GLFW_KEY_F4"); 
+    lua_pushinteger(L, GLFW_KEY_F5);
+    lua_setfield(L, -2, "GLFW_KEY_F5"); 
+    lua_pushinteger(L, GLFW_KEY_F6);
+    lua_setfield(L, -2, "GLFW_KEY_F6"); 
+    lua_pushinteger(L, GLFW_KEY_F7);
+    lua_setfield(L, -2, "GLFW_KEY_F7"); 
+    lua_pushinteger(L, GLFW_KEY_F8);
+    lua_setfield(L, -2, "GLFW_KEY_F8"); 
+    lua_pushinteger(L, GLFW_KEY_F9);
+    lua_setfield(L, -2, "GLFW_KEY_F9"); 
+    lua_pushinteger(L, GLFW_KEY_F10);
+    lua_setfield(L, -2, "GLFW_KEY_F10"); 
+    lua_pushinteger(L, GLFW_KEY_F11);
+    lua_setfield(L, -2, "GLFW_KEY_F11"); 
+    lua_pushinteger(L, GLFW_KEY_F12);
+    lua_setfield(L, -2, "GLFW_KEY_F12"); 
+    lua_pushinteger(L, GLFW_KEY_F13);
+    lua_setfield(L, -2, "GLFW_KEY_F13"); 
+    lua_pushinteger(L, GLFW_KEY_F14);
+    lua_setfield(L, -2, "GLFW_KEY_F14"); 
+    lua_pushinteger(L, GLFW_KEY_F15);
+    lua_setfield(L, -2, "GLFW_KEY_F15"); 
+    lua_pushinteger(L, GLFW_KEY_F16);
+    lua_setfield(L, -2, "GLFW_KEY_F16"); 
+    lua_pushinteger(L, GLFW_KEY_F17);
+    lua_setfield(L, -2, "GLFW_KEY_F17"); 
+    lua_pushinteger(L, GLFW_KEY_F18);
+    lua_setfield(L, -2, "GLFW_KEY_F18"); 
+    lua_pushinteger(L, GLFW_KEY_F19);
+    lua_setfield(L, -2, "GLFW_KEY_F19"); 
+    lua_pushinteger(L, GLFW_KEY_F20);
+    lua_setfield(L, -2, "GLFW_KEY_F20"); 
+    lua_pushinteger(L, GLFW_KEY_F21);
+    lua_setfield(L, -2, "GLFW_KEY_F21"); 
+    lua_pushinteger(L, GLFW_KEY_F22);
+    lua_setfield(L, -2, "GLFW_KEY_F22"); 
+    lua_pushinteger(L, GLFW_KEY_F23);
+    lua_setfield(L, -2, "GLFW_KEY_F23"); 
+    lua_pushinteger(L, GLFW_KEY_F24);
+    lua_setfield(L, -2, "GLFW_KEY_F24"); 
+    lua_pushinteger(L, GLFW_KEY_F25);
+    lua_setfield(L, -2, "GLFW_KEY_F25"); 
+    lua_pushinteger(L, GLFW_KEY_KP_0);
+    lua_setfield(L, -2, "GLFW_KEY_KP_0"); 
+    lua_pushinteger(L, GLFW_KEY_KP_1);
+    lua_setfield(L, -2, "GLFW_KEY_KP_1"); 
+    lua_pushinteger(L, GLFW_KEY_KP_2);
+    lua_setfield(L, -2, "GLFW_KEY_KP_2"); 
+    lua_pushinteger(L, GLFW_KEY_KP_3);
+    lua_setfield(L, -2, "GLFW_KEY_KP_3"); 
+    lua_pushinteger(L, GLFW_KEY_KP_4);
+    lua_setfield(L, -2, "GLFW_KEY_KP_4"); 
+    lua_pushinteger(L, GLFW_KEY_KP_5);
+    lua_setfield(L, -2, "GLFW_KEY_KP_5"); 
+    lua_pushinteger(L, GLFW_KEY_KP_6);
+    lua_setfield(L, -2, "GLFW_KEY_KP_6"); 
+    lua_pushinteger(L, GLFW_KEY_KP_7);
+    lua_setfield(L, -2, "GLFW_KEY_KP_7"); 
+    lua_pushinteger(L, GLFW_KEY_KP_8);
+    lua_setfield(L, -2, "GLFW_KEY_KP_8"); 
+    lua_pushinteger(L, GLFW_KEY_KP_9);
+    lua_setfield(L, -2, "GLFW_KEY_KP_9"); 
+    lua_pushinteger(L, GLFW_KEY_KP_DECIMAL);
+    lua_setfield(L, -2, "GLFW_KEY_KP_DECIMAL"); 
+    lua_pushinteger(L, GLFW_KEY_KP_DIVIDE);
+    lua_setfield(L, -2, "GLFW_KEY_KP_DIVIDE"); 
+    lua_pushinteger(L, GLFW_KEY_KP_MULTIPLY);
+    lua_setfield(L, -2, "GLFW_KEY_KP_MULTIPLY"); 
+    lua_pushinteger(L, GLFW_KEY_KP_SUBTRACT);
+    lua_setfield(L, -2, "GLFW_KEY_KP_SUBTRACT"); 
+    lua_pushinteger(L, GLFW_KEY_KP_ADD);
+    lua_setfield(L, -2, "GLFW_KEY_KP_ADD"); 
+    lua_pushinteger(L, GLFW_KEY_KP_ENTER);
+    lua_setfield(L, -2, "GLFW_KEY_KP_ENTER"); 
+    lua_pushinteger(L, GLFW_KEY_KP_EQUAL);
+    lua_setfield(L, -2, "GLFW_KEY_KP_EQUAL"); 
+    lua_pushinteger(L, GLFW_KEY_LEFT_SHIFT);
+    lua_setfield(L, -2, "GLFW_KEY_LEFT_SHIFT"); 
+    lua_pushinteger(L, GLFW_KEY_LEFT_CONTROL);
+    lua_setfield(L, -2, "GLFW_KEY_LEFT_CONTROL"); 
+    lua_pushinteger(L, GLFW_KEY_LEFT_ALT);
+    lua_setfield(L, -2, "GLFW_KEY_LEFT_ALT"); 
+    lua_pushinteger(L, GLFW_KEY_LEFT_SUPER);
+    lua_setfield(L, -2, "GLFW_KEY_LEFT_SUPER"); 
+    lua_pushinteger(L, GLFW_KEY_RIGHT_SHIFT);
+    lua_setfield(L, -2, "GLFW_KEY_RIGHT_SHIFT"); 
+    lua_pushinteger(L, GLFW_KEY_RIGHT_CONTROL);
+    lua_setfield(L, -2, "GLFW_KEY_RIGHT_CONTROL"); 
+    lua_pushinteger(L, GLFW_KEY_RIGHT_ALT);
+    lua_setfield(L, -2, "GLFW_KEY_RIGHT_ALT"); 
+    lua_pushinteger(L, GLFW_KEY_RIGHT_SUPER);
+    lua_setfield(L, -2, "GLFW_KEY_RIGHT_SUPER"); 
+    lua_pushinteger(L, GLFW_KEY_MENU);
+    lua_setfield(L, -2, "GLFW_KEY_MENU"); 
+    lua_pushinteger(L, GLFW_KEY_LAST);
+    lua_setfield(L, -2, "GLFW_KEY_LAST"); 
+    lua_pushinteger(L, GLFW_MOD_SHIFT);
+    lua_setfield(L, -2, "GLFW_MOD_SHIFT"); 
+    lua_pushinteger(L, GLFW_MOD_CONTROL);
+    lua_setfield(L, -2, "GLFW_MOD_CONTROL"); 
+    lua_pushinteger(L, GLFW_MOD_ALT);
+    lua_setfield(L, -2, "GLFW_MOD_ALT"); 
+    lua_pushinteger(L, GLFW_MOD_SUPER);
+    lua_setfield(L, -2, "GLFW_MOD_SUPER"); 
+    lua_pushinteger(L, GLFW_MOD_CAPS_LOCK);
+    lua_setfield(L, -2, "GLFW_MOD_CAPS_LOCK"); 
+    lua_pushinteger(L, GLFW_MOD_NUM_LOCK);
+    lua_setfield(L, -2, "GLFW_MOD_NUM_LOCK"); 
+    lua_pushinteger(L, GLFW_MOUSE_BUTTON_1);
+    lua_setfield(L, -2, "GLFW_MOUSE_BUTTON_1"); 
+    lua_pushinteger(L, GLFW_MOUSE_BUTTON_2);
+    lua_setfield(L, -2, "GLFW_MOUSE_BUTTON_2"); 
+    lua_pushinteger(L, GLFW_MOUSE_BUTTON_3);
+    lua_setfield(L, -2, "GLFW_MOUSE_BUTTON_3"); 
+    lua_pushinteger(L, GLFW_MOUSE_BUTTON_4);
+    lua_setfield(L, -2, "GLFW_MOUSE_BUTTON_4"); 
+    lua_pushinteger(L, GLFW_MOUSE_BUTTON_5);
+    lua_setfield(L, -2, "GLFW_MOUSE_BUTTON_5"); 
+    lua_pushinteger(L, GLFW_MOUSE_BUTTON_6);
+    lua_setfield(L, -2, "GLFW_MOUSE_BUTTON_6"); 
+    lua_pushinteger(L, GLFW_MOUSE_BUTTON_7);
+    lua_setfield(L, -2, "GLFW_MOUSE_BUTTON_7"); 
+    lua_pushinteger(L, GLFW_MOUSE_BUTTON_8);
+    lua_setfield(L, -2, "GLFW_MOUSE_BUTTON_8"); 
+    lua_pushinteger(L, GLFW_MOUSE_BUTTON_LAST);
+    lua_setfield(L, -2, "GLFW_MOUSE_BUTTON_LAST"); 
+    lua_pushinteger(L, GLFW_MOUSE_BUTTON_LEFT);
+    lua_setfield(L, -2, "GLFW_MOUSE_BUTTON_LEFT"); 
+    lua_pushinteger(L, GLFW_MOUSE_BUTTON_RIGHT);
+    lua_setfield(L, -2, "GLFW_MOUSE_BUTTON_RIGHT"); 
+    lua_pushinteger(L, GLFW_MOUSE_BUTTON_MIDDLE);
+    lua_setfield(L, -2, "GLFW_MOUSE_BUTTON_MIDDLE"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_1);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_1"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_2);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_2"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_3);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_3"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_4);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_4"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_5);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_5"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_6);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_6"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_7);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_7"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_8);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_8"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_9);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_9"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_10);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_10"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_11);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_11"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_12);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_12"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_13);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_13"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_14);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_14"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_15);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_15"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_16);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_16"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_LAST);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_LAST"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_A);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_A"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_B);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_B"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_X);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_X"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_Y);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_Y"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_LEFT_BUMPER);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_LEFT_BUMPER"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_BACK);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_BACK"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_START);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_START"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_GUIDE);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_GUIDE"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_LEFT_THUMB);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_LEFT_THUMB"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_RIGHT_THUMB);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_RIGHT_THUMB"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_DPAD_UP);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_DPAD_UP"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_DPAD_RIGHT);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_DPAD_RIGHT"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_DPAD_DOWN);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_DPAD_DOWN"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_DPAD_LEFT);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_DPAD_LEFT"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_LAST);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_LAST"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_CROSS);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_CROSS"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_CIRCLE);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_CIRCLE"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_SQUARE);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_SQUARE"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_BUTTON_TRIANGLE);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_BUTTON_TRIANGLE"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_AXIS_LEFT_X);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_AXIS_LEFT_X"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_AXIS_LEFT_Y);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_AXIS_LEFT_Y"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_AXIS_RIGHT_X);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_AXIS_RIGHT_X"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_AXIS_RIGHT_Y);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_AXIS_RIGHT_Y"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_AXIS_LEFT_TRIGGER);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_AXIS_LEFT_TRIGGER"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER"); 
+    lua_pushinteger(L, GLFW_GAMEPAD_AXIS_LAST);
+    lua_setfield(L, -2, "GLFW_GAMEPAD_AXIS_LAST"); 
+    lua_pushinteger(L, GLFW_NO_ERROR);
+    lua_setfield(L, -2, "GLFW_NO_ERROR"); 
+    lua_pushinteger(L, GLFW_NOT_INITIALIZED);
+    lua_setfield(L, -2, "GLFW_NOT_INITIALIZED"); 
+    lua_pushinteger(L, GLFW_NO_CURRENT_CONTEXT);
+    lua_setfield(L, -2, "GLFW_NO_CURRENT_CONTEXT"); 
+    lua_pushinteger(L, GLFW_INVALID_ENUM);
+    lua_setfield(L, -2, "GLFW_INVALID_ENUM"); 
+    lua_pushinteger(L, GLFW_INVALID_VALUE);
+    lua_setfield(L, -2, "GLFW_INVALID_VALUE"); 
+    lua_pushinteger(L, GLFW_OUT_OF_MEMORY);
+    lua_setfield(L, -2, "GLFW_OUT_OF_MEMORY"); 
+    lua_pushinteger(L, GLFW_API_UNAVAILABLE);
+    lua_setfield(L, -2, "GLFW_API_UNAVAILABLE"); 
+    lua_pushinteger(L, GLFW_VERSION_UNAVAILABLE);
+    lua_setfield(L, -2, "GLFW_VERSION_UNAVAILABLE"); 
+    lua_pushinteger(L, GLFW_PLATFORM_ERROR);
+    lua_setfield(L, -2, "GLFW_PLATFORM_ERROR"); 
+    lua_pushinteger(L, GLFW_FORMAT_UNAVAILABLE);
+    lua_setfield(L, -2, "GLFW_FORMAT_UNAVAILABLE"); 
+    lua_pushinteger(L, GLFW_NO_WINDOW_CONTEXT);
+    lua_setfield(L, -2, "GLFW_NO_WINDOW_CONTEXT"); 
+    lua_pushinteger(L, GLFW_FOCUSED);
+    lua_setfield(L, -2, "GLFW_FOCUSED"); 
+    lua_pushinteger(L, GLFW_ICONIFIED);
+    lua_setfield(L, -2, "GLFW_ICONIFIED"); 
+    lua_pushinteger(L, GLFW_RESIZABLE);
+    lua_setfield(L, -2, "GLFW_RESIZABLE"); 
+    lua_pushinteger(L, GLFW_VISIBLE);
+    lua_setfield(L, -2, "GLFW_VISIBLE"); 
+    lua_pushinteger(L, GLFW_DECORATED);
+    lua_setfield(L, -2, "GLFW_DECORATED"); 
+    lua_pushinteger(L, GLFW_AUTO_ICONIFY);
+    lua_setfield(L, -2, "GLFW_AUTO_ICONIFY"); 
+    lua_pushinteger(L, GLFW_FLOATING);
+    lua_setfield(L, -2, "GLFW_FLOATING"); 
+    lua_pushinteger(L, GLFW_MAXIMIZED);
+    lua_setfield(L, -2, "GLFW_MAXIMIZED"); 
+    lua_pushinteger(L, GLFW_CENTER_CURSOR);
+    lua_setfield(L, -2, "GLFW_CENTER_CURSOR"); 
+    lua_pushinteger(L, GLFW_TRANSPARENT_FRAMEBUFFER);
+    lua_setfield(L, -2, "GLFW_TRANSPARENT_FRAMEBUFFER"); 
+    lua_pushinteger(L, GLFW_HOVERED);
+    lua_setfield(L, -2, "GLFW_HOVERED"); 
+    lua_pushinteger(L, GLFW_FOCUS_ON_SHOW);
+    lua_setfield(L, -2, "GLFW_FOCUS_ON_SHOW"); 
+    lua_pushinteger(L, GLFW_RED_BITS);
+    lua_setfield(L, -2, "GLFW_RED_BITS"); 
+    lua_pushinteger(L, GLFW_GREEN_BITS);
+    lua_setfield(L, -2, "GLFW_GREEN_BITS"); 
+    lua_pushinteger(L, GLFW_BLUE_BITS);
+    lua_setfield(L, -2, "GLFW_BLUE_BITS"); 
+    lua_pushinteger(L, GLFW_ALPHA_BITS);
+    lua_setfield(L, -2, "GLFW_ALPHA_BITS"); 
+    lua_pushinteger(L, GLFW_DEPTH_BITS);
+    lua_setfield(L, -2, "GLFW_DEPTH_BITS"); 
+    lua_pushinteger(L, GLFW_STENCIL_BITS);
+    lua_setfield(L, -2, "GLFW_STENCIL_BITS"); 
+    lua_pushinteger(L, GLFW_ACCUM_RED_BITS);
+    lua_setfield(L, -2, "GLFW_ACCUM_RED_BITS"); 
+    lua_pushinteger(L, GLFW_ACCUM_GREEN_BITS);
+    lua_setfield(L, -2, "GLFW_ACCUM_GREEN_BITS"); 
+    lua_pushinteger(L, GLFW_ACCUM_BLUE_BITS);
+    lua_setfield(L, -2, "GLFW_ACCUM_BLUE_BITS"); 
+    lua_pushinteger(L, GLFW_ACCUM_ALPHA_BITS);
+    lua_setfield(L, -2, "GLFW_ACCUM_ALPHA_BITS"); 
+    lua_pushinteger(L, GLFW_AUX_BUFFERS);
+    lua_setfield(L, -2, "GLFW_AUX_BUFFERS"); 
+    lua_pushinteger(L, GLFW_STEREO);
+    lua_setfield(L, -2, "GLFW_STEREO"); 
+    lua_pushinteger(L, GLFW_SAMPLES);
+    lua_setfield(L, -2, "GLFW_SAMPLES"); 
+    lua_pushinteger(L, GLFW_SRGB_CAPABLE);
+    lua_setfield(L, -2, "GLFW_SRGB_CAPABLE"); 
+    lua_pushinteger(L, GLFW_REFRESH_RATE);
+    lua_setfield(L, -2, "GLFW_REFRESH_RATE"); 
+    lua_pushinteger(L, GLFW_DOUBLEBUFFER);
+    lua_setfield(L, -2, "GLFW_DOUBLEBUFFER"); 
+    lua_pushinteger(L, GLFW_CLIENT_API);
+    lua_setfield(L, -2, "GLFW_CLIENT_API"); 
+    lua_pushinteger(L, GLFW_CONTEXT_VERSION_MAJOR);
+    lua_setfield(L, -2, "GLFW_CONTEXT_VERSION_MAJOR"); 
+    lua_pushinteger(L, GLFW_CONTEXT_VERSION_MINOR);
+    lua_setfield(L, -2, "GLFW_CONTEXT_VERSION_MINOR"); 
+    lua_pushinteger(L, GLFW_CONTEXT_REVISION);
+    lua_setfield(L, -2, "GLFW_CONTEXT_REVISION"); 
+    lua_pushinteger(L, GLFW_CONTEXT_ROBUSTNESS);
+    lua_setfield(L, -2, "GLFW_CONTEXT_ROBUSTNESS"); 
+    lua_pushinteger(L, GLFW_OPENGL_FORWARD_COMPAT);
+    lua_setfield(L, -2, "GLFW_OPENGL_FORWARD_COMPAT"); 
+    lua_pushinteger(L, GLFW_OPENGL_DEBUG_CONTEXT);
+    lua_setfield(L, -2, "GLFW_OPENGL_DEBUG_CONTEXT"); 
+    lua_pushinteger(L, GLFW_OPENGL_PROFILE);
+    lua_setfield(L, -2, "GLFW_OPENGL_PROFILE"); 
+    lua_pushinteger(L, GLFW_CONTEXT_RELEASE_BEHAVIOR);
+    lua_setfield(L, -2, "GLFW_CONTEXT_RELEASE_BEHAVIOR"); 
+    lua_pushinteger(L, GLFW_CONTEXT_NO_ERROR);
+    lua_setfield(L, -2, "GLFW_CONTEXT_NO_ERROR"); 
+    lua_pushinteger(L, GLFW_CONTEXT_CREATION_API);
+    lua_setfield(L, -2, "GLFW_CONTEXT_CREATION_API"); 
+    lua_pushinteger(L, GLFW_SCALE_TO_MONITOR);
+    lua_setfield(L, -2, "GLFW_SCALE_TO_MONITOR"); 
+    lua_pushinteger(L, GLFW_COCOA_RETINA_FRAMEBUFFER);
+    lua_setfield(L, -2, "GLFW_COCOA_RETINA_FRAMEBUFFER"); 
+    lua_pushinteger(L, GLFW_COCOA_FRAME_NAME);
+    lua_setfield(L, -2, "GLFW_COCOA_FRAME_NAME"); 
+    lua_pushinteger(L, GLFW_COCOA_GRAPHICS_SWITCHING);
+    lua_setfield(L, -2, "GLFW_COCOA_GRAPHICS_SWITCHING"); 
+    lua_pushinteger(L, GLFW_X11_CLASS_NAME);
+    lua_setfield(L, -2, "GLFW_X11_CLASS_NAME"); 
+    lua_pushinteger(L, GLFW_X11_INSTANCE_NAME);
+    lua_setfield(L, -2, "GLFW_X11_INSTANCE_NAME"); 
+    lua_pushinteger(L, GLFW_NO_API);
+    lua_setfield(L, -2, "GLFW_NO_API"); 
+    lua_pushinteger(L, GLFW_OPENGL_API);
+    lua_setfield(L, -2, "GLFW_OPENGL_API"); 
+    lua_pushinteger(L, GLFW_OPENGL_ES_API);
+    lua_setfield(L, -2, "GLFW_OPENGL_ES_API"); 
+    lua_pushinteger(L, GLFW_NO_ROBUSTNESS);
+    lua_setfield(L, -2, "GLFW_NO_ROBUSTNESS"); 
+    lua_pushinteger(L, GLFW_NO_RESET_NOTIFICATION);
+    lua_setfield(L, -2, "GLFW_NO_RESET_NOTIFICATION"); 
+    lua_pushinteger(L, GLFW_LOSE_CONTEXT_ON_RESET);
+    lua_setfield(L, -2, "GLFW_LOSE_CONTEXT_ON_RESET"); 
+    lua_pushinteger(L, GLFW_OPENGL_ANY_PROFILE);
+    lua_setfield(L, -2, "GLFW_OPENGL_ANY_PROFILE"); 
+    lua_pushinteger(L, GLFW_OPENGL_CORE_PROFILE);
+    lua_setfield(L, -2, "GLFW_OPENGL_CORE_PROFILE"); 
+    lua_pushinteger(L, GLFW_OPENGL_COMPAT_PROFILE);
+    lua_setfield(L, -2, "GLFW_OPENGL_COMPAT_PROFILE"); 
+    lua_pushinteger(L, GLFW_CURSOR);
+    lua_setfield(L, -2, "GLFW_CURSOR"); 
+    lua_pushinteger(L, GLFW_STICKY_KEYS);
+    lua_setfield(L, -2, "GLFW_STICKY_KEYS"); 
+    lua_pushinteger(L, GLFW_STICKY_MOUSE_BUTTONS);
+    lua_setfield(L, -2, "GLFW_STICKY_MOUSE_BUTTONS"); 
+    lua_pushinteger(L, GLFW_LOCK_KEY_MODS);
+    lua_setfield(L, -2, "GLFW_LOCK_KEY_MODS"); 
+    lua_pushinteger(L, GLFW_RAW_MOUSE_MOTION);
+    lua_setfield(L, -2, "GLFW_RAW_MOUSE_MOTION"); 
+    lua_pushinteger(L, GLFW_CURSOR_NORMAL);
+    lua_setfield(L, -2, "GLFW_CURSOR_NORMAL"); 
+    lua_pushinteger(L, GLFW_CURSOR_HIDDEN);
+    lua_setfield(L, -2, "GLFW_CURSOR_HIDDEN"); 
+    lua_pushinteger(L, GLFW_CURSOR_DISABLED);
+    lua_setfield(L, -2, "GLFW_CURSOR_DISABLED"); 
+    lua_pushinteger(L, GLFW_ANY_RELEASE_BEHAVIOR);
+    lua_setfield(L, -2, "GLFW_ANY_RELEASE_BEHAVIOR"); 
+    lua_pushinteger(L, GLFW_RELEASE_BEHAVIOR_FLUSH);
+    lua_setfield(L, -2, "GLFW_RELEASE_BEHAVIOR_FLUSH"); 
+    lua_pushinteger(L, GLFW_RELEASE_BEHAVIOR_NONE);
+    lua_setfield(L, -2, "GLFW_RELEASE_BEHAVIOR_NONE"); 
+    lua_pushinteger(L, GLFW_NATIVE_CONTEXT_API);
+    lua_setfield(L, -2, "GLFW_NATIVE_CONTEXT_API"); 
+    lua_pushinteger(L, GLFW_EGL_CONTEXT_API);
+    lua_setfield(L, -2, "GLFW_EGL_CONTEXT_API"); 
+    lua_pushinteger(L, GLFW_OSMESA_CONTEXT_API);
+    lua_setfield(L, -2, "GLFW_OSMESA_CONTEXT_API"); 
+    lua_pushinteger(L, GLFW_ARROW_CURSOR);
+    lua_setfield(L, -2, "GLFW_ARROW_CURSOR"); 
+    lua_pushinteger(L, GLFW_IBEAM_CURSOR);
+    lua_setfield(L, -2, "GLFW_IBEAM_CURSOR"); 
+    lua_pushinteger(L, GLFW_CROSSHAIR_CURSOR);
+    lua_setfield(L, -2, "GLFW_CROSSHAIR_CURSOR"); 
+    lua_pushinteger(L, GLFW_HRESIZE_CURSOR);
+    lua_setfield(L, -2, "GLFW_HRESIZE_CURSOR"); 
+    lua_pushinteger(L, GLFW_VRESIZE_CURSOR);
+    lua_setfield(L, -2, "GLFW_VRESIZE_CURSOR"); 
+    lua_pushinteger(L, GLFW_HAND_CURSOR);
+    lua_setfield(L, -2, "GLFW_HAND_CURSOR"); 
+    lua_pushinteger(L, GLFW_CONNECTED);
+    lua_setfield(L, -2, "GLFW_CONNECTED"); 
+    lua_pushinteger(L, GLFW_DISCONNECTED);
+    lua_setfield(L, -2, "GLFW_DISCONNECTED"); 
+    lua_pushinteger(L, GLFW_JOYSTICK_HAT_BUTTONS);
+    lua_setfield(L, -2, "GLFW_JOYSTICK_HAT_BUTTONS"); 
+    lua_pushinteger(L, GLFW_COCOA_CHDIR_RESOURCES);
+    lua_setfield(L, -2, "GLFW_COCOA_CHDIR_RESOURCES"); 
+    lua_pushinteger(L, GLFW_COCOA_MENUBAR);
+    lua_setfield(L, -2, "GLFW_COCOA_MENUBAR"); 
 }
 
 }; /* namespace vkc */
