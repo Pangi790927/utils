@@ -974,6 +974,7 @@ inline vkc_error_e parse_config(const char *path) {
     return VKC_ERROR_OK;
 }
 
+/* TODO: fix layout of this code... it is bad */
 /* TODO:
     - We need to be able to parse dicts to yaml and build objects from it (same as initial parse)
     - We still need to fix some functions
