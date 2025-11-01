@@ -777,7 +777,7 @@ struct cmdbuff_t : public object_t {
     void begin_rpass(ref_t<framebuffs_t> fbs, uint32_t img_idx);
     void bind_vert_buffs(uint32_t first_bind,
             std::vector<std::pair<ref_t<buffer_t>, VkDeviceSize>> buffs);
-    void bind_desc_set(VkPipelineBindPoint bind_point, VkPipelineLayout pipeline_alyout,
+    void bind_desc_set(VkPipelineBindPoint bind_point, ref_t<pipeline_t> pl,
             ref_t<desc_set_t> desc_set);
     void bind_idx_buff(ref_t<buffer_t> ibuff, uint64_t off, VkIndexType idx_type);
     void draw(ref_t<pipeline_t> pl, uint64_t vert_cnt);
@@ -818,7 +818,7 @@ struct fence_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_FENCE; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_FENCE; }
+    static vku_object_type_e type_id_static() { return VKU_TYPE_FENCE; }
     static ref_t<fence_t> create(ref_t<device_t> dev, VkFenceCreateFlags flags = 0);
 
 private:
@@ -840,7 +840,7 @@ struct buffer_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_BUFFER; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_BUFFER; }
+    static vku_object_type_e type_id_static() { return VKU_TYPE_BUFFER; }
     static ref_t<buffer_t> create(
             ref_t<device_t>         dev,
             size_t                  size,
@@ -870,7 +870,7 @@ struct image_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_IMAGE; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_IMAGE; }
+    static vku_object_type_e type_id_static() { return VKU_TYPE_IMAGE; }
     static ref_t<image_t> create(
             ref_t<device_t>     dev,
             uint32_t            width,
@@ -906,7 +906,7 @@ struct img_view_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_IMAGE_VIEW; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_IMAGE_VIEW; }
+    static vku_object_type_e type_id_static() { return VKU_TYPE_IMAGE_VIEW; }
     static ref_t<img_view_t> create(ref_t<image_t> img, VkImageAspectFlags aspect_mask);
 
 private:
@@ -923,7 +923,7 @@ struct img_sampl_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_IMAGE_SAMPLER; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_IMAGE_SAMPLER; }
+    static vku_object_type_e type_id_static() { return VKU_TYPE_IMAGE_SAMPLER; }
     static ref_t<img_sampl_t> create(ref_t<device_t> dev, VkFilter filter = VK_FILTER_LINEAR);
     static VkDescriptorSetLayoutBinding get_desc_set(uint32_t binding, VkShaderStageFlags stage);
 
@@ -2366,11 +2366,11 @@ inline void cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
 }
 
 inline void cmdbuff_t::bind_desc_set(VkPipelineBindPoint bind_point,
-        VkPipelineLayout pipeline_layout, ref_t<desc_set_t> desc_set)
+        ref_t<pipeline_t> pl, ref_t<desc_set_t> desc_set)
 {
     DBGVVV("bind desc_set: %p with layout: %p bind_point: %d",
-            desc_set->vk_desc_set, pipeline_layout, bind_point);
-    vkCmdBindDescriptorSets(vk_buff, bind_point, pipeline_layout, 0, 1,
+            desc_set->vk_desc_set, pl->vk_layout, bind_point);
+    vkCmdBindDescriptorSets(vk_buff, bind_point, pl->vk_layout, 0, 1,
             &desc_set->vk_desc_set, 0, nullptr);
 }
 

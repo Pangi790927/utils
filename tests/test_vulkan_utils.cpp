@@ -250,7 +250,7 @@ int main(int argc, char const *argv[])
             cbuff->begin_rpass(fbs, img_idx);
             cbuff->bind_vert_buffs(0, {{vbuff, 0}});
             cbuff->bind_idx_buff(ibuff, 0, VK_INDEX_TYPE_UINT16);
-            cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_GRAPHICS, pl->vk_layout, desc_set);
+            cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_GRAPHICS, pl, desc_set);
             cbuff->draw_idx(pl, indices.size());
             cbuff->end_rpass();
             cbuff->end();

@@ -517,6 +517,29 @@ template <> inline VkCommandBufferUsageFlagBits get_enum_val<VkCommandBufferUsag
     return get_enum_val(n, vk_command_buffer_usage_flag_bits_from_str);
 }
 
+inline std::unordered_map<std::string, VkPipelineBindPoint> vk_pipeline_bind_point_from_str = {
+    {"VK_PIPELINE_BIND_POINT_GRAPHICS",
+            VK_PIPELINE_BIND_POINT_GRAPHICS},
+    {"VK_PIPELINE_BIND_POINT_COMPUTE",
+            VK_PIPELINE_BIND_POINT_COMPUTE},
+    {"VK_PIPELINE_BIND_POINT_RAY_TRACING_NV",
+            VK_PIPELINE_BIND_POINT_RAY_TRACING_NV},
+};
+
+template <> inline VkPipelineBindPoint get_enum_val<VkPipelineBindPoint>(fkyaml::node &n) {
+    return get_enum_val(n, vk_pipeline_bind_point_from_str);
+}
+
+inline std::unordered_map<std::string, VkIndexType> vk_index_type_from_str = {
+    {"VK_INDEX_TYPE_UINT16", VK_INDEX_TYPE_UINT16},
+    {"VK_INDEX_TYPE_UINT32", VK_INDEX_TYPE_UINT32},
+    {"VK_INDEX_TYPE_NONE_NV", VK_INDEX_TYPE_NONE_NV},
+    {"VK_INDEX_TYPE_UINT8_EXT", VK_INDEX_TYPE_UINT8_EXT},
+};
+
+template <> inline VkIndexType get_enum_val<VkIndexType>(fkyaml::node &n) {
+    return get_enum_val(n, vk_index_type_from_str);
+}
 
 inline auto get_from_map(auto &m, const std::string& str) {
     if (!has(m, str))
@@ -1099,6 +1122,62 @@ struct luaw_param_t{
     }
 };
 
+/* This resolves the specific case of bind_vert_buffs list of buffers and sizes */
+template <size_t index>
+struct luaw_param_t<std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>>, index> {
+    auto luaw_single_param(lua_State *L) {
+        std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>> ret;
+        if (lua_isnil(L, index))
+            return ret;
+        if (!lua_istable(L, index)) {
+            luaw_push_error(L, std::format("Invalid object of type: {} at index {}",
+                    luaw_str_type(lua_type(L, index)), index));
+            lua_error(L);
+        }
+        int len = lua_rawlen(L, index);
+        for (int i = 1; i <= len; i++) {
+            lua_rawgeti(L, index, i);
+            if (!lua_istable(L, -1)) {
+                lua_pop(L, 1);
+                luaw_push_error(L, std::format("Invalid object of type: {} in array pos {}",
+                    luaw_str_type(lua_type(L, -1)), i));
+                lua_error(L);
+            }
+            int pair_len = lua_rawlen(L, -1);
+            if (pair_len != 2) {
+                lua_pop(L, 1);
+                luaw_push_error(L, std::format("Invalid table of len {} in array at pos {}"
+                        " should be pair of two: (buffer, buffer_off)",
+                        pair_len, i));
+                lua_error(L);
+            }
+            lua_rawgeti(L, -1, 2);
+            int valid = 0;
+            size_t buff_off = lua_tointegerx(L, -1, &valid);
+            if (!valid) {
+                lua_pop(L, 2);
+                luaw_push_error(L, std::format("Invalid second element in buffer pair at pos {}",
+                        i));
+                lua_error(L);
+            }
+            lua_pop(L, 1); /* buff_off */
+            lua_rawgeti(L, -1, 1);
+            if (lua_isnil(L, -1) || !lua_touserdata(L, -1)) {
+                lua_pop(L, 2);
+                luaw_push_error(L, std::format("Invalid first element in buffer pair, should be "
+                        "buffer reference, at pos {}", i));
+                lua_error(L);
+            }
+            int obj_index = luaw_from_user_data(lua_touserdata(L, -1));
+            auto buff = objects[obj_index].obj.to_derived<vku::buffer_t>();
+            lua_pop(L, 1); /* buff */
+            lua_pop(L, 1); /* the pair */
+            ret.push_back({buff, buff_off});
+        }
+        return ret;
+    }
+};
+
 /* This resolves userdata(vku::ref) received from lua to an vku parameter */
 template <typename T, size_t index>
 struct luaw_param_t<vku::ref_t<T>, index> {
@@ -1500,22 +1579,22 @@ inline int luaopen_vku (lua_State *L) {
 
         VKC_REG_FN(vku::cmdbuff_t, begin, bm_t<VkCommandBufferUsageFlagBits>);
         VKC_REG_FN(vku::cmdbuff_t, begin_rpass, vku::ref_t<vku::framebuffs_t>, uint32_t);
+        VKC_REG_FN(vku::cmdbuff_t, bind_vert_buffs, uint32_t,
+                std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>>);
+        VKC_REG_FN(vku::cmdbuff_t, bind_desc_set, bm_t<VkPipelineBindPoint>,
+                vku::ref_t<vku::pipeline_t>, vku::ref_t<vku::desc_set_t>);
+        VKC_REG_FN(vku::cmdbuff_t, bind_idx_buff, vku::ref_t<vku::buffer_t>, uint64_t,
+                bm_t<VkIndexType>);
+        VKC_REG_FN(vku::cmdbuff_t, draw, vku::ref_t<vku::pipeline_t>, uint64_t);
+        VKC_REG_FN(vku::cmdbuff_t, draw_idx, vku::ref_t<vku::pipeline_t>, uint64_t);
+        VKC_REG_FN(vku::cmdbuff_t, end_rpass);
+        VKC_REG_FN(vku::cmdbuff_t, end);
+        VKC_REG_FN(vku::cmdbuff_t, reset);
+        VKC_REG_FN(vku::cmdbuff_t, bind_compute, vku::ref_t<vku::compute_pipeline_t>);
+        VKC_REG_FN(vku::cmdbuff_t, dispatch_compute, uint32_t, uint32_t, uint32_t);
 
-    // void begin_rpass(ref_t<framebuffs_t> fbs, uint32_t img_idx);
-    // void bind_vert_buffs(uint32_t first_bind,
-    //         std::vector<std::pair<ref_t<buffer_t>, VkDeviceSize>> buffs);
-    // void bind_desc_set(VkPipelineBindPoint bind_point, VkPipelineLayout pipeline_alyout,
-    //         ref_t<desc_set_t> desc_set);
-    // void bind_idx_buff(ref_t<buffer_t> ibuff, uint64_t off, VkIndexType idx_type);
-    // void draw(ref_t<pipeline_t> pl, uint64_t vert_cnt);
-    // void draw_idx(ref_t<pipeline_t> pl, uint64_t vert_cnt);
-    // void end_rpass();
-    // void end();
-
-    // void reset();
-
-    // void bind_compute(ref_t<compute_pipeline_t> cpl);
-    // void dispatch_compute(uint32_t x, uint32_t y = 1, uint32_t z = 1);
+        /* Done objects
+        ----------------------------------------------------------------------------------------- */
 
         lua_pushstring(L, "locked");
         lua_setfield(L, -2, "__metatable");
@@ -1555,6 +1634,8 @@ inline int luaopen_vku (lua_State *L) {
             }
         };
 
+        register_flag_mapping(L, vk_index_type_from_str);
+        register_flag_mapping(L, vk_pipeline_bind_point_from_str);
         register_flag_mapping(L, vk_command_buffer_usage_flag_bits_from_str);
         register_flag_mapping(L, vk_image_aspect_flag_bits_from_str);
         register_flag_mapping(L, vk_primitive_topology_from_str);
