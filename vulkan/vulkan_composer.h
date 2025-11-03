@@ -274,7 +274,7 @@ struct depend_resolver_t {
             DBG("For some reason this object now holds a nullptr...");
             throw vku::err_t("nullptr object");
         }
-        auto ret = objects[objects_map[required_depend]].obj.to_derived<VkuT>();
+        auto ret = objects[objects_map[required_depend]].obj.to_related<VkuT>();
         if (!ret) {
             DBG("Invalid ref...");
             throw vku::err_t(sformat("Invalid reference, maybe cast doesn't work?: [cast: %s to: %s]",
@@ -541,6 +541,65 @@ template <> inline VkIndexType get_enum_val<VkIndexType>(fkyaml::node &n) {
     return get_enum_val(n, vk_index_type_from_str);
 }
 
+inline std::unordered_map<std::string, VkPipelineStageFlagBits>
+        vk_pipeline_stage_flag_bits_from_str =
+{
+    {"VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT",
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT},
+    {"VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT",
+            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT},
+    {"VK_PIPELINE_STAGE_VERTEX_INPUT_BIT",
+            VK_PIPELINE_STAGE_VERTEX_INPUT_BIT},
+    {"VK_PIPELINE_STAGE_VERTEX_SHADER_BIT",
+            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT},
+    {"VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT",
+            VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT},
+    {"VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT",
+            VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT},
+    {"VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT",
+            VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT},
+    {"VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT",
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT},
+    {"VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT",
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT},
+    {"VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT",
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT},
+    {"VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT",
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT},
+    {"VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT",
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT},
+    {"VK_PIPELINE_STAGE_TRANSFER_BIT",
+            VK_PIPELINE_STAGE_TRANSFER_BIT},
+    {"VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT",
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT},
+    {"VK_PIPELINE_STAGE_HOST_BIT",
+            VK_PIPELINE_STAGE_HOST_BIT},
+    {"VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT",
+            VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT},
+    {"VK_PIPELINE_STAGE_ALL_COMMANDS_BIT",
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT},
+    {"VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT",
+            VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT},
+    {"VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT",
+            VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT},
+    {"VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT",
+            VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT},
+    {"VK_PIPELINE_STAGE_SHADING_RATE_IMAGE_BIT_NV",
+            VK_PIPELINE_STAGE_SHADING_RATE_IMAGE_BIT_NV},
+    {"VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV",
+            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV},
+    {"VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_NV",
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_NV},
+    {"VK_PIPELINE_STAGE_TASK_SHADER_BIT_NV",
+            VK_PIPELINE_STAGE_TASK_SHADER_BIT_NV},
+    {"VK_PIPELINE_STAGE_MESH_SHADER_BIT_NV",
+            VK_PIPELINE_STAGE_MESH_SHADER_BIT_NV},
+};
+
+template <> inline VkPipelineStageFlagBits get_enum_val<VkPipelineStageFlagBits>(fkyaml::node &n) {
+    return get_enum_val(n, vk_pipeline_stage_flag_bits_from_str);
+}
+
 inline auto get_from_map(auto &m, const std::string& str) {
     if (!has(m, str))
         throw vku::err_t(std::format("Failed to get object: {} from: {}",
@@ -716,6 +775,10 @@ co::task<std::string> resolve_str(fkyaml::node& node) {
 co::task<vku::ref_t<vku::object_t>> build_object(const std::string& name, fkyaml::node& node);
 
 inline int64_t anonymous_increment = 0;
+inline std::string new_anon_name() {
+    return "anonymous_" + std::to_string(anonymous_increment++);
+}
+
 template <typename VkuT>
 co::task<vku::ref_t<VkuT>> resolve_obj(fkyaml::node& node) {
     /* Check -- How objects work in the configuration file -- */
@@ -730,14 +793,14 @@ co::task<vku::ref_t<VkuT>> resolve_obj(fkyaml::node& node) {
         /* This is in the form m_field: tag_name: m_type: "..." */
         std::string tag = node.as_map().begin()->first.as_str();
         auto ref = co_await build_object(tag, node.as_map().begin()->second);
-        co_return ref.template to_derived<VkuT>();
+        co_return ref.template to_related<VkuT>();
     }
     else if (node.contains("m_type")) {
         /* This is in the form m_field: m_type: "...", ie, inlined object */
         std::string tag = node.contains("m_tag") ?
-                node["m_tag"].as_str() : "anonymous_" + std::to_string(anonymous_increment++);
+                node["m_tag"].as_str() : new_anon_name();
         auto ref = co_await build_object(tag, node);
-        co_return ref.template to_derived<VkuT>();
+        co_return ref.template to_related<VkuT>();
     }
 
     /* None of the above */
@@ -982,8 +1045,8 @@ inline vkc_error_e parse_config(const char *path) {
     - We need to fix the stupidity that is descriptors
     - We need a way to set buffers (based on descripors maybe?)
     - We need some new types (matrices, vectors)
-    - We need to make std::vector and std::map an acceptable parameter/return type
-    - We need to make std::tuple an acceptable parameter
+    ~ We need to make std::vector and std::map an acceptable parameter/return type
+    + We need to make std::tuple an acceptable parameter
     - We need to expose the way that we pack functions and members to the outside
             (so that an user can use them to add his own functions (that user is me))
 
@@ -1111,9 +1174,11 @@ const char *luaw_str_type(int luatype) {
 
 /* This is here just to hold the diverse bitmaps */
 template <typename T>
-struct bm_t { using type = T; };
+struct bm_t {
+    using type = T;
+};
 
-template <typename Param, size_t index>
+template <typename Param, ssize_t index>
 struct luaw_param_t{
     void luaw_single_param(lua_State *L) {
         /* What a parameter can be:
@@ -1128,64 +1193,8 @@ struct luaw_param_t{
     }
 };
 
-/* This resolves the specific case of bind_vert_buffs list of buffers and sizes */
-template <size_t index>
-struct luaw_param_t<std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>>, index> {
-    auto luaw_single_param(lua_State *L) {
-        std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>> ret;
-        if (lua_isnil(L, index))
-            return ret;
-        if (!lua_istable(L, index)) {
-            luaw_push_error(L, std::format("Invalid object of type: {} at index {}",
-                    luaw_str_type(lua_type(L, index)), index));
-            lua_error(L);
-        }
-        int len = lua_rawlen(L, index);
-        for (int i = 1; i <= len; i++) {
-            lua_rawgeti(L, index, i);
-            if (!lua_istable(L, -1)) {
-                lua_pop(L, 1);
-                luaw_push_error(L, std::format("Invalid object of type: {} in array pos {}",
-                    luaw_str_type(lua_type(L, -1)), i));
-                lua_error(L);
-            }
-            int pair_len = lua_rawlen(L, -1);
-            if (pair_len != 2) {
-                lua_pop(L, 1);
-                luaw_push_error(L, std::format("Invalid table of len {} in array at pos {}"
-                        " should be pair of two: (buffer, buffer_off)",
-                        pair_len, i));
-                lua_error(L);
-            }
-            lua_rawgeti(L, -1, 2);
-            int valid = 0;
-            size_t buff_off = lua_tointegerx(L, -1, &valid);
-            if (!valid) {
-                lua_pop(L, 2);
-                luaw_push_error(L, std::format("Invalid second element in buffer pair at pos {}",
-                        i));
-                lua_error(L);
-            }
-            lua_pop(L, 1); /* buff_off */
-            lua_rawgeti(L, -1, 1);
-            if (lua_isnil(L, -1) || !lua_touserdata(L, -1)) {
-                lua_pop(L, 2);
-                luaw_push_error(L, std::format("Invalid first element in buffer pair, should be "
-                        "buffer reference, at pos {}", i));
-                lua_error(L);
-            }
-            int obj_index = luaw_from_user_data(lua_touserdata(L, -1));
-            auto buff = objects[obj_index].obj.to_derived<vku::buffer_t>();
-            lua_pop(L, 1); /* buff */
-            lua_pop(L, 1); /* the pair */
-            ret.push_back({buff, buff_off});
-        }
-        return ret;
-    }
-};
-
 /* This resolves userdata(vku::ref) received from lua to an vku parameter */
-template <typename T, size_t index>
+template <typename T, ssize_t index>
 struct luaw_param_t<vku::ref_t<T>, index> {
     vku::ref_t<T> luaw_single_param(lua_State *L) {
         if (lua_isnil(L, index))
@@ -1197,12 +1206,12 @@ struct luaw_param_t<vku::ref_t<T>, index> {
                     index, demangle<T>(), luaw_str_type(lua_type(L, index))));
             lua_error(L);
         }
-        return objects[obj_index].obj.to_derived<T>();
+        return objects[obj_index].obj.to_related<T>();
     }
 };
 
 /* This resolves bitmasks received from lua to an vku parameter */
-template <typename T, size_t index>
+template <typename T, ssize_t index>
 struct luaw_param_t<bm_t<T>, index> {
     T luaw_single_param(lua_State *L) {
         /* There are 2 options here (maybe later we will also add numbers, but not for now):
@@ -1271,7 +1280,7 @@ struct luaw_param_t<bm_t<T>, index> {
 };
 
 /* This resolves integers received from lua to an vku parameter */
-template <std::integral Integer, size_t index>
+template <std::integral Integer, ssize_t index>
 struct luaw_param_t<Integer, index> {
     Integer luaw_single_param(lua_State *L) {
         int valid = 0;
@@ -1288,7 +1297,7 @@ struct luaw_param_t<Integer, index> {
 };
 
 /* This resolves floats received from lua to an vku parameter */
-template <std::floating_point Float, size_t index>
+template <std::floating_point Float, ssize_t index>
 struct luaw_param_t<Float, index> {
     Float luaw_single_param(lua_State *L) {
         int valid = 0;
@@ -1305,7 +1314,7 @@ struct luaw_param_t<Float, index> {
 };
 
 /* This resolves strings received from lua to an vku parameter */
-template <size_t index>
+template <ssize_t index>
 struct luaw_param_t<char *, index> {
     char *luaw_single_param(lua_State *L) {
         char *ret = lua_tostring(L, index);
@@ -1315,6 +1324,86 @@ struct luaw_param_t<char *, index> {
                     "[{}]",
                     index, luaw_str_type(lua_type(L, index))));
             lua_error(L);
+        }
+        return ret;
+    }
+};
+
+template <typename T>
+struct de_bitmaptizize { using Type = T; }; 
+
+template <typename T>
+struct de_bitmaptizize<bm_t<T>> { using Type = T; };
+
+template <typename ...Args>
+struct de_bitmaptizize<std::tuple<Args...>> {
+    using Type = std::tuple<typename de_bitmaptizize<Args>::Type...>;
+};
+
+template <typename T, typename U>
+struct de_bitmaptizize<std::pair<T, U>> {
+    using Type = std::pair<typename de_bitmaptizize<T>::Type, typename de_bitmaptizize<U>::Type>;
+};
+
+template <typename T>
+struct de_bitmaptizize<std::vector<T>> {
+    using Type = std::vector<typename de_bitmaptizize<T>::Type>;
+};
+
+template <typename ...Args, ssize_t index>
+struct luaw_param_t<std::tuple<Args...>, index> {
+    template <size_t ...I>
+    auto _luaw_single_param_impl(lua_State *L, std::index_sequence<I...>) {
+        typename de_bitmaptizize<std::tuple<Args...>>::Type ret;
+        if (lua_isnil(L, index))
+            return ret;
+        if (!lua_istable(L, index)) {
+            luaw_push_error(L, std::format("Invalid object of type: {} at index {}",
+                    luaw_str_type(lua_type(L, index)), index));
+            lua_error(L);
+        }
+        int abs_idx = lua_absindex(L, index);
+        int len = lua_rawlen(L, index);
+        for (int i = len; i >= 1; i--)
+            lua_rawgeti(L, abs_idx, i);
+        ret = typename de_bitmaptizize<std::tuple<Args...>>::Type{
+                luaw_param_t<Args, -ssize_t(I)-1>{}.luaw_single_param(L)...};
+        lua_pop(L, len);
+        return ret;
+    }
+
+    auto luaw_single_param(lua_State *L) {
+        return _luaw_single_param_impl(L, std::index_sequence_for<Args...>{});
+    }
+};
+
+template <typename Arg1, typename Arg2, ssize_t index>
+struct luaw_param_t<std::pair<Arg1, Arg2>, index> {
+    auto luaw_single_param(lua_State *L) {
+        auto tuple = luaw_param_t<std::tuple<Arg1, Arg2>, index>{}
+                .luaw_single_param(L);
+        typename de_bitmaptizize<std::pair<Arg1, Arg2>>::Type ret =
+                {std::get<0>(tuple), std::get<1>(tuple)};
+        return ret;
+    }
+};
+
+template <typename T, ssize_t index>
+struct luaw_param_t<std::vector<T>, index> {
+    auto luaw_single_param(lua_State *L) {
+        typename de_bitmaptizize<std::vector<T>>::Type ret;
+        if (lua_isnil(L, index))
+            return ret;
+        if (!lua_istable(L, index)) {
+            luaw_push_error(L, std::format("Invalid object of type: {} at index {}",
+                    luaw_str_type(lua_type(L, index)), index));
+            lua_error(L);
+        }
+        int len = lua_rawlen(L, index);
+        for (int i = 1; i <= len; i++) {
+            lua_rawgeti(L, index, i);
+            ret.push_back(luaw_param_t<T, -1>{}.luaw_single_param(L));
+            lua_pop(L, 1);
         }
         return ret;
     }
@@ -1363,7 +1452,7 @@ int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
         luaw_push_error(L, "internal_error: Nil user object can't call member function!");
         lua_error(L);
     }
-    auto obj = o.obj.to_derived<VkuT>();
+    auto obj = o.obj.to_related<VkuT>();
 
     using RetType = decltype((obj.get()->*member_ptr)(
             luaw_param_t<Params, I + 2>{}.luaw_single_param(L)...));
@@ -1436,15 +1525,15 @@ int luaw_member_object_wrapper(lua_State *L) {
     try {
         int index = luaw_from_user_data(lua_touserdata(L, -2)); /* an int, ok on unwind */
         if (index == 0) {
-            luaw_push_error(L, "Nil user object can't call member function!");
+            luaw_push_error(L, "Nil user object can't get member!");
             lua_error(L);
         }
         auto &o = objects[index];
         if (!o.obj) {
-            luaw_push_error(L, "internal_error: Nil user object can't call member function!");
+            luaw_push_error(L, "internal_error: Nil user object can't get member!");
             lua_error(L);
         }
-        auto obj = o.obj.to_derived<VkuT>();
+        auto obj = o.obj.to_related<VkuT>();
         auto &member = obj.get()->*member_ptr;
 
         using member_type = std::decay_t<decltype(member)>;
@@ -1474,12 +1563,33 @@ int luaw_member_object_wrapper(lua_State *L) {
                 lua_pushnil(L);
                 return 1;
             }
+            if (!member->cbks) {
+                luaw_push_error(L, "internal_error: How did this object get known to lua ?!");
+                lua_error(L);
+            }
+            if (!member->cbks->usr_ptr) {
+                /* So this object was no longer known by the lua side, we must resurect it */
+
+                /* We first get it a new id */
+                int new_id = free_objects.top();
+                free_objects.pop();
+
+                /* make it reference it's own id */
+                member->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
+
+                /* add it's lua-name-mapping and it's lua-id-mapping */
+                std::string name = new_anon_name();
+                objects_map[name] = new_id;
+                objects[new_id].obj = member;
+                objects[new_id].name = name;
+            }
             int member_id = (intptr_t)member->cbks->usr_ptr.get();
             if (member_id >= objects.size() || member_id < 0) {
                 luaw_push_error(L, "internal_error: Integrity check failed");
                 lua_error(L);
             }
             lua_pushlightuserdata(L, luaw_to_user_data(member_id));
+            luaL_setmetatable(L, "__vku_metatable");
             return 1;
         }
         else {
@@ -1488,6 +1598,69 @@ int luaw_member_object_wrapper(lua_State *L) {
         }
     }
     catch (...) { return luaw_catch_exception(L); }
+}
+
+template <typename VkuT, auto member_ptr>
+int luaw_member_setter_object_wrapper(lua_State *L) {
+    int index = luaw_from_user_data(lua_touserdata(L, -3)); /* an int, ok on unwind */
+    if (index == 0) {
+        luaw_push_error(L, "Nil user object can't set member!");
+        lua_error(L);
+    }
+    auto &o = objects[index];
+    if (!o.obj) {
+        luaw_push_error(L, "internal_error: Nil user object can't set member!");
+        lua_error(L);
+    }
+    auto obj = o.obj.to_related<VkuT>();
+    auto &member = obj.get()->*member_ptr;
+
+    using member_type = std::decay_t<decltype(member)>;
+
+    if constexpr (std::is_same_v<member_type, std::string>) {
+        const char *str = lua_tostring(L, -1);
+        member = str ? str : "";
+        return 0;
+    }
+    else if constexpr (std::is_integral_v<member_type>) {
+        uint64_t val = lua_tointeger(L, -1);
+        member = (member_type)val;
+        return 0;
+    }
+    else if constexpr (std::is_floating_point_v<member_type>) {
+        double val = lua_tonumber(L, -1);
+        member = (member_type)val;
+        return 0;
+    }
+    else if constexpr (std::is_same_v<member_type, std::vector<std::string>>) {
+        if (!lua_istable(L, -1)) {
+            luaw_push_error(L, "You need a table for this assignment!");
+            lua_error(L);
+        }
+        int len = lua_rawlen(L, -1);
+        std::vector<std::string> to_asign;
+        for (int i = 1; i <= len; i++) {
+            lua_rawgeti(L, -1, i);
+            const char *str = lua_tostring(L, -1);
+            to_asign.push_back(str ? str : "");
+            lua_pop(L, 1);
+        }
+        member = to_asign;
+        return 0;
+    }
+    else if constexpr (is_vku_ref_t<member_type>::value) {
+        int index = luaw_from_user_data(lua_touserdata(L, -1)); /* an int, ok on unwind */
+        if (index == 0) {
+            member = nullptr;
+            return 0;
+        }
+        member = objects[index].obj;
+        return 0;
+    }
+    else {
+        demangle_static_assert<false, decltype(member)>(" - Is not a valid member type");
+        return 0;
+    }
 }
 
 enum luaw_member_e {
@@ -1499,6 +1672,7 @@ struct luaw_member_t {
     luaw_member_e member_type;
 };
 inline std::unordered_map<std::string, luaw_member_t> lua_class_members[VKU_TYPE_CNT];
+inline std::unordered_map<std::string, lua_CFunction> lua_class_member_setters[VKU_TYPE_CNT];
 
 template <typename VkuT, auto member_ptr, typename ...Params>
 void luaw_register_member_function(const char *function_name) {
@@ -1514,6 +1688,9 @@ void luaw_register_member_object(const char *member_name) {
         .fn = &luaw_member_object_wrapper<VkuT, member_ptr>,
         .member_type = LUAW_MEMBER_OBJECT
     };
+
+    lua_class_member_setters[VkuT::type_id_static()][member_name] =
+            &luaw_member_setter_object_wrapper<VkuT, member_ptr>;
 }
 
 #define VKC_REG_MEMB(obj_type, memb)    \
@@ -1551,11 +1728,15 @@ inline uint32_t internal_aquire_next_img(
 }
 
 inline const luaL_Reg vku_tab_funcs[] = {
-    {"glfw_pool_events", luaw_function_wrapper<glfw_pool_events> },
-    {"get_key", luaw_function_wrapper<glfw_get_key, vku::ref_t<vku::window_t>, uint32_t> },
-    {"signal_close", luaw_function_wrapper<internal_signal_close>},
+    {"glfw_pool_events",luaw_function_wrapper<glfw_pool_events>},
+    {"get_key",         luaw_function_wrapper<glfw_get_key, vku::ref_t<vku::window_t>, uint32_t>},
+    {"signal_close",    luaw_function_wrapper<internal_signal_close>},
     {"aquire_next_img", luaw_function_wrapper<internal_aquire_next_img,
             vku::ref_t<vku::swapchain_t>, vku::ref_t<vku::sem_t>>},
+    {"submit_cmdbuff",  luaw_function_wrapper<vku::submit_cmdbuff,
+            std::vector<std::pair<vku::ref_t<vku::sem_t>, bm_t<VkPipelineStageFlagBits>>>,
+            vku::ref_t<vku::cmdbuff_t>, vku::ref_t<vku::fence_t>,
+            std::vector<vku::ref_t<vku::sem_t>>>},
     {NULL, NULL}
 };
 
@@ -1608,6 +1789,35 @@ inline int luaopen_vku (lua_State *L) {
         });
         lua_setfield(L, -2, "__index");
 
+        /* params: 1.usrptr, 2.key, 3.value  */
+        lua_pushcfunction(L, [](lua_State *L) {
+            DBG("__newindex: %d", lua_gettop(L));
+            int id = luaw_from_user_data(lua_touserdata(L, -2)); /* an int, ok on unwind */
+            const char *member_name = lua_tostring(L, -1); /* an const char *, ok on unwind */
+
+            DBG("usr_id: %d", id);
+            DBG("member_name: %s", member_name);
+
+            auto &o = objects[id]; /* a reference, ok on unwind? (if err) */
+            if (!o.obj) {
+                luaw_push_error(L, std::format("invalid object id: {}", id));
+                lua_error(L);
+            }
+            vku_object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
+            if (class_id < 0 || class_id >= VKU_TYPE_CNT) {
+                luaw_push_error(L, std::format("invalid class id: {}", vku::to_string(class_id)));
+                lua_error(L);
+            }
+            if (!has(lua_class_member_setters[class_id], member_name)) {
+                luaw_push_error(L, std::format("class id {} doesn't have member: {}",
+                        vku::to_string(class_id), member_name));
+                lua_error(L);
+            }
+            auto &member = lua_class_member_setters[class_id][member_name];
+            return member(L);
+        });
+        lua_setfield(L, -2, "__newindex");        
+
         /* params: 1.usrptr */
         lua_pushcfunction(L, [](lua_State *L) {
             DBG("__gc");
@@ -1617,6 +1827,11 @@ inline int luaopen_vku (lua_State *L) {
             if (!o.obj) {
                 return 0;
             }
+
+            /* The object is no longer known to lua, as such we also delete it's slot. Obs: It may
+            still be alive, meaning, it is known by the c++ side, just not by the lua side.
+            !!! It will also loose it's name with this operation (Is that really ok?) */
+            o.obj->cbks->usr_ptr = nullptr;
 
             /* we clean it's name mapping, it's reference and free it's id */
             objects_map.erase(o.name);
@@ -1646,16 +1861,17 @@ inline int luaopen_vku (lua_State *L) {
 
         VKC_REG_FN(vku::cmdbuff_t, begin, bm_t<VkCommandBufferUsageFlagBits>);
         VKC_REG_FN(vku::cmdbuff_t, begin_rpass, vku::ref_t<vku::framebuffs_t>, uint32_t);
-        VKC_REG_FN(vku::cmdbuff_t, bind_vert_buffs, uint32_t,
-                std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>>);
-        VKC_REG_FN(vku::cmdbuff_t, bind_desc_set, bm_t<VkPipelineBindPoint>,
-                vku::ref_t<vku::pipeline_t>, vku::ref_t<vku::desc_set_t>);
-        VKC_REG_FN(vku::cmdbuff_t, bind_idx_buff, vku::ref_t<vku::buffer_t>, uint64_t,
-                bm_t<VkIndexType>);
+        VKC_REG_FN(vku::cmdbuff_t, bind_vert_buffs,
+                uint32_t, std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>>);
+        VKC_REG_FN(vku::cmdbuff_t, bind_desc_set,
+                bm_t<VkPipelineBindPoint>, vku::ref_t<vku::pipeline_t>, vku::ref_t<vku::desc_set_t>);
+        VKC_REG_FN(vku::cmdbuff_t, bind_idx_buff,
+                vku::ref_t<vku::buffer_t>, uint64_t, bm_t<VkIndexType>);
         VKC_REG_FN(vku::cmdbuff_t, draw, vku::ref_t<vku::pipeline_t>, uint64_t);
         VKC_REG_FN(vku::cmdbuff_t, draw_idx, vku::ref_t<vku::pipeline_t>, uint64_t);
         VKC_REG_FN(vku::cmdbuff_t, end_rpass);
         VKC_REG_FN(vku::cmdbuff_t, end);
+        luaw_register_member_function<vku::cmdbuff_t, &vku::cmdbuff_t::end>("end_begin");
         VKC_REG_FN(vku::cmdbuff_t, reset);
         VKC_REG_FN(vku::cmdbuff_t, bind_compute, vku::ref_t<vku::compute_pipeline_t>);
         VKC_REG_FN(vku::cmdbuff_t, dispatch_compute, uint32_t, uint32_t, uint32_t);
@@ -1703,6 +1919,7 @@ inline int luaopen_vku (lua_State *L) {
             }
         };
 
+        register_flag_mapping(L, vk_pipeline_stage_flag_bits_from_str);
         register_flag_mapping(L, vk_index_type_from_str);
         register_flag_mapping(L, vk_pipeline_bind_point_from_str);
         register_flag_mapping(L, vk_command_buffer_usage_flag_bits_from_str);

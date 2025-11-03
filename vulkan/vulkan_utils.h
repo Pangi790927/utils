@@ -158,7 +158,7 @@ inline void aquire_next_img(
         uint32_t *img_idx);
 
 inline void submit_cmdbuff(
-        std::vector<std::pair<ref_t<sem_t>, VkPipelineStageFlags>> wait_sems,
+        std::vector<std::pair<ref_t<sem_t>, VkPipelineStageFlagBits>> wait_sems,
         ref_t<cmdbuff_t> cbuff,
         ref_t<fence_t> fence,
         std::vector<ref_t<sem_t>> sig_sems);
@@ -454,6 +454,9 @@ public:
 
     template <typename VkuB> requires std::derived_from<VkuB, VkuT>
     ref_t<VkuB> to_derived() { return ref_t<VkuB>{_base}; };
+
+    template <typename VkuB> requires std::derived_from<VkuB, VkuT> || std::derived_from<VkuT, VkuB>
+    ref_t<VkuB> to_related() { return ref_t<VkuB>{_base}; };
 
     operator bool() { return !!_base; }
     friend bool operator == (std::nullptr_t, ref_t obj) { return obj._base == nullptr; } 
@@ -3240,7 +3243,7 @@ inline void aquire_next_img(ref_t<swapchain_t> swc, ref_t<sem_t> sem,
 }
 
 inline void submit_cmdbuff(
-        std::vector<std::pair<ref_t<sem_t>, VkPipelineStageFlags>> wait_sems,
+        std::vector<std::pair<ref_t<sem_t>, VkPipelineStageFlagBits>> wait_sems,
         ref_t<cmdbuff_t> cbuff,
         ref_t<fence_t> fence,
         std::vector<ref_t<sem_t>> sig_sems)
@@ -3250,7 +3253,7 @@ inline void submit_cmdbuff(
     std::vector<VkSemaphore> vk_sig_sems;
 
     for (auto [s, wait_stage] : wait_sems) {
-        vk_wait_stages.push_back(wait_stage);
+        vk_wait_stages.push_back((VkPipelineStageFlags)wait_stage);
         vk_wait_sems.push_back(s->vk_sem);
     }
     for (auto s : sig_sems) {
