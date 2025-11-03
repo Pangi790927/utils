@@ -1156,22 +1156,6 @@ void luaw_push_error(lua_State *L, std::string err_str) {
     lua_pushstring(L, context.c_str());
 }
 
-const char *luaw_str_type(int luatype) {
-    switch (luatype) {
-        case LUA_TNONE:          return "none";
-        case LUA_TNIL:           return "nil";
-        case LUA_TBOOLEAN:       return "boolean";
-        case LUA_TLIGHTUSERDATA: return "lightuserdata";
-        case LUA_TNUMBER:        return "number";
-        case LUA_TSTRING:        return "string";
-        case LUA_TTABLE:         return "table";
-        case LUA_TFUNCTION:      return "function";
-        case LUA_TUSERDATA:      return "userdata";
-        case LUA_TTHREAD:        return "thread";
-        default: return "unknown_lua_type";
-    }
-}
-
 /* This is here just to hold the diverse bitmaps */
 template <typename T>
 struct bm_t {
@@ -1203,7 +1187,7 @@ struct luaw_param_t<vku::ref_t<T>, index> {
         if (obj_index == 0) {
             luaw_push_error(L, std::format("Invalid parameter at index {} of expected type {} but "
                     "got [{}] instead",
-                    index, demangle<T>(), luaw_str_type(lua_type(L, index))));
+                    index, demangle<T>(), lua_typename(L, lua_type(L, index))));
             lua_error(L);
         }
         return objects[obj_index].obj.to_related<T>();
@@ -1224,7 +1208,7 @@ struct luaw_param_t<bm_t<T>, index> {
                 luaw_push_error(L, std::format(
                         "Invalid parameter at index {}, failed conversion to [vku-bitmask] "
                         "object is an invalid string: [{}]",
-                        idx, luaw_str_type(lua_type(L, idx))));
+                        idx, lua_typename(L, lua_type(L, idx))));
                 lua_error(L);
             }
             fkyaml::node str_enum_val{val};
@@ -1237,7 +1221,7 @@ struct luaw_param_t<bm_t<T>, index> {
                 luaw_push_error(L, std::format(
                         "Invalid parameter at index {}, failed conversion to [vku-bitmask] "
                         "object is an invalid integer: [{}]",
-                        idx, luaw_str_type(lua_type(L, idx))));
+                        idx, lua_typename(L, lua_type(L, idx))));
                 lua_error(L);
             }
             return (T)val;
@@ -1261,7 +1245,7 @@ struct luaw_param_t<bm_t<T>, index> {
                     luaw_push_error(L, std::format(
                             "Invalid parameter at index {}, failed conversion to [vku-bitmask] "
                             "object is an invalid string or integer: [{}]",
-                            index, luaw_str_type(lua_type(L, index))));
+                            index, lua_typename(L, lua_type(L, index))));
                     lua_error(L);
                 }
                 lua_pop(L, 1);
@@ -1272,7 +1256,7 @@ struct luaw_param_t<bm_t<T>, index> {
             luaw_push_error(L, std::format(
                     "Invalid parameter at index {}, failed conversion to [vku-bitmask] "
                     "object is neither table, integer or string: [{}]",
-                    index, luaw_str_type(lua_type(L, index))));
+                    index, lua_typename(L, lua_type(L, index))));
             lua_error(L);
             return (T)0;
         }
@@ -1289,7 +1273,7 @@ struct luaw_param_t<Integer, index> {
             luaw_push_error(L,
                     std::format("Invalid parameter at index {}, failed conversion to integer from "
                     "[{}]",
-                    index, luaw_str_type(lua_type(L, index))));
+                    index, lua_typename(L, lua_type(L, index))));
             lua_error(L);
         }
         return ret;
@@ -1306,7 +1290,7 @@ struct luaw_param_t<Float, index> {
             luaw_push_error(L,
                     std::format("Invalid parameter at index {}, failed conversion to integer from "
                     "[{}]",
-                    index, luaw_str_type(lua_type(L, index))));
+                    index, lua_typename(L, lua_type(L, index))));
             lua_error(L);
         }
         return ret;
@@ -1322,7 +1306,7 @@ struct luaw_param_t<char *, index> {
             luaw_push_error(L,
                     std::format("Invalid parameter at index {}, failed conversion to string from "
                     "[{}]",
-                    index, luaw_str_type(lua_type(L, index))));
+                    index, lua_typename(L, lua_type(L, index))));
             lua_error(L);
         }
         return ret;
@@ -1359,7 +1343,7 @@ struct luaw_param_t<std::tuple<Args...>, index> {
             return ret;
         if (!lua_istable(L, index)) {
             luaw_push_error(L, std::format("Invalid object of type: {} at index {}",
-                    luaw_str_type(lua_type(L, index)), index));
+                    lua_typename(L, lua_type(L, index)), index));
             lua_error(L);
         }
         int abs_idx = lua_absindex(L, index);
@@ -1396,7 +1380,7 @@ struct luaw_param_t<std::vector<T>, index> {
             return ret;
         if (!lua_istable(L, index)) {
             luaw_push_error(L, std::format("Invalid object of type: {} at index {}",
-                    luaw_str_type(lua_type(L, index)), index));
+                    lua_typename(L, lua_type(L, index)), index));
             lua_error(L);
         }
         int len = lua_rawlen(L, index);
@@ -1727,6 +1711,46 @@ inline uint32_t internal_aquire_next_img(
     return ret;
 }
 
+/* Lua is interesting... It seems that I can use next(#t) or next(nil) to check if the table is an
+array or a dictionary + lua_rawlen to check for both. yadayada, I need to write it in code */
+// fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
+//     index = abs_idx(index);
+//     if (lua_isinteger(L, index))
+//         return fkyaml::node{lua_tointeger(L, index)};   /* simple number */
+//     else if (lua_isnumber(L, index))
+//         return fkyaml::node{lua_tonumber(L, index)};    /* simple float */
+//     else if (lua_isstring(L, index))
+//         return fkyaml::node{lua_tostring(L, index) ? lua_tostring(L, index) : ""}; /* string */
+//     else if (lua_isnil(L, index))
+//         return fkyaml::node{nullptr};
+//     else if (lua_istable(L, index)) {
+//         lua_pushnil(L);
+//         while (lua_next(L, index) != 0) {
+//             printf("%s - %s\n", lua_typename(L, lua_type(L, -2)), lua_typename(L, lua_type(L, -1)));
+//             /* removes 'value'; keeps 'key' for next iteration */
+//             lua_pop(L, 1);
+//         }
+//     }
+//     else {
+//         luaw_push_error(L, std::format("Unknown conversion from type: {} to yaml object",
+//                 lua_typename(L, lua_type(index))));
+//         lua_error(L);
+//     }
+        
+
+//         fkyaml::node 
+//     };
+// inline int internal_create_object(lua_State *L) {
+//     /* uses 'key' (at index -2) and 'value' (at index -1) */
+//     printf("%s - %s\n",
+//           lua_typename(L, lua_type(L, -2)),
+//           lua_typename(L, lua_type(L, -1)));
+//     /* removes 'value'; keeps 'key' for next iteration */
+//     lua_pop(L, 1);
+//     }
+
+// }
+
 inline const luaL_Reg vku_tab_funcs[] = {
     {"glfw_pool_events",luaw_function_wrapper<glfw_pool_events>},
     {"get_key",         luaw_function_wrapper<glfw_get_key, vku::ref_t<vku::window_t>, uint32_t>},
@@ -1737,6 +1761,7 @@ inline const luaL_Reg vku_tab_funcs[] = {
             std::vector<std::pair<vku::ref_t<vku::sem_t>, bm_t<VkPipelineStageFlagBits>>>,
             vku::ref_t<vku::cmdbuff_t>, vku::ref_t<vku::fence_t>,
             std::vector<vku::ref_t<vku::sem_t>>>},
+    // {"create_object",   }
     {NULL, NULL}
 };
 
