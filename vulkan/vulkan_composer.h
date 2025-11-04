@@ -90,13 +90,6 @@ inline constexpr const int MAX_NUMBER_OF_OBJECTS = 16384;
 
 inline std::string app_path = std::filesystem::canonical("./");
 
-inline std::stack<int> free_objects = [](){
-    std::stack<int> ret;
-    for (int i = MAX_NUMBER_OF_OBJECTS-1; i >= 1; i--)
-        ret.push(i);
-    return ret;
-}();
-
 /* This holds the obhects reference such that lua can use them */
 struct object_ref_t {
     vku::ref_t<vku::object_t> obj;  /* The actual reference to the vku/vkc object */
@@ -105,10 +98,76 @@ struct object_ref_t {
                                        also gets removed from objects_map */
 };
 
-inline std::vector<object_ref_t> objects(MAX_NUMBER_OF_OBJECTS);
-inline std::map<std::string, int> objects_map;
-inline std::map<std::string, std::vector<co::state_t *>> wanted_objects;
-inline std::deque<std::coroutine_handle<void>> work;
+/* Holds all the references to the objects, it is held as on object so it can be initialized by
+the lua code and upon success, merged */
+struct ref_state_t {
+    std::vector<object_ref_t> objects;
+    std::map<std::string, int> objects_map;
+    std::map<std::string, std::vector<co::state_t *>> wanted_objects;
+    std::deque<std::coroutine_handle<void>> work;
+    std::vector<int> free_objects;
+
+    ref_state_t() : objects(MAX_NUMBER_OF_OBJECTS) {
+        for (int i = MAX_NUMBER_OF_OBJECTS-1; i >= 1; i--)
+            free_objects.push_back(i);
+    }
+
+    /* TODO: this is stupid slow, must be made faster (create a clear interface of adding and
+    removing objects and make get_new and append return the internal held update list) */
+
+    std::vector<int> get_new(const ref_state_t &oth) {
+        std::set<int> free_objects_this(free_objects.begin(), free_objects.end());
+        std::set<int> free_objects_other(oth.free_objects.begin(), oth.free_objects.end());
+
+        std::vector<int> new_other;
+        std::set_difference(
+            free_objects_this.begin(), free_objects_this.end(),
+            free_objects_other.begin(), free_objects_other.end(),
+            std::back_inserter(new_other)
+        );
+
+        std::vector<int> new_this;
+        std::set_difference(
+            free_objects_other.begin(), free_objects_other.end(),
+            free_objects_this.begin(), free_objects_this.end(),
+            std::back_inserter(new_this)
+        );
+
+        if (new_this.size())
+            throw vku::err_t(
+                    "How could the state change while we where creating a new object? huh?");
+        return new_other;
+    }
+
+    void append(const ref_state_t &oth) {
+        std::set<int> free_objects_this(free_objects.begin(), free_objects.end());
+        std::set<int> free_objects_other(oth.free_objects.begin(), oth.free_objects.end());
+
+        std::vector<int> new_other;
+        std::set_difference(
+            free_objects_this.begin(), free_objects_this.end(),
+            free_objects_other.begin(), free_objects_other.end(),
+            std::back_inserter(new_other)
+        );
+
+        std::vector<int> new_this;
+        std::set_difference(
+            free_objects_other.begin(), free_objects_other.end(),
+            free_objects_this.begin(), free_objects_this.end(),
+            std::back_inserter(new_this)
+        );
+
+        for (int idx : new_other) {
+            this->objects[idx] = oth.objects[idx];
+            this->objects_map[oth.objects[idx].name] = idx;
+        }
+        this->free_objects = std::vector<int>(free_objects_other.begin(), free_objects_other.end());
+    }
+};
+
+/* The state is initially created to have  */
+inline ref_state_t g_rs;
+inline int g_lua_table;
 
 struct lua_var_t : public vku::object_t {
     std::string name;
@@ -249,69 +308,73 @@ constexpr auto has(T&& data_struct, K&& key) {
 template <typename VkuT>
 struct depend_resolver_t {
     /* We save the searched dependency */
-    depend_resolver_t(std::string required_depend) : required_depend(required_depend) {}
+    depend_resolver_t(ref_state_t *rs, std::string required_depend)
+    : required_depend(required_depend), rs(rs) {}
 
     /* If we already have the dependency we can already retur */
-    bool await_ready() noexcept { return has(objects_map, required_depend); }
+    bool await_ready() noexcept { return has(rs->objects_map, required_depend); }
 
     /* Else we place ourselves on the waiting queue */
     template <typename P>
     co::handle<void> await_suspend(co::handle<P> caller) noexcept {
         auto state = co::external_on_suspend(caller);
         /* We place ourselves on the waiting queue: */
-        wanted_objects[required_depend].push_back(state);
+        rs->wanted_objects[required_depend].push_back(state);
 
         /* Else we return the next work in line that can be done */
         return co::external_wait_next_task(state->pool);
     }
 
     vku::ref_t<VkuT> await_resume() {
-        if (!has(objects_map, required_depend)) {
+        if (!has(rs->objects_map, required_depend)) {
             DBG("Object not found");
             throw vku::err_t(std::format("Object not found, {}", required_depend));
         }
-        if (!objects[objects_map[required_depend]].obj) {
+        if (!rs->objects[rs->objects_map[required_depend]].obj) {
             DBG("For some reason this object now holds a nullptr...");
             throw vku::err_t("nullptr object");
         }
-        auto ret = objects[objects_map[required_depend]].obj.to_related<VkuT>();
+        auto ret = rs->objects[rs->objects_map[required_depend]].obj.to_related<VkuT>();
         if (!ret) {
             DBG("Invalid ref...");
             throw vku::err_t(sformat("Invalid reference, maybe cast doesn't work?: [cast: %s to: %s]",
-                    demangle<4>(typeid(objects[objects_map[required_depend]].obj.get()).name()).c_str(),
+                    demangle<4>(typeid(rs->objects[rs->objects_map[required_depend]].obj.get()).name()).c_str(),
                     demangle<VkuT, 4>().c_str()));
         }
         return ret;
     }
 
     std::string required_depend;
+    ref_state_t *rs;
 };
 
-void mark_dependency_solved(std::string depend_name, vku::ref_t<vku::object_t> depend) {
+void mark_dependency_solved(ref_state_t *rs,
+        std::string depend_name, vku::ref_t<vku::object_t> depend)
+{
     /* First remember the dependency: */
     if (!depend) {
         DBG("Object into nullptr");
         throw vku::err_t{std::format("Object turned into nullptr: {}", depend_name)};
     }
-    if (has(objects_map, depend_name)) {
+    if (has(rs->objects_map, depend_name)) {
         DBG("Name taken");
         throw vku::err_t{std::format("Tag name already exists: {}", depend_name)};
     }
-    int new_id = free_objects.top();
-    free_objects.pop();
+    int new_id = rs->free_objects.back();
+    rs->free_objects.pop_back();
 
     DBG("Adding object: %s [%d]", depend->to_string().c_str(), new_id);
-    objects_map[depend_name] = new_id;
+    rs->objects_map[depend_name] = new_id;
     depend->cbks = std::make_shared<vku::object_cbks_t>();
     depend->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
-    objects[new_id].obj = depend;
-    objects[new_id].name = depend_name;
+    rs->objects[new_id].obj = depend;
+    rs->objects[new_id].name = depend_name;
 
     /* Second, awake all the ones waiting for the respective dependency */
-    if (vkc::has(wanted_objects, depend_name)) {
-        for (auto s : wanted_objects[depend_name])
+    if (vkc::has(rs->wanted_objects, depend_name)) {
+        for (auto s : rs->wanted_objects[depend_name])
             co::external_sched_resume(s);
-        wanted_objects.erase(depend_name);
+        rs->wanted_objects.erase(depend_name);
     }
 }
 
@@ -644,16 +707,16 @@ inline auto load_image(auto cp, std::string path) {
     return img;
 }
 
-co::task_t build_pseudo_object(const std::string& name, fkyaml::node& node) {
+co::task_t build_pseudo_object(ref_state_t *rs, const std::string& name, fkyaml::node& node) {
     if (node.is_integer()) {
         auto obj = integer_t::create(node.as_int());
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return 0;
     }
 
     if (node.is_string()) {
         auto obj = string_t::create(node.as_str());
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return 0;
     }
 
@@ -715,7 +778,7 @@ co::task_t build_pseudo_object(const std::string& name, fkyaml::node& node) {
         }
 
         auto obj = spirv_t::create(spirv);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
 
         co_return 0;
     }
@@ -734,7 +797,7 @@ co::task_t build_pseudo_object(const std::string& name, fkyaml::node& node) {
 
         if (node.contains("m_source")) {
             auto obj = lua_script_t::create(node["m_source"].as_str());
-            mark_dependency_solved(name, obj.to_base<vku::object_t>());
+            mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
             co_return 0;
         }
 
@@ -742,7 +805,7 @@ co::task_t build_pseudo_object(const std::string& name, fkyaml::node& node) {
             std::string source = get_file_string_content(node["m_source_path"].as_str());
 
             auto obj = lua_script_t::create(source);
-            mark_dependency_solved(name, obj.to_base<vku::object_t>());
+            mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
             co_return 0;
         }
     }
@@ -752,27 +815,28 @@ co::task_t build_pseudo_object(const std::string& name, fkyaml::node& node) {
 }
 
 /*! This either follows a reference to an integer or it returns the direct value if available */
-co::task<int64_t> resolve_int(fkyaml::node& node) {
+co::task<int64_t> resolve_int(ref_state_t *rs, fkyaml::node& node) {
     if (node.has_tag_name() && node.get_tag_name() == "!ref")
-        co_return (co_await depend_resolver_t<integer_t>(node.as_str()))->value;
+        co_return (co_await depend_resolver_t<integer_t>(rs, node.as_str()))->value;
     co_return node.as_int();
 }
 
 /*! This either follows a reference to an integer or it returns the direct value if available */
-co::task<double> resolve_float(fkyaml::node& node) {
+co::task<double> resolve_float(ref_state_t *rs, fkyaml::node& node) {
     if (node.has_tag_name() && node.get_tag_name() == "!ref")
-        co_return (co_await depend_resolver_t<float_t>(node.as_str()))->value;
+        co_return (co_await depend_resolver_t<float_t>(rs, node.as_str()))->value;
     co_return node.as_float();
 }
 
 /*! This either follows a reference to a string or it returns the direct value if available */
-co::task<std::string> resolve_str(fkyaml::node& node) {
+co::task<std::string> resolve_str(ref_state_t *rs, fkyaml::node& node) {
     if (node.has_tag_name() && node.get_tag_name() == "!ref")
-        co_return (co_await depend_resolver_t<string_t>(node.as_str()))->value;
+        co_return (co_await depend_resolver_t<string_t>(rs, node.as_str()))->value;
     co_return node.as_str();
 }
 
-co::task<vku::ref_t<vku::object_t>> build_object(const std::string& name, fkyaml::node& node);
+co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
+        const std::string& name, fkyaml::node& node);
 
 inline int64_t anonymous_increment = 0;
 inline std::string new_anon_name() {
@@ -780,26 +844,26 @@ inline std::string new_anon_name() {
 }
 
 template <typename VkuT>
-co::task<vku::ref_t<VkuT>> resolve_obj(fkyaml::node& node) {
+co::task<vku::ref_t<VkuT>> resolve_obj(ref_state_t *rs, fkyaml::node& node) {
     /* Check -- How objects work in the configuration file -- */
 
     if (node.has_tag_name() && node.get_tag_name() == "!ref") {
         /* This is simply a reference to an object m_field: !ref tag_name*/
-        co_return co_await depend_resolver_t<VkuT>(node.as_str());
+        co_return co_await depend_resolver_t<VkuT>(rs, node.as_str());
     }
     else if (node.is_mapping() && node.as_map().size() == 1
             && node.as_map().begin()->second.contains("m_type"))
     {
         /* This is in the form m_field: tag_name: m_type: "..." */
         std::string tag = node.as_map().begin()->first.as_str();
-        auto ref = co_await build_object(tag, node.as_map().begin()->second);
+        auto ref = co_await build_object(rs, tag, node.as_map().begin()->second);
         co_return ref.template to_related<VkuT>();
     }
     else if (node.contains("m_type")) {
         /* This is in the form m_field: m_type: "...", ie, inlined object */
         std::string tag = node.contains("m_tag") ?
                 node["m_tag"].as_str() : new_anon_name();
-        auto ref = co_await build_object(tag, node);
+        auto ref = co_await build_object(rs, tag, node);
         co_return ref.template to_related<VkuT>();
     }
 
@@ -807,7 +871,9 @@ co::task<vku::ref_t<VkuT>> resolve_obj(fkyaml::node& node) {
     co_return nullptr;
 }
 
-co::task<vku::ref_t<vku::object_t>> build_object(const std::string& name, fkyaml::node& node) {
+co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
+        const std::string& name, fkyaml::node& node)
+{
     if (!node.is_mapping()) {
         DBG("Error node: %s not a mapping", fkyaml::node::serialize(node).c_str());
         co_return nullptr;
@@ -815,172 +881,172 @@ co::task<vku::ref_t<vku::object_t>> build_object(const std::string& name, fkyaml
     if (false);
     else if (node["m_type"] == "vku::instance_t") {
         auto obj = vku::instance_t::create();
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vkc::lua_var_t") {
         /* lua_var has the same tag_name as the var name */
         auto obj = lua_var_t::create(name);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::window_t") {
-        auto w = co_await resolve_int(node["m_width"]);
-        auto h = co_await resolve_int(node["m_height"]);
-        auto window_name = co_await resolve_str(node["m_name"]);
+        auto w = co_await resolve_int(rs, node["m_width"]);
+        auto h = co_await resolve_int(rs, node["m_height"]);
+        auto window_name = co_await resolve_str(rs, node["m_name"]);
         auto obj = vku::window_t::create(w, h, window_name);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::surface_t") {
-        auto window = co_await resolve_obj<vku::window_t>(node["m_window"]);
-        auto instance = co_await resolve_obj<vku::instance_t>(node["m_instance"]);
+        auto window = co_await resolve_obj<vku::window_t>(rs, node["m_window"]);
+        auto instance = co_await resolve_obj<vku::instance_t>(rs, node["m_instance"]);
         auto obj = vku::surface_t::create(window, instance);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::device_t") {
-        auto surf = co_await resolve_obj<vku::surface_t>(node["m_surface"]);
+        auto surf = co_await resolve_obj<vku::surface_t>(rs, node["m_surface"]);
         auto obj = vku::device_t::create(surf);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::cmdpool_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(node["m_device"]);
+        auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
         auto obj = vku::cmdpool_t::create(dev);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::image_t") {
-        auto cp = co_await resolve_obj<vku::cmdpool_t>(node["m_cmdpool"]);
-        auto path = co_await resolve_str(node["m_path"]);
+        auto cp = co_await resolve_obj<vku::cmdpool_t>(rs, node["m_cmdpool"]);
+        auto path = co_await resolve_str(rs, node["m_path"]);
         auto obj = load_image(cp, path);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::img_view_t") {
-        auto img = co_await resolve_obj<vku::image_t>(node["m_image"]);
+        auto img = co_await resolve_obj<vku::image_t>(rs, node["m_image"]);
         auto aspect_mask = get_enum_val<VkImageAspectFlagBits>(node["m_aspect_mask"]);
         auto obj = vku::img_view_t::create(img, aspect_mask);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::img_sampl_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(node["m_device"]);
+        auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
         auto obj = vku::img_sampl_t::create(dev);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::buffer_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(node["m_device"]);
-        size_t sz = co_await resolve_int(node["m_size"]);
+        auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
+        size_t sz = co_await resolve_int(rs, node["m_size"]);
         auto usage_flags = get_enum_val<VkBufferUsageFlagBits>(node["m_usage_flags"]);
         auto share_mode = get_enum_val<VkSharingMode>(node["m_sharing_mode"]);
         auto memory_flags = get_enum_val<VkMemoryPropertyFlagBits>(node["m_memory_flags"]);
         auto obj = vku::buffer_t::create(dev, sz, usage_flags, share_mode, memory_flags);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::binding_desc_set_t") {
         std::vector<vku::ref_t<vku::binding_desc_set_t::binding_desc_t>> bindings;
         for (auto& subnode : node["m_descriptors"])
             bindings.push_back(
-                    co_await resolve_obj<vku::binding_desc_set_t::binding_desc_t>(subnode));
+                    co_await resolve_obj<vku::binding_desc_set_t::binding_desc_t>(rs, subnode));
         auto obj = vku::binding_desc_set_t::create(bindings);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::binding_desc_set_t::buff_binding_t") {
         /* TODO: add layout (see get_desc_set) */
-        auto buff = co_await resolve_obj<vku::buffer_t>(node["m_buff"]);
+        auto buff = co_await resolve_obj<vku::buffer_t>(rs, node["m_buff"]);
         auto obj = vku::binding_desc_set_t::buff_binding_t::create(
                 vku::ubo_t::get_desc_set(0, VK_SHADER_STAGE_VERTEX_BIT), /* TODO: resolve this */
                 buff);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::binding_desc_set_t::sampl_binding_t") {
         /* TODO: add layout (see get_desc_set) */
-        auto view = co_await resolve_obj<vku::img_view_t>(node["m_view"]);
-        auto sampler = co_await resolve_obj<vku::img_sampl_t>(node["m_sampler"]);
+        auto view = co_await resolve_obj<vku::img_view_t>(rs, node["m_view"]);
+        auto sampler = co_await resolve_obj<vku::img_sampl_t>(rs, node["m_sampler"]);
         auto obj = vku::binding_desc_set_t::sampl_binding_t::create(
                 vku::img_sampl_t::get_desc_set(1, VK_SHADER_STAGE_FRAGMENT_BIT), /* TODO: resolve this */
                 view,
                 sampler);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::shader_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(node["m_device"]);
-        auto spirv = co_await resolve_obj<spirv_t>(node["m_spirv"]);
+        auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
+        auto spirv = co_await resolve_obj<spirv_t>(rs, node["m_spirv"]);
         auto obj = vku::shader_t::create(dev, spirv->spirv);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::swapchain_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(node["m_device"]);
+        auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
         auto obj = vku::swapchain_t::create(dev);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::renderpass_t") {
-        auto swc = co_await resolve_obj<vku::swapchain_t>(node["m_swapchain"]);
+        auto swc = co_await resolve_obj<vku::swapchain_t>(rs, node["m_swapchain"]);
         auto obj = vku::renderpass_t::create(swc);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::pipeline_t") {
-        auto w = co_await resolve_int(node["m_width"]);
-        auto h = co_await resolve_int(node["m_height"]);
-        auto rp = co_await resolve_obj<vku::renderpass_t>(node["m_renderpass"]);
+        auto w = co_await resolve_int(rs, node["m_width"]);
+        auto h = co_await resolve_int(rs, node["m_height"]);
+        auto rp = co_await resolve_obj<vku::renderpass_t>(rs, node["m_renderpass"]);
         std::vector<vku::ref_t<vku::shader_t>> shaders;
         for (auto& sh : node["m_shaders"])
-            shaders.push_back(co_await resolve_obj<vku::shader_t>(sh));
+            shaders.push_back(co_await resolve_obj<vku::shader_t>(rs, sh));
         auto topol = get_enum_val<VkPrimitiveTopology>(node["m_topology"]);
         auto indesc = vku::vertex3d_t::get_input_desc(); /* TODO: resolve this */
-        auto binds = co_await resolve_obj<vku::binding_desc_set_t>(node["m_bindings"]);
+        auto binds = co_await resolve_obj<vku::binding_desc_set_t>(rs, node["m_bindings"]);
         auto obj = vku::pipeline_t::create(w, h, rp, shaders, topol, indesc, binds);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::framebuffs_t") {
-        auto rp = co_await resolve_obj<vku::renderpass_t>(node["m_renderpass"]);
+        auto rp = co_await resolve_obj<vku::renderpass_t>(rs, node["m_renderpass"]);
         auto obj = vku::framebuffs_t::create(rp);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::sem_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(node["m_device"]);
+        auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
         auto obj = vku::sem_t::create(dev);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::fence_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(node["m_device"]);
+        auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
         auto obj = vku::fence_t::create(dev);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::cmdbuff_t") {
-        auto cp = co_await resolve_obj<vku::cmdpool_t>(node["m_cmdpool"]);
+        auto cp = co_await resolve_obj<vku::cmdpool_t>(rs, node["m_cmdpool"]);
         auto obj = vku::cmdbuff_t::create(cp);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::desc_pool_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(node["m_device"]);
-        auto binds = co_await resolve_obj<vku::binding_desc_set_t>(node["m_bindings"]);
-        int cnt = co_await resolve_int(node["m_cnt"]);
+        auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
+        auto binds = co_await resolve_obj<vku::binding_desc_set_t>(rs, node["m_bindings"]);
+        int cnt = co_await resolve_int(rs, node["m_cnt"]);
         auto obj = vku::desc_pool_t::create(dev, binds, cnt);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::desc_set_t") {
-        auto descritpor_pool = co_await resolve_obj<vku::desc_pool_t>(node["m_descritpor_pool"]);
-        auto pipeline = co_await resolve_obj<vku::pipeline_t>(node["m_pipeline"]);
-        auto bindings = co_await resolve_obj<vku::binding_desc_set_t>(node["m_bindings"]);
+        auto descritpor_pool = co_await resolve_obj<vku::desc_pool_t>(rs, node["m_descritpor_pool"]);
+        auto pipeline = co_await resolve_obj<vku::pipeline_t>(rs, node["m_pipeline"]);
+        auto bindings = co_await resolve_obj<vku::binding_desc_set_t>(rs, node["m_bindings"]);
         auto obj = vku::desc_set_t::create(descritpor_pool, pipeline, bindings);
-        mark_dependency_solved(name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
 
@@ -989,15 +1055,15 @@ co::task<vku::ref_t<vku::object_t>> build_object(const std::string& name, fkyaml
 }
 
 
-co::task_t build_schema(fkyaml::node& root) {
+co::task_t build_schema(ref_state_t *rs, fkyaml::node& root) {
     ASSERT_BOOL_CO(root.is_mapping());
 
     for (auto &[name, node] : root.as_map()) {
         if (!node.contains("m_type")) {
-            co_await co::sched(build_pseudo_object(name.as_str(), node));
+            co_await co::sched(build_pseudo_object(rs, name.as_str(), node));
         }
         else {
-            co_await co::sched(build_object(name.as_str(), node));
+            co_await co::sched(build_object(rs, name.as_str(), node));
         }
     }
 
@@ -1011,15 +1077,15 @@ inline vkc_error_e parse_config(const char *path) {
         auto config = fkyaml::node::deserialize(file);
 
         auto pool = co::create_pool();
-        pool->sched(build_schema(config));
+        pool->sched(build_schema(&g_rs, config));
 
         if (pool->run() != co::RUN_OK) {
             DBG("Failed to create the schema");
             return VKC_ERROR_GENERIC;
         }
 
-        if (wanted_objects.size()) {
-            for (auto &[k, v]: wanted_objects) {
+        if (g_rs.wanted_objects.size()) {
+            for (auto &[k, v]: g_rs.wanted_objects) {
                 DBG("Unknown Object: %s", k.c_str());
             }
             return VKC_ERROR_PARSE_YAML;
@@ -1039,7 +1105,7 @@ inline vkc_error_e parse_config(const char *path) {
 
 /* TODO: fix layout of this code... it is bad */
 /* TODO:
-    - We need to be able to parse dicts to yaml and build objects from it (same as initial parse)
+    + We need to be able to parse dicts to yaml and build objects from it (same as initial parse)
     - We still need to fix some functions
     - We need a generic way to store some special types (mvp for example)
     - We need to fix the stupidity that is descriptors
@@ -1056,6 +1122,18 @@ inline std::string lua_example_str = R"___(
 vku = require("vulkan_utils")
 
 print(debug.getregistry())
+
+
+t = {
+    m_type = "vkc::lua_var_t",
+    var1 = 1,
+    var2 = 2,
+    var3 = {
+        var4 = "str"
+    }
+}
+to = vku.create_object("tag_name", t)
+print(to)
 
 function on_loop_run()
     vku.glfw_pool_events() -- needed for keys to be available
@@ -1190,7 +1268,7 @@ struct luaw_param_t<vku::ref_t<T>, index> {
                     index, demangle<T>(), lua_typename(L, lua_type(L, index))));
             lua_error(L);
         }
-        return objects[obj_index].obj.to_related<T>();
+        return g_rs.objects[obj_index].obj.to_related<T>();
     }
 };
 
@@ -1431,7 +1509,7 @@ int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
         luaw_push_error(L, "Nil user object can't call member function!");
         lua_error(L);
     }
-    auto &o = objects[index];
+    auto &o = g_rs.objects[index];
     if (!o.obj) {
         luaw_push_error(L, "internal_error: Nil user object can't call member function!");
         lua_error(L);
@@ -1512,7 +1590,7 @@ int luaw_member_object_wrapper(lua_State *L) {
             luaw_push_error(L, "Nil user object can't get member!");
             lua_error(L);
         }
-        auto &o = objects[index];
+        auto &o = g_rs.objects[index];
         if (!o.obj) {
             luaw_push_error(L, "internal_error: Nil user object can't get member!");
             lua_error(L);
@@ -1555,20 +1633,20 @@ int luaw_member_object_wrapper(lua_State *L) {
                 /* So this object was no longer known by the lua side, we must resurect it */
 
                 /* We first get it a new id */
-                int new_id = free_objects.top();
-                free_objects.pop();
+                int new_id = g_rs.free_objects.back();
+                g_rs.free_objects.pop_back();
 
                 /* make it reference it's own id */
                 member->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
 
                 /* add it's lua-name-mapping and it's lua-id-mapping */
                 std::string name = new_anon_name();
-                objects_map[name] = new_id;
-                objects[new_id].obj = member;
-                objects[new_id].name = name;
+                g_rs.objects_map[name] = new_id;
+                g_rs.objects[new_id].obj = member;
+                g_rs.objects[new_id].name = name;
             }
             int member_id = (intptr_t)member->cbks->usr_ptr.get();
-            if (member_id >= objects.size() || member_id < 0) {
+            if (member_id >= g_rs.objects.size() || member_id < 0) {
                 luaw_push_error(L, "internal_error: Integrity check failed");
                 lua_error(L);
             }
@@ -1591,7 +1669,7 @@ int luaw_member_setter_object_wrapper(lua_State *L) {
         luaw_push_error(L, "Nil user object can't set member!");
         lua_error(L);
     }
-    auto &o = objects[index];
+    auto &o = g_rs.objects[index];
     if (!o.obj) {
         luaw_push_error(L, "internal_error: Nil user object can't set member!");
         lua_error(L);
@@ -1638,7 +1716,7 @@ int luaw_member_setter_object_wrapper(lua_State *L) {
             member = nullptr;
             return 0;
         }
-        member = objects[index].obj;
+        member = g_rs.objects[index].obj;
         return 0;
     }
     else {
@@ -1713,43 +1791,188 @@ inline uint32_t internal_aquire_next_img(
 
 /* Lua is interesting... It seems that I can use next(#t) or next(nil) to check if the table is an
 array or a dictionary + lua_rawlen to check for both. yadayada, I need to write it in code */
-// fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
-//     index = abs_idx(index);
-//     if (lua_isinteger(L, index))
-//         return fkyaml::node{lua_tointeger(L, index)};   /* simple number */
-//     else if (lua_isnumber(L, index))
-//         return fkyaml::node{lua_tonumber(L, index)};    /* simple float */
-//     else if (lua_isstring(L, index))
-//         return fkyaml::node{lua_tostring(L, index) ? lua_tostring(L, index) : ""}; /* string */
-//     else if (lua_isnil(L, index))
-//         return fkyaml::node{nullptr};
-//     else if (lua_istable(L, index)) {
-//         lua_pushnil(L);
-//         while (lua_next(L, index) != 0) {
-//             printf("%s - %s\n", lua_typename(L, lua_type(L, -2)), lua_typename(L, lua_type(L, -1)));
-//             /* removes 'value'; keeps 'key' for next iteration */
-//             lua_pop(L, 1);
-//         }
-//     }
-//     else {
-//         luaw_push_error(L, std::format("Unknown conversion from type: {} to yaml object",
-//                 lua_typename(L, lua_type(index))));
-//         lua_error(L);
-//     }
-        
+fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
+    index = lua_absindex(L, index);
+    if (lua_isboolean(L, index)) {
+        fkyaml::node ret(fkyaml::node_type::BOOLEAN);
+        ret.as_bool() = lua_toboolean(L, index);
+        return ret;
+    }
+    else if (lua_isinteger(L, index)) {
+        fkyaml::node ret(fkyaml::node_type::INTEGER);
+        ret.as_int() = lua_tointeger(L, index);
+        return ret;
+    }
+    else if (lua_isnumber(L, index)) {
+        fkyaml::node ret(fkyaml::node_type::FLOAT);
+        ret.as_float() = lua_tonumber(L, index);
+        return ret;
+    }
+    else if (lua_isstring(L, index)) {
+        fkyaml::node ret(fkyaml::node_type::STRING);
+        ret.as_str() = lua_tostring(L, index) ? lua_tostring(L, index) : "";
+        return ret;
+    }
+    else if (lua_isnil(L, index)) {
+        fkyaml::node ret(fkyaml::node_type::NULL_OBJECT);
+        return ret;
+    }
+    else if (lua_istable(L, index)) {
+        ; /* we continue bellow */
+    }
+    else {
+        luaw_push_error(L, std::format("Unknown conversion from type: {} to yaml object",
+                lua_typename(L, lua_type(L, index))));
+        lua_error(L);
+    }
 
-//         fkyaml::node 
-//     };
-// inline int internal_create_object(lua_State *L) {
-//     /* uses 'key' (at index -2) and 'value' (at index -1) */
-//     printf("%s - %s\n",
-//           lua_typename(L, lua_type(L, -2)),
-//           lua_typename(L, lua_type(L, -1)));
-//     /* removes 'value'; keeps 'key' for next iteration */
-//     lua_pop(L, 1);
-//     }
+    bool array_detected = false;
+    bool dict_detected = false;
+    int array_len;
 
-// }
+    /* AFAIK only arrays have a rawlen */
+    if ((array_len = lua_rawlen(L, index)) != 0)
+        array_detected = true;
+
+    /* Assuming that lua_next is continuous for arrays (next(t, k) -> k+1), we must do two things:
+    First check if the first key is in the array, if not, than this table also has dict keys, else
+    any potential dictionary key will be placed after the array. (continued bellow...) */
+    lua_pushnil(L);
+    if (lua_next(L, index) != 0) {
+        if ((lua_type(L, -2) != LUA_TNUMBER || lua_tointeger(L, -2) < 1 ||
+                lua_tointeger(L, -2) >= array_len))
+        {
+            dict_detected = true;
+        }
+        lua_pop(L, 2);
+    }
+    else return fkyaml::node{fkyaml::node_type::MAPPING}; /* If empty we return an empty table */
+
+    /* (...continuation from above) As such, second we now check if any dictionary key exists after
+    the array part. */
+    if (array_detected) {
+        lua_pushinteger(L, array_len);
+        if (lua_next(L, index) != 0) {
+            if ((lua_type(L, -2) != LUA_TNUMBER || lua_tointeger(L, -2) < 1 ||
+                    lua_tointeger(L, -2) > array_len))
+            {
+                dict_detected = true;
+            }
+            lua_pop(L, 2);
+        }
+    }
+
+    if (array_detected && dict_detected) {
+        luaw_push_error(L, "Create object doesn't support tables with both a hash part and "
+                "an array part");
+        lua_error(L);
+    }
+
+    if (array_detected) {
+        int len = lua_rawlen(L, index);
+        fkyaml::node to_ret(fkyaml::node_type::SEQUENCE);
+        for (int i = 1; i <= len; i++) {
+            lua_rawgeti(L, index, i);
+            auto to_add = create_yaml_from_lua_object(L, -1);
+            DBG("ADDING TYPE: %d", (int)to_add.get_type());
+            to_ret.as_seq().push_back(to_add);
+            lua_pop(L, 1);
+        }
+        return to_ret;
+    }
+
+    if (dict_detected) {
+        lua_pushnil(L);
+        fkyaml::node to_ret(fkyaml::node_type::MAPPING);
+        while (lua_next(L, index) != 0) {
+            const char *key = lua_tostring(L, -2);
+            if (key) {
+                auto to_add = create_yaml_from_lua_object(L, -1);
+                DBG("ADDING VAL TYPE: %d", (int)to_add.get_type());
+                to_ret[key] = to_add;
+            }
+            lua_pop(L, 1);
+        }
+        return to_ret;
+    }
+
+    luaw_push_error(L, "internal_error: shouldn't reach here");
+    lua_error(L);
+    return fkyaml::node{};
+}
+
+inline int internal_create_object(lua_State *L) {
+    const char *name = lua_tostring(L, 1);
+    if (!name) {
+        luaw_push_error(L, "Error at index 1: first parameter must be a string, the tag of the "
+                "object");
+        lua_error(L);
+    }
+    auto object_description = create_yaml_from_lua_object(L, 2);
+
+    /* We copy the whole objects ref state, such that for now we have an exact copy of the global
+    vku namespace and we can reference it's objects. If we error out, the only references that will
+    remain alive are those that where backed up by g_rs and if we don't error out, at the end we
+    append the differences to g_rs. */
+    ref_state_t ref_state = g_rs;
+
+    DBG("create_object: %s", fkyaml::node::serialize(object_description).c_str());
+    auto pool = co::create_pool();
+
+    if (!object_description.contains("m_type")) {
+        pool->sched(build_pseudo_object(&ref_state, name, object_description));
+    }
+    else {
+        pool->sched(build_object(&ref_state, name, object_description));
+    }
+
+    if (pool->run() != co::RUN_OK) {
+        luaw_push_error(L, "CO_OJECT_CREATOR: Failed to create the object");
+        lua_error(L);
+    }
+
+    if (ref_state.wanted_objects.size()) {
+        std::string unknown_objects = "[";
+        for (auto &[k, v]: ref_state.wanted_objects) {
+            unknown_objects += std::format("{}, ", k);
+        }
+        unknown_objects += "]";
+        luaw_push_error(L, std::format("unknown objects: {}", unknown_objects));
+        lua_error(L);
+    }
+
+    if (!has(ref_state.objects_map, name)) {
+        luaw_push_error(L, "internal_error: Object is not found after creation");
+        lua_error(L);
+    }
+
+    auto new_idx = g_rs.get_new(ref_state);
+
+    DBG("Getting lua table...");
+
+    /* Get back the vulkan_utils table */
+    lua_rawgeti(L, LUA_REGISTRYINDEX, g_lua_table);
+
+    for (int id : new_idx) {
+        if (!ref_state.objects[id].obj) {
+            DBG("Null user object?");
+        }
+        DBG("Registering object: %s", ref_state.objects[id].name.c_str());
+        /* this makes vulkan_utils.key = object_id and sets it's metadata */
+        lua_pushlightuserdata(L, luaw_to_user_data(id));
+        luaL_setmetatable(L, "__vku_metatable");
+        lua_setfield(L, -2, ref_state.objects[id].name.c_str());
+    }
+
+    lua_getfield(L, -1, name);
+    lua_remove(L, -2); /* pops vulkan_utils table */
+
+    /* actualize the global state */
+    g_rs.append(ref_state);
+
+    /* Eventual errors are catched outside of this function */
+    return 1;
+}
 
 inline const luaL_Reg vku_tab_funcs[] = {
     {"glfw_pool_events",luaw_function_wrapper<glfw_pool_events>},
@@ -1761,7 +1984,7 @@ inline const luaL_Reg vku_tab_funcs[] = {
             std::vector<std::pair<vku::ref_t<vku::sem_t>, bm_t<VkPipelineStageFlagBits>>>,
             vku::ref_t<vku::cmdbuff_t>, vku::ref_t<vku::fence_t>,
             std::vector<vku::ref_t<vku::sem_t>>>},
-    // {"create_object",   }
+    {"create_object", internal_create_object},
     {NULL, NULL}
 };
 
@@ -1782,7 +2005,7 @@ inline int luaopen_vku (lua_State *L) {
             DBG("usr_id: %d", id);
             DBG("member_name: %s", member_name);
 
-            auto &o = objects[id]; /* a reference, ok on unwind? (if err) */
+            auto &o = g_rs.objects[id]; /* a reference, ok on unwind? (if err) */
             if (!o.obj) {
                 luaw_push_error(L, std::format("invalid object id: {}", id));
                 lua_error(L);
@@ -1823,7 +2046,7 @@ inline int luaopen_vku (lua_State *L) {
             DBG("usr_id: %d", id);
             DBG("member_name: %s", member_name);
 
-            auto &o = objects[id]; /* a reference, ok on unwind? (if err) */
+            auto &o = g_rs.objects[id]; /* a reference, ok on unwind? (if err) */
             if (!o.obj) {
                 luaw_push_error(L, std::format("invalid object id: {}", id));
                 lua_error(L);
@@ -1848,7 +2071,7 @@ inline int luaopen_vku (lua_State *L) {
             DBG("__gc");
 
             int id = luaw_from_user_data(lua_touserdata(L, -1)); /* an int, ok on unwind */
-            auto &o = objects[id]; /* a reference, ok on unwind? (if err) */
+            auto &o = g_rs.objects[id]; /* a reference, ok on unwind? (if err) */
             if (!o.obj) {
                 return 0;
             }
@@ -1859,9 +2082,9 @@ inline int luaopen_vku (lua_State *L) {
             o.obj->cbks->usr_ptr = nullptr;
 
             /* we clean it's name mapping, it's reference and free it's id */
-            objects_map.erase(o.name);
+            g_rs.objects_map.erase(o.name);
             o = object_ref_t{};
-            free_objects.push(id);
+            g_rs.free_objects.push_back(id);
             return 0;
         });
         lua_setfield(L, -2, "__gc");
@@ -1924,10 +2147,13 @@ inline int luaopen_vku (lua_State *L) {
 
         luaL_newlib(L, vku_tab_funcs);
 
+        g_lua_table = luaL_ref(L, LUA_REGISTRYINDEX);
+        lua_rawgeti(L, LUA_REGISTRYINDEX, g_lua_table);
+
         luaw_set_glfw_fields(L); /* This adds all glfw enums tokens */
 
-        for (auto &[k, id] : objects_map) {
-            if (!objects[id].obj) {
+        for (auto &[k, id] : g_rs.objects_map) {
+            if (!g_rs.objects[id].obj) {
                 DBG("Null user object?");
             }
             DBG("Registering object: %s", k.c_str());
