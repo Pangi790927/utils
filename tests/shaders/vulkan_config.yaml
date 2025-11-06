@@ -90,8 +90,6 @@ view:
     m_cmdpool: !ref cp
     m_path: test_image.png
   m_aspect_mask: VK_IMAGE_ASPECT_COLOR_BIT
-sampl:
-  
 mvp_buff:
   m_type: vku::buffer_t
   m_device: !ref dev
@@ -102,16 +100,23 @@ mvp_buff:
 bindings:
   m_type: vku::binding_desc_set_t
   m_descriptors:
-    # all should have the alternate posibility to be nested and have another "tag" option
-    # this would be especially usefull here, where we could've instead hust nest view instead of
-    # declaring it before it was needed
     - m_type: vku::binding_desc_set_t::buff_binding_t
       m_buff: !ref mvp_buff
+      m_desc:
+        m_type: vkc::binding_desc_t
+        m_binding: 0
+        m_stage: VK_SHADER_STAGE_VERTEX_BIT
+        m_desc_type: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
     - m_type: vku::binding_desc_set_t::sampl_binding_t
       m_view: !ref view
       m_sampler:
         m_type: vku::img_sampl_t
         m_device: !ref dev
+      m_desc:
+        m_type: vkc::binding_desc_t
+        m_binding: 1
+        m_stage: VK_SHADER_STAGE_VERTEX_BIT
+        m_desc_type: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
 vert:
   m_type: vku::shader_t
   m_device: !ref dev
@@ -135,7 +140,25 @@ pl:
     - !ref vert
     - !ref frag
   m_topology: VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
-  # m_input_desc: !ref input_desc_source
+  m_input_desc:
+    m_tag: "input_descriptor"
+    m_type: vkc::vertex_input_desc_t
+    m_binding: 0
+    m_stride: sizeof(vertex_struct_t)
+    m_in_rate: VK_VERTEX_INPUT_RATE_VERTEX
+    m_attrs:
+      - m_location: 0
+        m_binding: 0
+        m_format: VK_FORMAT_R32G32_SFLOAT
+        m_offset: offsetof(vertex_struct_t, pos)
+      - m_location: 1
+        m_binding: 0
+        m_format: VK_FORMAT_R32G32B32_SFLOAT
+        m_offset: offsetof(vertex_struct_t, color)
+      - m_location: 2
+        m_binding: 0
+        m_format: VK_FORMAT_R32G32B32_SFLOAT
+        m_offset: offsetof(vertex_struct_t, tex)
   m_bindings: !ref bindings
 fbs:
   m_type: vku::framebuffs_t

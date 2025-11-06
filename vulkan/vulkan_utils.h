@@ -95,6 +95,8 @@ enum vku_object_type_e {
     VKC_TYPE_INTEGER,
     VKC_TYPE_LUA_SCRIPT,
     VKC_TYPE_LUA_VARIABLE,
+    VKC_TYPE_VERTEX_INPUT_DESC,
+    VKC_TYPE_BINDING_DESC,
 
     /* Total number of different types */
     VKU_TYPE_CNT,
@@ -3372,6 +3374,8 @@ inline std::string to_string(vku_object_type_e type) {
         case VKC_TYPE_INTEGER: return "VKC_TYPE_INTEGER";
         case VKC_TYPE_LUA_SCRIPT: return "VKC_TYPE_LUA_SCRIPT";
         case VKC_TYPE_LUA_VARIABLE: return "VKC_TYPE_LUA_VARIABLE";
+        case VKC_TYPE_VERTEX_INPUT_DESC: return "VKC_TYPE_VERTEX_INPUT_DESC";
+        case VKC_TYPE_BINDING_DESC: return "VKC_TYPE_BINDING_DESC";
         case VKU_TYPE_CNT: return "VKC_INVALID_TYPE_CNT"; /* object can't be of this type */
     }
     return "VKC_TYPE_UNKNOWN";

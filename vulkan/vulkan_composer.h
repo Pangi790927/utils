@@ -7,6 +7,7 @@
  * the program. The objective is to have the entire Vulkan pipeline described from outside of the
  * source code. */
 
+/* TODO: figure out what to do with this: */
 #define LUA_IMPL
 
 #include "vulkan_utils.h"
@@ -298,6 +299,62 @@ private:
     virtual VkResult _init() override { return VK_SUCCESS; }
     virtual VkResult _uninit() override { return VK_SUCCESS; }
 };
+
+struct vertex_input_desc_t : public vku::object_t {
+    vku::vertex_input_desc_t vid;
+
+    static vku_object_type_e type_id_static() { return VKC_TYPE_VERTEX_INPUT_DESC; }
+    static vku::ref_t<vertex_input_desc_t> create(const vku::vertex_input_desc_t& vid) {
+        auto ret = vku::ref_t<vertex_input_desc_t>::create_obj_ref(
+                std::make_unique<vertex_input_desc_t>(), {});
+        ret->vid = vid;
+        return ret;
+    }
+
+    virtual vku_object_type_e type_id() const override { return VKC_TYPE_VERTEX_INPUT_DESC; }
+
+    inline std::string to_string() const override {
+        std::string ret = std::format("[binding={}, stride={}, in_rate={}]{{",
+                vid.bind_desc.binding, vid.bind_desc.stride,
+                vku::to_string(vid.bind_desc.inputRate));
+        for (auto &attr : vid.attr_desc)
+            ret += std::format("[loc={} bind={} fmt={} off=],", attr.location, attr.binding,
+                    vku::to_string(attr.format), attr.offset);
+        ret += "}}";
+        return ret;
+    }
+
+private:
+    virtual VkResult _init() override { return VK_SUCCESS; }
+    virtual VkResult _uninit() override { return VK_SUCCESS; }
+};
+
+struct binding_desc_t : public vku::object_t {
+    VkDescriptorSetLayoutBinding bd;
+
+    static vku_object_type_e type_id_static() { return VKC_TYPE_BINDING_DESC; }
+    static vku::ref_t<binding_desc_t> create(const VkDescriptorSetLayoutBinding& bd) {
+        auto ret = vku::ref_t<binding_desc_t>::create_obj_ref(
+                std::make_unique<binding_desc_t>(), {});
+        ret->bd = bd;
+        return ret;
+    }
+
+    virtual vku_object_type_e type_id() const override { return VKC_TYPE_BINDING_DESC; }
+
+    inline std::string to_string() const override {
+        return std::format("[binding={}, type={}, stage={}]",
+                bd.binding,
+                vku::to_string(bd.descriptorType),
+                vku::to_string((VkShaderStageFlagBits)bd.stageFlags));
+    }
+
+private:
+    virtual VkResult _init() override { return VK_SUCCESS; }
+    virtual VkResult _uninit() override { return VK_SUCCESS; }
+};
+
+
 
 template <typename T, typename K>
 constexpr auto has(T&& data_struct, K&& key) {
@@ -879,14 +936,56 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         co_return nullptr;
     }
     if (false);
-    else if (node["m_type"] == "vku::instance_t") {
-        auto obj = vku::instance_t::create();
+    else if (node["m_type"] == "vkc::vertex_input_desc_t") {
+        std::vector<VkVertexInputAttributeDescription> attrs;
+        for (auto attr : node["m_attrs"].as_seq()) {
+            auto m_location = co_await resolve_int(rs, attr["m_location"]);
+            auto m_binding = co_await resolve_int(rs, attr["m_binding"]);
+            auto m_format = get_enum_val<VkFormat>(node["m_format"]);
+            auto m_offset = co_await resolve_int(rs, attr["m_offset"]);
+            attrs.push_back(VkVertexInputAttributeDescription{
+                .location = (uint32_t)m_location,
+                .binding = (uint32_t)m_binding,
+                .format = m_format,
+                .offset = (uint32_t)m_offset
+            });
+        }
+        auto m_binding = co_await resolve_int(rs, node["m_binding"]);
+        auto m_stride = co_await resolve_int(rs, node["m_stride"]);
+        auto m_in_rate = get_enum_val<VkVertexInputRate>(node["m_in_rate"]);
+        auto obj = vertex_input_desc_t::create(vku::vertex_input_desc_t{
+            .bind_desc = {
+                .binding = (uint32_t)m_binding,
+                .stride = (uint32_t)m_stride,
+                .inputRate = m_in_rate,
+            },
+            .attr_desc = attrs,
+        });
         mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
-    else if (node["m_type"] == "vkc::lua_var_t") {
+    else if (node["m_type"] == "vkc::binding_desc_t") {
+        auto m_binding = co_await resolve_int(rs, node["m_binding"]);;
+        auto m_stage = get_enum_val<VkShaderStageFlagBits>(node["m_stage"]);
+        auto m_desc_type = get_enum_val<VkDescriptorType>(node["m_desc_type"]);
+        auto obj = binding_desc_t::create(VkDescriptorSetLayoutBinding{
+            .binding = (uint32_t)m_binding,
+            .descriptorType = m_desc_type,
+            .descriptorCount = 1,
+            .stageFlags = m_stage,
+            .pImmutableSamplers = nullptr
+        });
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
+        co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vkc::lua_var_t") { /* not sure how is this usefull */
         /* lua_var has the same tag_name as the var name */
         auto obj = lua_var_t::create(name);
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
+        co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vku::instance_t") {
+        auto obj = vku::instance_t::create();
         mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
@@ -957,22 +1056,17 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::binding_desc_set_t::buff_binding_t") {
-        /* TODO: add layout (see get_desc_set) */
         auto buff = co_await resolve_obj<vku::buffer_t>(rs, node["m_buff"]);
-        auto obj = vku::binding_desc_set_t::buff_binding_t::create(
-                vku::ubo_t::get_desc_set(0, VK_SHADER_STAGE_VERTEX_BIT), /* TODO: resolve this */
-                buff);
+        auto desc = co_await resolve_obj<vkc::binding_desc_t>(rs, node["m_desc"]);
+        auto obj = vku::binding_desc_set_t::buff_binding_t::create(desc->bd, buff);
         mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::binding_desc_set_t::sampl_binding_t") {
-        /* TODO: add layout (see get_desc_set) */
         auto view = co_await resolve_obj<vku::img_view_t>(rs, node["m_view"]);
         auto sampler = co_await resolve_obj<vku::img_sampl_t>(rs, node["m_sampler"]);
-        auto obj = vku::binding_desc_set_t::sampl_binding_t::create(
-                vku::img_sampl_t::get_desc_set(1, VK_SHADER_STAGE_FRAGMENT_BIT), /* TODO: resolve this */
-                view,
-                sampler);
+        auto desc = co_await resolve_obj<vkc::binding_desc_t>(rs, node["m_desc"]);
+        auto obj = vku::binding_desc_set_t::sampl_binding_t::create(desc->bd, view, sampler);
         mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
@@ -1173,29 +1267,6 @@ function on_window_resize(w, h)
 end
 )___";
 
-// inline int impl_glfw_pool_events(lua_State *L) {
-//     DBG_SCOPE();
-//     (void)L;
-//     return 0;
-// }
-
-// inline int impl_get_key(lua_State *L) {
-//     DBG_SCOPE();
-//     (void)L;
-//     return 0;
-// }
-
-// inline int impl_TODO(lua_State *L) {
-//     DBG_SCOPE();
-//     (void)L;
-//     return 0;
-// }
-
-// inline int impl_TODO_ret0(lua_State *L) {
-//     DBG_SCOPE();
-//     lua_pushinteger(L, 0);
-//     return 1;
-// }
 
 inline void* luaw_to_user_data(int index) { return (void*)(intptr_t)(index); }
 inline int luaw_from_user_data(void *val) { return (int)(intptr_t)(val); }
@@ -1530,7 +1601,6 @@ int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     }    
 }
 
-/* TODO: all function(LUA ONES) calls should redirect exceptions through this */
 int luaw_catch_exception(lua_State *L) {
     /* We don't let errors get out of the call because we don't want to break lua. As such, we catch
     any error and propagate it as a lua error. */
@@ -1990,10 +2060,12 @@ inline const luaL_Reg vku_tab_funcs[] = {
 
 inline void luaw_set_glfw_fields(lua_State *L);
 
-inline int luaopen_vku (lua_State *L) {
+inline int luaopen_vku(lua_State *L) {
     int top = lua_gettop(L);
 
     {
+        /* This metatable describes a generic vkc/vku object inside lua. Practically, it expososes
+        member objects and functions to lua. */
         luaL_newmetatable(L, "__vku_metatable");
 
         /* params: 1.usrptr, 2.key -> returns: 1.value */
@@ -2137,21 +2209,18 @@ inline int luaopen_vku (lua_State *L) {
     ASSERT_FN(CHK_BOOL(top == lua_gettop(L))); /* sanity check */
 
     {
-        /* TODO: all loaded, named types must also be registered here, such that the lua object
-        holds it's only reference, and upon __gc, it frees it (that is creates a reference, deletes
-        it from the mapping and gives lua the pointer to that reference) */
-        /* TODO: all enum types must be here registered as integers inside this library */
-        /* TODO: create some sor of creator function, that can be given a description as the ones
-        above, transforms it into yaml and finally uses the functions above to generate the
-        object */
-
+        /* Registers the vulkan_utils library and some standalone functions from vku(vulkan utils)
+        or vkc(vulkan composer) */
         luaL_newlib(L, vku_tab_funcs);
 
+        /* Registers this lua table for later use */
         g_lua_table = luaL_ref(L, LUA_REGISTRYINDEX);
         lua_rawgeti(L, LUA_REGISTRYINDEX, g_lua_table);
 
+        /* Registers glfw enum in this library */
         luaw_set_glfw_fields(L); /* This adds all glfw enums tokens */
 
+        /* Registers objects loaded from the yaml confing as objects in the library */
         for (auto &[k, id] : g_rs.objects_map) {
             if (!g_rs.objects[id].obj) {
                 DBG("Null user object?");
@@ -2170,6 +2239,7 @@ inline int luaopen_vku (lua_State *L) {
             }
         };
 
+        /* Registers vulkan enums in the lua library */
         register_flag_mapping(L, vk_pipeline_stage_flag_bits_from_str);
         register_flag_mapping(L, vk_index_type_from_str);
         register_flag_mapping(L, vk_pipeline_bind_point_from_str);
