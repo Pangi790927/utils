@@ -51,7 +51,7 @@ namespace vku = vku_utils;
  */
 
 /* TODO: fix layout of this code... it is bad */
-/* TODO: all members that are public MUST have m_ in front, example m_width */
+/* DONE: all members that are public MUST have m_ in front, example m_width */
 /* TODO:
     + We need to be able to parse dicts to yaml and build objects from it (same as initial parse)
     - We still need to fix some functions
@@ -184,6 +184,7 @@ struct ref_state_t {
 inline ref_state_t g_rs;
 inline int g_lua_table;
 
+/* Does this really have any irl usage? */
 struct lua_var_t : public vku::object_t {
     std::string name;
 
@@ -198,6 +199,37 @@ struct lua_var_t : public vku::object_t {
 
     inline std::string to_string() const override {
         return std::format("vkc::lua_var[{}]: m_name={} ", (void*)this, name);
+    }
+
+
+private:
+    virtual VkResult _init() override { return VK_SUCCESS; }
+    virtual VkResult _uninit() override { return VK_SUCCESS; }
+};
+
+/* Does this really have any irl usage? */
+struct lua_function_t : public vku::object_t {
+    std::string m_name;
+    std::string m_source;
+
+    static vku_object_type_e type_id_static() { return VKC_TYPE_LUA_VARIABLE; }
+    static vku::ref_t<lua_function_t> create(std::string name, std::string source) {
+        auto ret = vku::ref_t<lua_function_t>::create_obj_ref(
+                std::make_unique<lua_function_t>(), {});
+        ret->m_name = name;
+        ret->m_source = source;
+        return ret;
+    }
+
+    virtual vku_object_type_e type_id() const override { return VKC_TYPE_LUA_VARIABLE; }
+
+    int call(lua_State *L) {
+        DBG("Calling %s from %s", m_name.c_str(), m_source.c_str());
+        return 0;
+    }
+
+    inline std::string to_string() const override {
+        return std::format("vkc::lua_var[{}]: m_name={} m_source={}", (void*)this, m_name, m_source);
     }
 
 
@@ -274,7 +306,7 @@ private:
 from it */
 struct cpu_buffer_t : public vku::object_t {
     static vku_object_type_e type_id_static() { return VKC_TYPE_CPU_BUFFER; }
-    static vku::ref_t<float_t> create(size_t sz) {
+    static vku::ref_t<cpu_buffer_t> create(size_t sz) {
         auto ret = vku::ref_t<cpu_buffer_t>::create_obj_ref(std::make_unique<cpu_buffer_t>(), {});
         ret->_data.resize(sz);
         return ret;
@@ -370,13 +402,13 @@ private:
     virtual VkResult _uninit() override { return VK_SUCCESS; }
 };
 
-struct binding_desc_t : public vku::object_t {
+struct binding_t : public vku::object_t {
     VkDescriptorSetLayoutBinding bd;
 
     static vku_object_type_e type_id_static() { return VKC_TYPE_BINDING_DESC; }
-    static vku::ref_t<binding_desc_t> create(const VkDescriptorSetLayoutBinding& bd) {
-        auto ret = vku::ref_t<binding_desc_t>::create_obj_ref(
-                std::make_unique<binding_desc_t>(), {});
+    static vku::ref_t<binding_t> create(const VkDescriptorSetLayoutBinding& bd) {
+        auto ret = vku::ref_t<binding_t>::create_obj_ref(
+                std::make_unique<binding_t>(), {});
         ret->bd = bd;
         return ret;
     }
@@ -1041,7 +1073,7 @@ inline auto load_image(auto cp, std::string path) {
         throw vku::err_t("Failed to load image");
     }
 
-    auto img = vku::image_t::create(cp->dev, w, h, VK_FORMAT_R8G8B8A8_SRGB);
+    auto img = vku::image_t::create(cp->m_device, w, h, VK_FORMAT_R8G8B8A8_SRGB);
     img->set_data(cp, pixels, imag_sz);
 
     stbi_image_free(pixels);
@@ -1250,7 +1282,7 @@ co::task<vku::ref_t<VkuT>> resolve_obj(ref_state_t *rs, fkyaml::node& node) {
     }
 
     /* None of the above */
-    throw vku::err_t{std::format("node[{}] is invalid in this contex",
+    throw vku::err_t{std::format("node:{} is invalid in this contex",
             fkyaml::node::serialize(node))};
 }
 
@@ -1290,11 +1322,11 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
-    else if (node["m_type"] == "vkc::binding_desc_t") {
+    else if (node["m_type"] == "vkc::binding_t") {
         auto m_binding = co_await resolve_int(rs, node["m_binding"]);
         auto m_stage = get_enum_val<VkShaderStageFlagBits>(node["m_stage"]);
         auto m_desc_type = get_enum_val<VkDescriptorType>(node["m_desc_type"]);
-        auto obj = binding_desc_t::create(VkDescriptorSetLayoutBinding{
+        auto obj = binding_t::create(VkDescriptorSetLayoutBinding{
             .binding = (uint32_t)m_binding,
             .descriptorType = m_desc_type,
             .descriptorCount = 1,
@@ -1313,6 +1345,13 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
     else if (node["m_type"] == "vkc::lua_var_t") { /* TODO: not sure how is this type usefull */
         /* lua_var has the same tag_name as the var name */
         auto obj = lua_var_t::create(name);
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
+        co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vkc::lua_function_t") {
+        /* lua_function has the same tag_name as the function name */
+        auto src = co_await resolve_str(rs, node["m_source"]);
+        auto obj = lua_function_t::create(name, src);
         mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
@@ -1388,8 +1427,8 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::binding_desc_set_t::buff_binding_t") {
-        auto buff = co_await resolve_obj<vku::buffer_t>(rs, node["m_buff"]);
-        auto desc = co_await resolve_obj<vkc::binding_desc_t>(rs, node["m_desc"]);
+        auto buff = co_await resolve_obj<vku::buffer_t>(rs, node["m_buffer"]);
+        auto desc = co_await resolve_obj<vkc::binding_t>(rs, node["m_desc"]);
         auto obj = vku::binding_desc_set_t::buff_binding_t::create(desc->bd, buff);
         mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
@@ -1397,7 +1436,7 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
     else if (node["m_type"] == "vku::binding_desc_set_t::sampl_binding_t") {
         auto view = co_await resolve_obj<vku::img_view_t>(rs, node["m_view"]);
         auto sampler = co_await resolve_obj<vku::img_sampl_t>(rs, node["m_sampler"]);
-        auto desc = co_await resolve_obj<vkc::binding_desc_t>(rs, node["m_desc"]);
+        auto desc = co_await resolve_obj<vkc::binding_t>(rs, node["m_desc"]);
         auto obj = vku::binding_desc_set_t::sampl_binding_t::create(desc->bd, view, sampler);
         mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
@@ -1468,10 +1507,10 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vku::desc_set_t") {
-        auto descritpor_pool = co_await resolve_obj<vku::desc_pool_t>(rs, node["m_descritpor_pool"]);
+        auto descriptor_pool = co_await resolve_obj<vku::desc_pool_t>(rs, node["m_descriptor_pool"]);
         auto pipeline = co_await resolve_obj<vku::pipeline_t>(rs, node["m_pipeline"]);
         auto bindings = co_await resolve_obj<vku::binding_desc_set_t>(rs, node["m_bindings"]);
-        auto obj = vku::desc_set_t::create(descritpor_pool, pipeline, bindings);
+        auto obj = vku::desc_set_t::create(descriptor_pool, pipeline, bindings);
         mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
@@ -1925,6 +1964,7 @@ int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     }    
 }
 
+inline vkc_error_e luaw_execute_window_resize(int width, int height);
 int luaw_catch_exception(lua_State *L) {
     /* We don't let errors get out of the call because we don't want to break lua. As such, we catch
     any error and propagate it as a lua error. */
@@ -1932,8 +1972,14 @@ int luaw_catch_exception(lua_State *L) {
         throw ; // re-throw the current exception
     }
     catch (vku::err_t &vkerr) {
-        luaw_push_error(L, std::format("Invalid call: {}", vkerr.what()));
-        lua_error(L);
+        if (vkerr.vk_err == VK_SUBOPTIMAL_KHR) {
+            DBG("TODO: resize? Somehow...");
+            ASSERT_FN(luaw_execute_window_resize(800, 600));
+        }
+        else {
+            luaw_push_error(L, std::format("Invalid call: {}", vkerr.what()));
+            lua_error(L);
+        }
     }
     catch (fkyaml::exception &e) {
         luaw_push_error(L, std::format("fkyaml::exception: {}", e.what()));
@@ -2167,6 +2213,8 @@ inline void glfw_pool_events() {
 }
 
 inline uint32_t glfw_get_key(vku::ref_t<vku::window_t> window, uint32_t key) {
+    if (!window)
+        throw vku::err_t("Window parameter can't be null");
     return glfwGetKey(window->get_window(), key);
 }
 
@@ -2425,6 +2473,10 @@ inline int luaopen_vku(lua_State *L) {
                 lua_error(L);
             }
             if (!has(lua_class_members[class_id], member_name)) {
+                if (strcmp(member_name, "rebuild") == 0) try {
+                    o.obj.rebuild();
+                    return 0;
+                } catch (...) { return luaw_catch_exception(L); }
                 luaw_push_error(L, std::format("class id {} doesn't have member: {}",
                         vku::to_string(class_id), member_name));
                 lua_error(L);
@@ -2449,8 +2501,8 @@ inline int luaopen_vku(lua_State *L) {
         /* params: 1.usrptr, 2.key, 3.value  */
         lua_pushcfunction(L, [](lua_State *L) {
             DBG("__newindex: %d", lua_gettop(L));
-            int id = luaw_from_user_data(lua_touserdata(L, -2)); /* an int, ok on unwind */
-            const char *member_name = lua_tostring(L, -1); /* an const char *, ok on unwind */
+            int id = luaw_from_user_data(lua_touserdata(L, -3)); /* an int, ok on unwind */
+            const char *member_name = lua_tostring(L, -2); /* an const char *, ok on unwind */
 
             DBG("usr_id: %d", id);
             DBG("member_name: %s", member_name);
@@ -2473,7 +2525,29 @@ inline int luaopen_vku(lua_State *L) {
             auto &member = lua_class_member_setters[class_id][member_name];
             return member(L);
         });
-        lua_setfield(L, -2, "__newindex");        
+        lua_setfield(L, -2, "__newindex");
+
+        /* params: 1.usrptr [... rest of params] */
+        lua_pushcfunction(L, [](lua_State *L) {
+            DBG("__call: %d", lua_gettop(L));
+            int id = luaw_from_user_data(lua_touserdata(L, 1)); /* an int, ok on unwind */
+
+            DBG("usr_id: %d", id);
+
+            auto &o = g_rs.objects[id]; /* a reference, ok on unwind? (if err) */
+            if (!o.obj) {
+                luaw_push_error(L, std::format("invalid object id: {}", id));
+                lua_error(L);
+            }
+            vku_object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
+            if (class_id != VKC_TYPE_LUA_FUNCTION) {
+                luaw_push_error(L, std::format("invalid class id: {} is not VKC_TYPE_LUA_FUNCTION",
+                        vku::to_string(class_id)));
+                lua_error(L);
+            }
+            return o.obj.to_related<lua_function_t>()->call(L);
+        });
+        lua_setfield(L, -2, "__call");
 
         /* params: 1.usrptr */
         lua_pushcfunction(L, [](lua_State *L) {
@@ -2501,17 +2575,17 @@ inline int luaopen_vku(lua_State *L) {
         /* vku::window_t
         ----------------------------------------------------------------------------------------- */
 
-        VKC_REG_MEMB(vku::window_t, window_name);
-        VKC_REG_MEMB(vku::window_t, width);
-        VKC_REG_MEMB(vku::window_t, height);
+        VKC_REG_MEMB(vku::window_t, m_name);
+        VKC_REG_MEMB(vku::window_t, m_width);
+        VKC_REG_MEMB(vku::window_t, m_height);
 
         /* vku::instance_t
         ----------------------------------------------------------------------------------------- */
 
-        VKC_REG_MEMB(vku::instance_t, app_name);
-        VKC_REG_MEMB(vku::instance_t, engine_name);
-        VKC_REG_MEMB(vku::instance_t, extensions);
-        VKC_REG_MEMB(vku::instance_t, layers);
+        VKC_REG_MEMB(vku::instance_t, m_app_name);
+        VKC_REG_MEMB(vku::instance_t, m_engine_name);
+        VKC_REG_MEMB(vku::instance_t, m_extensions);
+        VKC_REG_MEMB(vku::instance_t, m_layers);
 
         /* vku::cmdbuff_t
         ----------------------------------------------------------------------------------------- */
@@ -3315,4 +3389,568 @@ inline void luaw_set_glfw_fields(lua_State *L) {
  *
  *    * `m_type` identifies the object type.
  *    * `m_tag` (optional) assigns a reference name so this object can be reused elsewhere.
+ * 
+ * 
+ * Object Types:
+ * =============
+ * 
+ * window_t
+ * --------
+ *
+ * Description: Represents a GLFW window. This object manages a platform-specific window
+ * and serves as the target for Vulkan rendering. It allows resizing, title changes, and
+ * provides access to the underlying GLFWwindow* for integration with other libraries.
+ *
+ * Members:
+ * - m_name: Window title.
+ * - m_width, m_height: Window dimensions.
+ *
+ * Init: create(width, height, name)
+ *   - Parameters:
+ *     - width: Initial width of the window (default: 800).
+ *     - height: Initial height of the window (default: 600).
+ *     - name: Title of the window (default: "vku::window_name_placeholder").
+ * 
+ * 
+ * instance_t
+ * ----------
+ *
+ * Description: Represents a Vulkan instance. A Vulkan instance is the foundational 
+ * object that initializes the Vulkan library for a specific application. It manages 
+ * the connection between the application and the Vulkan runtime, and it enables 
+ * creation of devices, surfaces, and other Vulkan objects. This object also supports 
+ * optional debug layers for development and validation.
+ *
+ * Members:
+ * - m_app_name: Name of the application. Used for debugging and identification.
+ * - m_engine_name: Name of the engine. Used for debugging and identification.
+ * - m_extensions: List of Vulkan extensions to enable on creation.
+ * - m_layers: List of Vulkan layers (such as validation layers) to enable.
+ *
+ * Init: create(app_name, engine_name, extensions, layers)
+ *   - Parameters:
+ *     - app_name: Name of the application (default: "vku::app_name_placeholder").
+ *     - engine_name: Name of the engine (default: "vku::engine_name_placeholder").
+ *     - extensions: Vector of extension names to enable (default: { "VK_EXT_debug_utils" }).
+ *     - layers: Vector of layer names to enable (default: { "VK_LAYER_KHRONOS_validation" }).
+ *
+ * Notes:
+ * - Debug layers can be optionally enabled to catch errors and warnings during development.
+ * 
+ * 
+ * surface_t
+ * ----------
+ *
+ * Description: Wraps a Vulkan surface. A Vulkan surface is an abstraction that allows 
+ * rendering to be presented to a window system. This object manages the relationship 
+ * between a Vulkan instance and a platform-specific window (GLFW in this case). 
+ * It handles creation and destruction of the VkSurfaceKHR handle and ensures that 
+ * the surface is properly associated with the correct window and Vulkan instance.
+ *
+ * Members:
+ * - m_window: Reference to a window_t object. This is the window that the surface 
+ *   is associated with. The surface will present images to this window.
+ * - m_instance: Reference to an instance_t object. The Vulkan instance that created 
+ *   and manages this surface.
+ *
+ * Init: create(window, instance)
+ *   - Parameters:
+ *     - window: A reference to a window_t object to associate the surface with.
+ *     - instance: A reference to an instance_t object used to create the surface.
+ *   - Returns: A reference-counted surface_t object with a valid VkSurfaceKHR handle.
+ * 
+ * device_t
+ * --------
+ *
+ * Description: Represents a Vulkan logical device. This object abstracts a physical 
+ * GPU and provides access to queues for graphics and presentation. It is used to 
+ * create buffers, images, pipelines, and other Vulkan resources.
+ *
+ * Members:
+ * - m_surface: Reference to a surface_t object. The surface used for presentation and 
+ *   swapchain creation.
+ *
+ * Init: create(surface)
+ *   - Parameters:
+ *     - surface: A reference to a surface_t object that this device will render to.
+ *
+ * Notes:
+ * - Automatically selects suitable graphics and presentation queues.
+ * - Provides access to device-local and host-visible memory through buffer objects.
+ * 
+ * TODO:
+ * - Add options for selecting the phys dev
+ * 
+ * 
+ * swapchain_t
+ * -----------
+ *
+ * Description: Wraps a Vulkan swapchain. A swapchain manages a set of images that 
+ * are presented to a window in a controlled manner. This object handles creation 
+ * of the VkSwapchainKHR, its images, and associated image views.
+ *
+ * Members:
+ * - m_device: Reference to a device_t object. The device used to create and manage 
+ *   the swapchain.
+ * - m_depth_imag: Reference to a depth image used for depth testing (automatically created).
+ * - m_depth_view: Reference to an image view for the depth image (automatically created).
+ *
+ * Init: create(device)
+ *   - Parameters:
+ *     - device: Reference to the device_t object.
+ *
+ * Notes:
+ * - Automatically chooses the surface format, present mode, and image count.
+ * - Provides access to the swapchain images and their views for rendering.
+ * 
+ * TODO:
+ * - more init hints?
+ * 
+ * 
+ * shader_t
+ * --------
+ *
+ * Description: Wraps a Vulkan shader module. This object represents a compiled 
+ * shader in SPIR-V format and can be used in graphics or compute pipelines. It 
+ * supports initialization from a SPIR-V object or directly from a precompiled file.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this shader.
+ * - m_type: Shader stage (vertex, fragment, compute, etc.).
+ * - m_spirv: Reference to a spirv_t object containing the compiled SPIR-V code.
+ * - m_path: Path to the shader file (used if initialized from file).
+ * - m_init_from_path: Flag indicating whether the shader was initialized from a file.
+ *
+ * Init:
+ * - create(device, spirv): Initialize from a spirv_t object.
+ * - create(device, path, type): Initialize from a compiled shader file.
+ *
+ * Notes:
+ * - For graphics pipelines, shaders must match the pipeline’s stage requirements.
+ * 
+ * 
+ * renderpass_t
+ * -------------
+ *
+ * Description: Wraps a Vulkan render pass. A render pass defines how framebuffer 
+ * attachments are used during rendering, including their load/store operations 
+ * and the subpass dependencies. This object manages the creation of a VkRenderPass 
+ * for a given swapchain.
+ *
+ * Members:
+ * - m_swapchain: Reference to a swapchain_t object. The swapchain whose images 
+ *   will be rendered into using this render pass.
+ *
+ * Init: create(swc)
+ *   - Parameters:
+ *     - swc: Reference to a swapchain_t object that will provide the framebuffer images.
+ *
+ * Notes:
+ * - Handles attachment descriptions, subpass definitions, and dependencies automatically.
+ * 
+ * 
+ * pipeline_t
+ * ----------
+ *
+ * Description: Wraps a Vulkan graphics pipeline. This object encapsulates the entire 
+ * pipeline state, including shaders, vertex input, topology, viewport, rasterization, 
+ * and descriptor set bindings. It is used for rendering commands submitted to a 
+ * command buffer.
+ *
+ * Members:
+ * - m_renderpass: Reference to a renderpass_t object. The render pass this pipeline 
+ *   will be used with.
+ * - m_shaders: Vector of references to shader_t objects. The shaders used in the 
+ *   pipeline stages.
+ * - m_topology: Primitive topology (triangle list, line list, etc.).
+ * - m_input_desc: Vertex input description (binding, attributes, stride, input rate).
+ * - m_bindings: Reference to a binding_desc_set_t object. Descriptor sets used 
+ *   by the pipeline.
+ * - m_width, m_height: Pipeline viewport dimensions.
+ *
+ * Init: create(width, height, renderpass, shaders, topology, input_desc, bindings)
+ *   - Parameters:
+ *     - width, height: Pipeline viewport dimensions.
+ *     - renderpass: Reference to the renderpass_t object.
+ *     - shaders: Vector of shader_t references for each stage.
+ *     - topology: Primitive topology.
+ *     - input_desc: Vertex input description.
+ *     - bindings: Reference to binding_desc_set_t describing descriptor sets.
+ *
+ * TODO:
+ * - maybe get rid of m_width, m_height, create new objects for viewport and stuff
+ * 
+ * compute_pipeline_t
+ * ------------------
+ *
+ * Description: Wraps a Vulkan compute pipeline. This object encapsulates a compute 
+ * shader and the descriptor sets it uses. It is used to dispatch compute workloads 
+ * on the GPU.
+ *
+ * Members:
+ * - m_device: Reference to a device_t object. The device that owns this compute pipeline.
+ * - m_shader: Reference to a shader_t object containing the compute shader.
+ * - m_bindings: Reference to a binding_desc_set_t object describing descriptor sets 
+ *   used by the shader.
+ *
+ * Init: create(device, shader, bindings)
+ *   - Parameters:
+ *     - device: Reference to the device_t object.
+ *     - shader: Reference to the compute shader (shader_t).
+ *     - bindings: Reference to binding_desc_set_t describing descriptor sets.
+ * 
+ * 
+ * framebuffs_t
+ * -------------
+ *
+ * Description: Wraps Vulkan framebuffers. A framebuffer represents a collection of 
+ * attachments (color, depth, etc.) used by a render pass for rendering. This object 
+ * manages the creation of VkFramebuffer objects corresponding to the swapchain images.
+ *
+ * Members:
+ * - m_renderpass: Reference to a renderpass_t object. The render pass that these 
+ *   framebuffers are compatible with.
+ *
+ * Init: create(renderpass)
+ *   - Parameters:
+ *     - renderpass: Reference to the renderpass_t object these framebuffers will be used with.
+ * 
+ *
+ * cmdpool_t
+ * ----------
+ *
+ * Description: Wraps a Vulkan command pool. A command pool manages the memory and 
+ * allocation of command buffers, which record rendering and compute commands. This 
+ * object simplifies creation and management of command buffers for a device.
+ *
+ * Members:
+ * - m_device: Reference to a device_t object. The device that owns this command pool.
+ *
+ * Init: create(device)
+ *   - Parameters:
+ *     - device: Reference to the device_t object that will own this command pool.
+ *
+ * Notes:
+ * - All command buffers allocated from this pool are implicitly associated with
+ * the device’s queues.
+ * 
+ * 
+ * cmdbuff_t
+ * ----------
+ *
+ * Description: Wraps a Vulkan command buffer. Command buffers record rendering and 
+ * compute commands that are submitted to a queue for execution. This object manages 
+ * allocation, recording, and submission of commands, and provides utility functions 
+ * for common operations like binding vertex buffers, descriptor sets, and drawing.
+ *
+ * Members:
+ * - m_cmdpool: Reference to a cmdpool_t object. The command pool from which this 
+ *   command buffer was allocated.
+ * - m_host_free: TODO explanation
+ *
+ * Member functions:
+ * - begin(flags): Begin recording commands with specified usage flags.
+ * - begin_rpass(fbs, img_idx): Begin a render pass using the specified framebuffers.
+ * - bind_vert_buffs(first_bind, buffs): Bind vertex buffers.
+ * - bind_idx_buff(ibuff, offset, idx_type): Bind an index buffer.
+ * - bind_desc_set(bind_point, pl, desc_set): Bind a descriptor set for the pipeline.
+ * - draw(pl, vert_cnt): Issue a non-indexed draw call.
+ * - draw_idx(pl, vert_cnt): Issue an indexed draw call.
+ * - end_rpass(): End the current render pass.
+ * - end(): Finish recording commands.
+ * - reset(): Reset the command buffer for reuse.
+ * - bind_compute(cpl): Bind a compute pipeline.
+ * - dispatch_compute(x, y, z): Dispatch compute shader workgroups.
+ *
+ * Init: create(cmdpool, host_free=false)
+ *   - Parameters:
+ *     - cmdpool: Reference to the cmdpool_t object from which this buffer will be allocated.
+ *     - host_free: Optional flag indicating whether the buffer is host-allocated (default: false).
+ *
+ * TODO:
+ * - check this description again
+ * 
+ * 
+ * sem_t
+ * -----
+ *
+ * Description: Wraps a Vulkan semaphore. Semaphores are synchronization primitives 
+ * used to coordinate execution between command buffers and queues, and to synchronize 
+ * presentation with rendering.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this semaphore.
+ *
+ * Member functions:
+ * - None exposed publicly. Semaphores are used internally when submitting command buffers 
+ *   and presenting images.
+ *
+ * Init: create(device)
+ *   - Parameters:
+ *     - device: Reference to the device_t object that will own this semaphore.
+ *
+ * Notes:
+ * - Typically used to signal when an image is available from the swapchain or when 
+ *   rendering is complete.
+ * - Must be created after the device is initialized.
+ * 
+ * 
+ * fence_t
+ * -------
+ *
+ * Description: Vulkan fence wrapper.
+ *
+ * Members:
+ * - vk_fence: Vulkan fence handle
+ * - m_device: Reference to device_t
+ * - m_flags: Fence creation flags
+ *
+ * Member Functions: None
+ *
+ * Init: create(device, flags=0)
+ * 
+ * 
+ * buffer_t
+ * --------
+ *
+ * Description: Vulkan buffer wrapper.
+ *
+ * Members:
+ * - vk_buff: Buffer handle
+ * - vk_mem: Device memory
+ * - m_map_ptr: CPU mapped pointer
+ * - m_device: Reference to device_t
+ * - m_size, m_usage_flags, m_sharing_mode, m_memory_flags
+ *
+ * Member Functions:
+ * - map_data(offset, size)
+ * - unmap_data()
+ *
+ * Init: create(device, size, usage_flags, sharing_mode, memory_flags)
+ * 
+ * 
+ * image_t
+ * -------
+ *
+ * Description: Vulkan image abstraction.
+ *
+ * Members:
+ * - vk_img, vk_img_mem
+ * - m_device: Reference to device_t
+ * - m_width, m_height
+ * - m_format, m_usage
+ *
+ * Member Functions:
+ * - transition_layout(cmdpool, old_layout, new_layout, cmdbuff=nullptr)
+ * - set_data(cmdpool, data, size, cmdbuff=nullptr)
+ *
+ * Init: create(device, width, height, format, usage)
+ * 
+ * 
+ * img_view_t
+ * -----------
+ *
+ * Description: Vulkan image view wrapper.
+ *
+ * Members:
+ * - vk_view: Image view handle
+ * - m_image: Reference to image_t
+ * - m_aspect_mask
+ *
+ * member functions: None
+ *
+ * Init: create(image, aspect_mask)
+ * 
+ * 
+ * img_sampl_t
+ * ------------
+ *
+ * Description: Vulkan image sampler wrapper.
+ *
+ * Members:
+ * - vk_sampler
+ * - m_device: Reference to device_t
+ * - m_filter
+ *
+ * member functions:
+ * - get_desc_set(binding, stage)
+ *
+ * Init: create(device, filter=LINEAR)
+ * 
+ * 
+ * binding_desc_set_t
+ * ------------------
+ *
+ * Description: Represents a set of descriptor bindings.
+ *
+ * Members:
+ * - m_binds: Vector of binding_desc_t
+ *
+ * member functions:
+ * - get_writes()
+ * - get_descriptors()
+ *
+ * Init: create(vector<binding_desc_t>)
+ * 
+ * 
+ * desc_pool_t
+ * ------------
+ *
+ * Description: Vulkan descriptor pool wrapper.
+ *
+ * Members:
+ * - vk_descpool
+ * - m_device: Reference to device_t
+ * - m_bindings: Reference to binding_desc_set_t
+ * - m_cnt: Number of descriptor sets
+ *
+ * member functions: None
+ *
+ * Init: create(device, bindings, count)
+ * 
+ * 
+ * desc_set_t
+ * -----------
+ *
+ * Description: Vulkan descriptor set wrapper.
+ *
+ * Members:
+ * - vk_desc_set
+ * - m_descriptor_pool: Reference to desc_pool_t
+ * - m_pipeline: Reference to pipeline_t
+ * - m_bindings: Reference to binding_desc_set_t
+ *
+ * member functions: None
+ *
+ * Init: create(pool, pipeline, bindings)
+ * 
+ * 
+ * lua_var_t
+ * ---------
+ *
+ * Description: Represents a Lua variable reference.
+ *
+ * Members:
+ * - name
+ *
+ * member functions: None
+ *
+ * Init: create(name)
+ * 
+ * 
+ * lua_function_t
+ * ---------------
+ *
+ * Description: Represents a Lua callable function.
+ *
+ * Members:
+ * - m_name
+ * - m_source
+ *
+ * member functions:
+ * - call(lua_State *L)
+ *
+ * Init: create(name, source)
+ * 
+ * 
+ * lua_script_t
+ * -------------
+ *
+ * Description: Represents a Lua script.
+ *
+ * Members:
+ * - content
+ *
+ * member functions: None
+ *
+ * Init: create(content)
+ * 
+ * 
+ * integer_t
+ * ----------
+ *
+ * Description: Holds a 64-bit integer.
+ *
+ * Members:
+ * - value
+ *
+ * member functions: None
+ *
+ * Init: create(value)
+ * 
+ * 
+ * float_t
+ * --------
+ *
+ * Description: Holds a double-precision float.
+ *
+ * Members:
+ * - value
+ *
+ * member functions: None
+ *
+ * Init: create(value)
+ * 
+ * 
+ * cpu_buffer_t
+ * -------------
+ *
+ * Description: Holds a CPU-accessible memory buffer.
+ *
+ * Members:
+ * - _data: internal storage
+ *
+ * member functions:
+ * - data(): returns pointer to buffer
+ * - size(): returns buffer size
+ *
+ * Init: create(size)
+ * 
+ * 
+ * string_t
+ * --------
+ *
+ * Description: Holds a string value.
+ *
+ * Members:
+ * - value
+ *
+ * member functions: None
+ *
+ * Init: create(value)
+ * 
+ * 
+ * spirv_t
+ * --------
+ *
+ * Description: Holds SPIR-V code.
+ *
+ * Members:
+ * - spirv: SPIR-V structure with stage and content
+ *
+ * member functions: None
+ *
+ * Init: create(spirv)
+ * 
+ * 
+ * vertex_input_desc_t
+ * -------------------
+ *
+ * Description: Wraps a vertex input description.
+ *
+ * Members:
+ * - vid: Vertex input description structure
+ *
+ * Init: create(vid)
+ * 
+ * 
+ * binding_t
+ * ----------
+ *
+ * Description: Wraps VkDescriptorSetLayoutBinding.
+ *
+ * Members:
+ * - bd
+ *
+ * Init: create(binding)
  */

@@ -55,33 +55,33 @@ frag_spirv:
 width: 800
 height: 600
 
-# TODO: figure those out: 
-vertex_source:
-  m_type: vkc::lua_var_t
-index_source:
-  m_type: vkc::lua_var_t
-input_desc_source:
-  m_type: vkc::lua_var_t
-mvp_source:
-  m_type: vkc::lua_var_t
+# Those are examples of user provided functions, the name must match the one inside the plugin and
+# the calling convention is that of lua (i.e. read the manual and prototype is int fn(lua_State *))
+fill_buffer_with_triangles_vertices:
+  m_type: vkc::lua_function_t
+  m_source: libuserplugin.so
+fill_buffer_with_triangles_indexes:
+  m_type: vkc::lua_function_t
+  m_source: libuserplugin.so
 
-inst:
-  m_type: vku::instance_t
+staging_buffer:
+  m_type: vkc::cpu_buffer_t
+  m_size: (SIZEOF_VEC_2F + SIZEOF_VEC_3F + SIZEOF_VEC_2F) * 3
 window:
   m_type: vku::window_t
   m_width: !ref width
   m_height: !ref height
   m_name: "Window Name Goes Here"
-surf:
-  m_type: vku::surface_t
-  m_window: !ref window
-  m_instance: !ref inst
+dev:
+  m_type: vku::device_t
+  m_surface:
+    m_type: vku::surface_t
+    m_window: !ref window
+    m_instance:
+      m_type: vku::instance_t
 cp:
   m_type: vku::cmdpool_t
-  m_device:
-    dev:
-      m_type: vku::device_t
-      m_surface: !ref surf
+  m_device: !ref dev
 view:
   m_type: vku::img_view_t
   m_image:
@@ -101,9 +101,9 @@ bindings:
   m_type: vku::binding_desc_set_t
   m_descriptors:
     - m_type: vku::binding_desc_set_t::buff_binding_t
-      m_buff: !ref mvp_buff
+      m_buffer: !ref mvp_buff
       m_desc:
-        m_type: vkc::binding_desc_t
+        m_type: vkc::binding_t
         m_binding: 0
         m_stage: VK_SHADER_STAGE_VERTEX_BIT
         m_desc_type: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
@@ -113,18 +113,10 @@ bindings:
         m_type: vku::img_sampl_t
         m_device: !ref dev
       m_desc:
-        m_type: vkc::binding_desc_t
+        m_type: vkc::binding_t
         m_binding: 1
         m_stage: VK_SHADER_STAGE_VERTEX_BIT
         m_desc_type: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-vert:
-  m_type: vku::shader_t
-  m_device: !ref dev
-  m_spirv: !ref vert_spirv
-frag:
-  m_type: vku::shader_t
-  m_device: !ref dev
-  m_spirv: !ref frag_spirv
 swc:
   m_type: vku::swapchain_t
   m_device: !ref dev
@@ -136,10 +128,6 @@ pl:
   m_width: !ref width
   m_height: !ref height
   m_renderpass: !ref rp
-  m_shaders:
-    - !ref vert
-    - !ref frag
-  m_topology: VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
   m_input_desc:
     m_tag: "input_descriptor"
     m_type: vkc::vertex_input_desc_t
@@ -159,6 +147,14 @@ pl:
         m_binding: 0
         m_format: VK_FORMAT_R32G32B32_SFLOAT
         m_offset: SIZEOF_VEC_2F + SIZEOF_VEC_3F
+  m_topology: VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+  m_shaders:
+    - m_type: vku::shader_t
+      m_device: !ref dev
+      m_spirv: !ref vert_spirv
+    - m_type: vku::shader_t
+      m_device: !ref dev
+      m_spirv: !ref frag_spirv
   m_bindings: !ref bindings
 fbs:
   m_type: vku::framebuffs_t
@@ -196,7 +192,7 @@ desc_pool:
   m_cnt: 1
 desc_set:
   m_type: vku::desc_set_t
-  m_descritpor_pool: !ref desc_pool
+  m_descriptor_pool: !ref desc_pool
   m_pipeline: !ref pl
   m_bindings: !ref bindings
 
@@ -204,7 +200,13 @@ lua_script:
   m_source: |
     vku = require("vulkan_utils")
 
-    function on_loop_run() do
+    vku.fill_buffer_with_triangles_vertices(vku.staging_buffer.data(), vku.staging_buffer.size())
+    vku.copy_from_cpu_to_gpu(vku.staging_buffer, vku.vbuff, vku.staging_buffer.size(), 0)
+
+    vku.fill_buffer_with_triangles_indexes(vku.staging_buffer.data(), vku.staging_buffer.size())
+    vku.copy_from_cpu_to_gpu(vku.staging_buffer, vku.ibuff, vku.SIZEOF_INT*3, 0)
+
+    function on_loop_run()
       vku.glfw_pool_events() -- needed for keys to be available
       if vku.get_key(vku.window, vku.GLFW_KEY_ESCAPE) == vku.GLFW_PRESS then
         vku.signal_close() -- this will close the loop
