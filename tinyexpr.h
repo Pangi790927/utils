@@ -66,8 +66,6 @@ typedef struct te_variable {
     void *context;
 } te_variable;
 
-
-
 /* Parses the input expression, evaluates it, and frees it. */
 /* Returns NaN on error. */
 double te_interp(const char *expression, int *error);

@@ -7,7 +7,8 @@
  * the program. The objective is to have the entire Vulkan pipeline described from outside of the
  * source code. */
 
-/* TODO: figure out what to do with this: */
+/* TODO: figure out what to do with this: (The LUA_IMPL part, I think most of the things in
+vulkan_composer would stay better in a CPP file) */
 #define LUA_IMPL
 
 #include "vulkan_utils.h"
@@ -49,10 +50,23 @@ namespace vku = vku_utils;
     better)
  */
 
-// struct vulkan_instance_t binding_desc_t{
-//     std::string filename;
-//     vku::opts_t vku_opts;    /*! json object: opts */  
-// };
+/* TODO: fix layout of this code... it is bad */
+/* TODO: all members that are public MUST have m_ in front, example m_width */
+/* TODO:
+    + We need to be able to parse dicts to yaml and build objects from it (same as initial parse)
+    - We still need to fix some functions
+    + We need a generic way to store some special types (vid, bd for example)
+    - We need to fix the stupidity that is descriptors
+    - We need a way to set buffers (based on descripors maybe?)
+    - We need some new types (matrices, vectors) ? do we?
+    - TODO: add functions to init buffers with those above
+    - TODO: add functions to copy to and from gpu
+    + We need to make std::vector an acceptable parameter/return type
+    + We need to make std::tuple an acceptable parameter
+    - We need to expose the way that we pack functions and members to the outside
+            (so that an user can use them to add his own functions (that user is me))
+
+    Once those are done, I think this is done */
 
 #define ASSERT_VKC_CO(fn_call)     \
 do {                               \
@@ -173,7 +187,7 @@ inline int g_lua_table;
 struct lua_var_t : public vku::object_t {
     std::string name;
 
-    static  vku_object_type_e type_id_static() { return VKC_TYPE_LUA_VARIABLE; }
+    static vku_object_type_e type_id_static() { return VKC_TYPE_LUA_VARIABLE; }
     static vku::ref_t<lua_var_t> create(std::string name) {
         auto ret = vku::ref_t<lua_var_t>::create_obj_ref(std::make_unique<lua_var_t>(), {});
         ret->name = name;
@@ -195,7 +209,7 @@ private:
 struct lua_script_t : public vku::object_t {
     std::string content;
 
-    static  vku_object_type_e type_id_static() { return VKC_TYPE_LUA_SCRIPT; }
+    static vku_object_type_e type_id_static() { return VKC_TYPE_LUA_SCRIPT; }
     static vku::ref_t<lua_script_t> create(std::string content) {
         auto ret = vku::ref_t<lua_script_t>::create_obj_ref(std::make_unique<lua_script_t>(), {});
         ret->content = content;
@@ -217,7 +231,7 @@ private:
 struct integer_t : public vku::object_t {
     int64_t value = 0;
 
-    static  vku_object_type_e type_id_static() { return VKC_TYPE_INTEGER; }
+    static vku_object_type_e type_id_static() { return VKC_TYPE_INTEGER; }
     static vku::ref_t<integer_t> create(int64_t value) {
         auto ret = vku::ref_t<integer_t>::create_obj_ref(std::make_unique<integer_t>(), {});
         ret->value = value;
@@ -238,7 +252,7 @@ private:
 struct float_t : public vku::object_t {
     double value = 0;
 
-    static  vku_object_type_e type_id_static() { return VKC_TYPE_FLOAT; }
+    static vku_object_type_e type_id_static() { return VKC_TYPE_FLOAT; }
     static vku::ref_t<float_t> create(double value) {
         auto ret = vku::ref_t<float_t>::create_obj_ref(std::make_unique<float_t>(), {});
         ret->value = value;
@@ -256,10 +270,37 @@ private:
     virtual VkResult _uninit() override { return VK_SUCCESS; }
 };
 
+/* This does the following: creates a buffer in cpu-memory space that can be used to copy data to
+from it */
+struct cpu_buffer_t : public vku::object_t {
+    static vku_object_type_e type_id_static() { return VKC_TYPE_CPU_BUFFER; }
+    static vku::ref_t<float_t> create(size_t sz) {
+        auto ret = vku::ref_t<cpu_buffer_t>::create_obj_ref(std::make_unique<cpu_buffer_t>(), {});
+        ret->_data.resize(sz);
+        return ret;
+    }
+
+    void *data() { return (void *)_data.data(); }
+    size_t size() const { return _data.size(); }
+
+    virtual vku_object_type_e type_id() const override { return VKC_TYPE_CPU_BUFFER; }
+
+    inline std::string to_string() const override {
+        return std::format("vkc::cpu_buffer_t[{}]: size={} ", (void*)this, size());
+    }
+
+private:
+    virtual VkResult _init() override { return VK_SUCCESS; }
+    virtual VkResult _uninit() override { return VK_SUCCESS; }
+
+    std::vector<uint8_t> _data;
+};
+
+
 struct string_t : public vku::object_t {
     std::string value;
 
-    static  vku_object_type_e type_id_static() { return VKC_TYPE_STRING; }
+    static vku_object_type_e type_id_static() { return VKC_TYPE_STRING; }
     static vku::ref_t<string_t> create(const std::string& value) {
         auto ret = vku::ref_t<string_t>::create_obj_ref(std::make_unique<string_t>(), {});
         ret->value = value;
@@ -720,6 +761,250 @@ template <> inline VkPipelineStageFlagBits get_enum_val<VkPipelineStageFlagBits>
     return get_enum_val(n, vk_pipeline_stage_flag_bits_from_str);
 }
 
+inline std::unordered_map<std::string, VkFormat> vk_format_from_str = {
+    {"VK_FORMAT_UNDEFINED", VK_FORMAT_UNDEFINED},
+    {"VK_FORMAT_R4G4_UNORM_PACK8", VK_FORMAT_R4G4_UNORM_PACK8},
+    {"VK_FORMAT_R4G4B4A4_UNORM_PACK16", VK_FORMAT_R4G4B4A4_UNORM_PACK16},
+    {"VK_FORMAT_B4G4R4A4_UNORM_PACK16", VK_FORMAT_B4G4R4A4_UNORM_PACK16},
+    {"VK_FORMAT_R5G6B5_UNORM_PACK16", VK_FORMAT_R5G6B5_UNORM_PACK16},
+    {"VK_FORMAT_B5G6R5_UNORM_PACK16", VK_FORMAT_B5G6R5_UNORM_PACK16},
+    {"VK_FORMAT_R5G5B5A1_UNORM_PACK16", VK_FORMAT_R5G5B5A1_UNORM_PACK16},
+    {"VK_FORMAT_B5G5R5A1_UNORM_PACK16", VK_FORMAT_B5G5R5A1_UNORM_PACK16},
+    {"VK_FORMAT_A1R5G5B5_UNORM_PACK16", VK_FORMAT_A1R5G5B5_UNORM_PACK16},
+    {"VK_FORMAT_R8_UNORM", VK_FORMAT_R8_UNORM},
+    {"VK_FORMAT_R8_SNORM", VK_FORMAT_R8_SNORM},
+    {"VK_FORMAT_R8_USCALED", VK_FORMAT_R8_USCALED},
+    {"VK_FORMAT_R8_SSCALED", VK_FORMAT_R8_SSCALED},
+    {"VK_FORMAT_R8_UINT", VK_FORMAT_R8_UINT},
+    {"VK_FORMAT_R8_SINT", VK_FORMAT_R8_SINT},
+    {"VK_FORMAT_R8_SRGB", VK_FORMAT_R8_SRGB},
+    {"VK_FORMAT_R8G8_UNORM", VK_FORMAT_R8G8_UNORM},
+    {"VK_FORMAT_R8G8_SNORM", VK_FORMAT_R8G8_SNORM},
+    {"VK_FORMAT_R8G8_USCALED", VK_FORMAT_R8G8_USCALED},
+    {"VK_FORMAT_R8G8_SSCALED", VK_FORMAT_R8G8_SSCALED},
+    {"VK_FORMAT_R8G8_UINT", VK_FORMAT_R8G8_UINT},
+    {"VK_FORMAT_R8G8_SINT", VK_FORMAT_R8G8_SINT},
+    {"VK_FORMAT_R8G8_SRGB", VK_FORMAT_R8G8_SRGB},
+    {"VK_FORMAT_R8G8B8_UNORM", VK_FORMAT_R8G8B8_UNORM},
+    {"VK_FORMAT_R8G8B8_SNORM", VK_FORMAT_R8G8B8_SNORM},
+    {"VK_FORMAT_R8G8B8_USCALED", VK_FORMAT_R8G8B8_USCALED},
+    {"VK_FORMAT_R8G8B8_SSCALED", VK_FORMAT_R8G8B8_SSCALED},
+    {"VK_FORMAT_R8G8B8_UINT", VK_FORMAT_R8G8B8_UINT},
+    {"VK_FORMAT_R8G8B8_SINT", VK_FORMAT_R8G8B8_SINT},
+    {"VK_FORMAT_R8G8B8_SRGB", VK_FORMAT_R8G8B8_SRGB},
+    {"VK_FORMAT_B8G8R8_UNORM", VK_FORMAT_B8G8R8_UNORM},
+    {"VK_FORMAT_B8G8R8_SNORM", VK_FORMAT_B8G8R8_SNORM},
+    {"VK_FORMAT_B8G8R8_USCALED", VK_FORMAT_B8G8R8_USCALED},
+    {"VK_FORMAT_B8G8R8_SSCALED", VK_FORMAT_B8G8R8_SSCALED},
+    {"VK_FORMAT_B8G8R8_UINT", VK_FORMAT_B8G8R8_UINT},
+    {"VK_FORMAT_B8G8R8_SINT", VK_FORMAT_B8G8R8_SINT},
+    {"VK_FORMAT_B8G8R8_SRGB", VK_FORMAT_B8G8R8_SRGB},
+    {"VK_FORMAT_R8G8B8A8_UNORM", VK_FORMAT_R8G8B8A8_UNORM},
+    {"VK_FORMAT_R8G8B8A8_SNORM", VK_FORMAT_R8G8B8A8_SNORM},
+    {"VK_FORMAT_R8G8B8A8_USCALED", VK_FORMAT_R8G8B8A8_USCALED},
+    {"VK_FORMAT_R8G8B8A8_SSCALED", VK_FORMAT_R8G8B8A8_SSCALED},
+    {"VK_FORMAT_R8G8B8A8_UINT", VK_FORMAT_R8G8B8A8_UINT},
+    {"VK_FORMAT_R8G8B8A8_SINT", VK_FORMAT_R8G8B8A8_SINT},
+    {"VK_FORMAT_R8G8B8A8_SRGB", VK_FORMAT_R8G8B8A8_SRGB},
+    {"VK_FORMAT_B8G8R8A8_UNORM", VK_FORMAT_B8G8R8A8_UNORM},
+    {"VK_FORMAT_B8G8R8A8_SNORM", VK_FORMAT_B8G8R8A8_SNORM},
+    {"VK_FORMAT_B8G8R8A8_USCALED", VK_FORMAT_B8G8R8A8_USCALED},
+    {"VK_FORMAT_B8G8R8A8_SSCALED", VK_FORMAT_B8G8R8A8_SSCALED},
+    {"VK_FORMAT_B8G8R8A8_UINT", VK_FORMAT_B8G8R8A8_UINT},
+    {"VK_FORMAT_B8G8R8A8_SINT", VK_FORMAT_B8G8R8A8_SINT},
+    {"VK_FORMAT_B8G8R8A8_SRGB", VK_FORMAT_B8G8R8A8_SRGB},
+    {"VK_FORMAT_A8B8G8R8_UNORM_PACK32", VK_FORMAT_A8B8G8R8_UNORM_PACK32},
+    {"VK_FORMAT_A8B8G8R8_SNORM_PACK32", VK_FORMAT_A8B8G8R8_SNORM_PACK32},
+    {"VK_FORMAT_A8B8G8R8_USCALED_PACK32", VK_FORMAT_A8B8G8R8_USCALED_PACK32},
+    {"VK_FORMAT_A8B8G8R8_SSCALED_PACK32", VK_FORMAT_A8B8G8R8_SSCALED_PACK32},
+    {"VK_FORMAT_A8B8G8R8_UINT_PACK32", VK_FORMAT_A8B8G8R8_UINT_PACK32},
+    {"VK_FORMAT_A8B8G8R8_SINT_PACK32", VK_FORMAT_A8B8G8R8_SINT_PACK32},
+    {"VK_FORMAT_A8B8G8R8_SRGB_PACK32", VK_FORMAT_A8B8G8R8_SRGB_PACK32},
+    {"VK_FORMAT_A2R10G10B10_UNORM_PACK32", VK_FORMAT_A2R10G10B10_UNORM_PACK32},
+    {"VK_FORMAT_A2R10G10B10_SNORM_PACK32", VK_FORMAT_A2R10G10B10_SNORM_PACK32},
+    {"VK_FORMAT_A2R10G10B10_USCALED_PACK32", VK_FORMAT_A2R10G10B10_USCALED_PACK32},
+    {"VK_FORMAT_A2R10G10B10_SSCALED_PACK32", VK_FORMAT_A2R10G10B10_SSCALED_PACK32},
+    {"VK_FORMAT_A2R10G10B10_UINT_PACK32", VK_FORMAT_A2R10G10B10_UINT_PACK32},
+    {"VK_FORMAT_A2R10G10B10_SINT_PACK32", VK_FORMAT_A2R10G10B10_SINT_PACK32},
+    {"VK_FORMAT_A2B10G10R10_UNORM_PACK32", VK_FORMAT_A2B10G10R10_UNORM_PACK32},
+    {"VK_FORMAT_A2B10G10R10_SNORM_PACK32", VK_FORMAT_A2B10G10R10_SNORM_PACK32},
+    {"VK_FORMAT_A2B10G10R10_USCALED_PACK32", VK_FORMAT_A2B10G10R10_USCALED_PACK32},
+    {"VK_FORMAT_A2B10G10R10_SSCALED_PACK32", VK_FORMAT_A2B10G10R10_SSCALED_PACK32},
+    {"VK_FORMAT_A2B10G10R10_UINT_PACK32", VK_FORMAT_A2B10G10R10_UINT_PACK32},
+    {"VK_FORMAT_A2B10G10R10_SINT_PACK32", VK_FORMAT_A2B10G10R10_SINT_PACK32},
+    {"VK_FORMAT_R16_UNORM", VK_FORMAT_R16_UNORM},
+    {"VK_FORMAT_R16_SNORM", VK_FORMAT_R16_SNORM},
+    {"VK_FORMAT_R16_USCALED", VK_FORMAT_R16_USCALED},
+    {"VK_FORMAT_R16_SSCALED", VK_FORMAT_R16_SSCALED},
+    {"VK_FORMAT_R16_UINT", VK_FORMAT_R16_UINT},
+    {"VK_FORMAT_R16_SINT", VK_FORMAT_R16_SINT},
+    {"VK_FORMAT_R16_SFLOAT", VK_FORMAT_R16_SFLOAT},
+    {"VK_FORMAT_R16G16_UNORM", VK_FORMAT_R16G16_UNORM},
+    {"VK_FORMAT_R16G16_SNORM", VK_FORMAT_R16G16_SNORM},
+    {"VK_FORMAT_R16G16_USCALED", VK_FORMAT_R16G16_USCALED},
+    {"VK_FORMAT_R16G16_SSCALED", VK_FORMAT_R16G16_SSCALED},
+    {"VK_FORMAT_R16G16_UINT", VK_FORMAT_R16G16_UINT},
+    {"VK_FORMAT_R16G16_SINT", VK_FORMAT_R16G16_SINT},
+    {"VK_FORMAT_R16G16_SFLOAT", VK_FORMAT_R16G16_SFLOAT},
+    {"VK_FORMAT_R16G16B16_UNORM", VK_FORMAT_R16G16B16_UNORM},
+    {"VK_FORMAT_R16G16B16_SNORM", VK_FORMAT_R16G16B16_SNORM},
+    {"VK_FORMAT_R16G16B16_USCALED", VK_FORMAT_R16G16B16_USCALED},
+    {"VK_FORMAT_R16G16B16_SSCALED", VK_FORMAT_R16G16B16_SSCALED},
+    {"VK_FORMAT_R16G16B16_UINT", VK_FORMAT_R16G16B16_UINT},
+    {"VK_FORMAT_R16G16B16_SINT", VK_FORMAT_R16G16B16_SINT},
+    {"VK_FORMAT_R16G16B16_SFLOAT", VK_FORMAT_R16G16B16_SFLOAT},
+    {"VK_FORMAT_R16G16B16A16_UNORM", VK_FORMAT_R16G16B16A16_UNORM},
+    {"VK_FORMAT_R16G16B16A16_SNORM", VK_FORMAT_R16G16B16A16_SNORM},
+    {"VK_FORMAT_R16G16B16A16_USCALED", VK_FORMAT_R16G16B16A16_USCALED},
+    {"VK_FORMAT_R16G16B16A16_SSCALED", VK_FORMAT_R16G16B16A16_SSCALED},
+    {"VK_FORMAT_R16G16B16A16_UINT", VK_FORMAT_R16G16B16A16_UINT},
+    {"VK_FORMAT_R16G16B16A16_SINT", VK_FORMAT_R16G16B16A16_SINT},
+    {"VK_FORMAT_R16G16B16A16_SFLOAT", VK_FORMAT_R16G16B16A16_SFLOAT},
+    {"VK_FORMAT_R32_UINT", VK_FORMAT_R32_UINT},
+    {"VK_FORMAT_R32_SINT", VK_FORMAT_R32_SINT},
+    {"VK_FORMAT_R32_SFLOAT", VK_FORMAT_R32_SFLOAT},
+    {"VK_FORMAT_R32G32_UINT", VK_FORMAT_R32G32_UINT},
+    {"VK_FORMAT_R32G32_SINT", VK_FORMAT_R32G32_SINT},
+    {"VK_FORMAT_R32G32_SFLOAT", VK_FORMAT_R32G32_SFLOAT},
+    {"VK_FORMAT_R32G32B32_UINT", VK_FORMAT_R32G32B32_UINT},
+    {"VK_FORMAT_R32G32B32_SINT", VK_FORMAT_R32G32B32_SINT},
+    {"VK_FORMAT_R32G32B32_SFLOAT", VK_FORMAT_R32G32B32_SFLOAT},
+    {"VK_FORMAT_R32G32B32A32_UINT", VK_FORMAT_R32G32B32A32_UINT},
+    {"VK_FORMAT_R32G32B32A32_SINT", VK_FORMAT_R32G32B32A32_SINT},
+    {"VK_FORMAT_R32G32B32A32_SFLOAT", VK_FORMAT_R32G32B32A32_SFLOAT},
+    {"VK_FORMAT_R64_UINT", VK_FORMAT_R64_UINT},
+    {"VK_FORMAT_R64_SINT", VK_FORMAT_R64_SINT},
+    {"VK_FORMAT_R64_SFLOAT", VK_FORMAT_R64_SFLOAT},
+    {"VK_FORMAT_R64G64_UINT", VK_FORMAT_R64G64_UINT},
+    {"VK_FORMAT_R64G64_SINT", VK_FORMAT_R64G64_SINT},
+    {"VK_FORMAT_R64G64_SFLOAT", VK_FORMAT_R64G64_SFLOAT},
+    {"VK_FORMAT_R64G64B64_UINT", VK_FORMAT_R64G64B64_UINT},
+    {"VK_FORMAT_R64G64B64_SINT", VK_FORMAT_R64G64B64_SINT},
+    {"VK_FORMAT_R64G64B64_SFLOAT", VK_FORMAT_R64G64B64_SFLOAT},
+    {"VK_FORMAT_R64G64B64A64_UINT", VK_FORMAT_R64G64B64A64_UINT},
+    {"VK_FORMAT_R64G64B64A64_SINT", VK_FORMAT_R64G64B64A64_SINT},
+    {"VK_FORMAT_R64G64B64A64_SFLOAT", VK_FORMAT_R64G64B64A64_SFLOAT},
+    {"VK_FORMAT_B10G11R11_UFLOAT_PACK32", VK_FORMAT_B10G11R11_UFLOAT_PACK32},
+    {"VK_FORMAT_E5B9G9R9_UFLOAT_PACK32", VK_FORMAT_E5B9G9R9_UFLOAT_PACK32},
+    {"VK_FORMAT_D16_UNORM", VK_FORMAT_D16_UNORM},
+    {"VK_FORMAT_X8_D24_UNORM_PACK32", VK_FORMAT_X8_D24_UNORM_PACK32},
+    {"VK_FORMAT_D32_SFLOAT", VK_FORMAT_D32_SFLOAT},
+    {"VK_FORMAT_S8_UINT", VK_FORMAT_S8_UINT},
+    {"VK_FORMAT_D16_UNORM_S8_UINT", VK_FORMAT_D16_UNORM_S8_UINT},
+    {"VK_FORMAT_D24_UNORM_S8_UINT", VK_FORMAT_D24_UNORM_S8_UINT},
+    {"VK_FORMAT_D32_SFLOAT_S8_UINT", VK_FORMAT_D32_SFLOAT_S8_UINT},
+    {"VK_FORMAT_BC1_RGB_UNORM_BLOCK", VK_FORMAT_BC1_RGB_UNORM_BLOCK},
+    {"VK_FORMAT_BC1_RGB_SRGB_BLOCK", VK_FORMAT_BC1_RGB_SRGB_BLOCK},
+    {"VK_FORMAT_BC1_RGBA_UNORM_BLOCK", VK_FORMAT_BC1_RGBA_UNORM_BLOCK},
+    {"VK_FORMAT_BC1_RGBA_SRGB_BLOCK", VK_FORMAT_BC1_RGBA_SRGB_BLOCK},
+    {"VK_FORMAT_BC2_UNORM_BLOCK", VK_FORMAT_BC2_UNORM_BLOCK},
+    {"VK_FORMAT_BC2_SRGB_BLOCK", VK_FORMAT_BC2_SRGB_BLOCK},
+    {"VK_FORMAT_BC3_UNORM_BLOCK", VK_FORMAT_BC3_UNORM_BLOCK},
+    {"VK_FORMAT_BC3_SRGB_BLOCK", VK_FORMAT_BC3_SRGB_BLOCK},
+    {"VK_FORMAT_BC4_UNORM_BLOCK", VK_FORMAT_BC4_UNORM_BLOCK},
+    {"VK_FORMAT_BC4_SNORM_BLOCK", VK_FORMAT_BC4_SNORM_BLOCK},
+    {"VK_FORMAT_BC5_UNORM_BLOCK", VK_FORMAT_BC5_UNORM_BLOCK},
+    {"VK_FORMAT_BC5_SNORM_BLOCK", VK_FORMAT_BC5_SNORM_BLOCK},
+    {"VK_FORMAT_BC6H_UFLOAT_BLOCK", VK_FORMAT_BC6H_UFLOAT_BLOCK},
+    {"VK_FORMAT_BC6H_SFLOAT_BLOCK", VK_FORMAT_BC6H_SFLOAT_BLOCK},
+    {"VK_FORMAT_BC7_UNORM_BLOCK", VK_FORMAT_BC7_UNORM_BLOCK},
+    {"VK_FORMAT_BC7_SRGB_BLOCK", VK_FORMAT_BC7_SRGB_BLOCK},
+    {"VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK", VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK},
+    {"VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK", VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK},
+    {"VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK", VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK},
+    {"VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK", VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK},
+    {"VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK", VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK},
+    {"VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK", VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK},
+    {"VK_FORMAT_EAC_R11_UNORM_BLOCK", VK_FORMAT_EAC_R11_UNORM_BLOCK},
+    {"VK_FORMAT_EAC_R11_SNORM_BLOCK", VK_FORMAT_EAC_R11_SNORM_BLOCK},
+    {"VK_FORMAT_EAC_R11G11_UNORM_BLOCK", VK_FORMAT_EAC_R11G11_UNORM_BLOCK},
+    {"VK_FORMAT_EAC_R11G11_SNORM_BLOCK", VK_FORMAT_EAC_R11G11_SNORM_BLOCK},
+    {"VK_FORMAT_ASTC_4x4_UNORM_BLOCK", VK_FORMAT_ASTC_4x4_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_4x4_SRGB_BLOCK", VK_FORMAT_ASTC_4x4_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_5x4_UNORM_BLOCK", VK_FORMAT_ASTC_5x4_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_5x4_SRGB_BLOCK", VK_FORMAT_ASTC_5x4_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_5x5_UNORM_BLOCK", VK_FORMAT_ASTC_5x5_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_5x5_SRGB_BLOCK", VK_FORMAT_ASTC_5x5_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_6x5_UNORM_BLOCK", VK_FORMAT_ASTC_6x5_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_6x5_SRGB_BLOCK", VK_FORMAT_ASTC_6x5_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_6x6_UNORM_BLOCK", VK_FORMAT_ASTC_6x6_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_6x6_SRGB_BLOCK", VK_FORMAT_ASTC_6x6_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_8x5_UNORM_BLOCK", VK_FORMAT_ASTC_8x5_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_8x5_SRGB_BLOCK", VK_FORMAT_ASTC_8x5_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_8x6_UNORM_BLOCK", VK_FORMAT_ASTC_8x6_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_8x6_SRGB_BLOCK", VK_FORMAT_ASTC_8x6_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_8x8_UNORM_BLOCK", VK_FORMAT_ASTC_8x8_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_8x8_SRGB_BLOCK", VK_FORMAT_ASTC_8x8_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_10x5_UNORM_BLOCK", VK_FORMAT_ASTC_10x5_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_10x5_SRGB_BLOCK", VK_FORMAT_ASTC_10x5_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_10x6_UNORM_BLOCK", VK_FORMAT_ASTC_10x6_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_10x6_SRGB_BLOCK", VK_FORMAT_ASTC_10x6_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_10x8_UNORM_BLOCK", VK_FORMAT_ASTC_10x8_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_10x8_SRGB_BLOCK", VK_FORMAT_ASTC_10x8_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_10x10_UNORM_BLOCK", VK_FORMAT_ASTC_10x10_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_10x10_SRGB_BLOCK", VK_FORMAT_ASTC_10x10_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_12x10_UNORM_BLOCK", VK_FORMAT_ASTC_12x10_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_12x10_SRGB_BLOCK", VK_FORMAT_ASTC_12x10_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_12x12_UNORM_BLOCK", VK_FORMAT_ASTC_12x12_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_12x12_SRGB_BLOCK", VK_FORMAT_ASTC_12x12_SRGB_BLOCK},
+};
+
+template <> inline VkFormat get_enum_val<VkFormat>(fkyaml::node &n) {
+    return get_enum_val(n, vk_format_from_str);
+}
+
+inline std::unordered_map<std::string, VkVertexInputRate> vk_vertex_input_rate_from_str = {
+    {"VK_VERTEX_INPUT_RATE_VERTEX", VK_VERTEX_INPUT_RATE_VERTEX},
+    {"VK_VERTEX_INPUT_RATE_INSTANCE", VK_VERTEX_INPUT_RATE_INSTANCE},
+};
+
+template <> inline VkVertexInputRate get_enum_val<VkVertexInputRate>(fkyaml::node &n) {
+    return get_enum_val(n, vk_vertex_input_rate_from_str);
+}
+
+inline std::unordered_map<std::string, VkShaderStageFlagBits> vk_shader_stage_flag_bits_from_str = {
+    {"VK_SHADER_STAGE_VERTEX_BIT", VK_SHADER_STAGE_VERTEX_BIT},
+    {"VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT", VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT},
+    {"VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT", VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT},
+    {"VK_SHADER_STAGE_GEOMETRY_BIT", VK_SHADER_STAGE_GEOMETRY_BIT},
+    {"VK_SHADER_STAGE_FRAGMENT_BIT", VK_SHADER_STAGE_FRAGMENT_BIT},
+    {"VK_SHADER_STAGE_COMPUTE_BIT", VK_SHADER_STAGE_COMPUTE_BIT},
+    {"VK_SHADER_STAGE_ALL_GRAPHICS", VK_SHADER_STAGE_ALL_GRAPHICS},
+    {"VK_SHADER_STAGE_ALL", VK_SHADER_STAGE_ALL},
+    {"VK_SHADER_STAGE_RAYGEN_BIT_NV", VK_SHADER_STAGE_RAYGEN_BIT_NV},
+    {"VK_SHADER_STAGE_ANY_HIT_BIT_NV", VK_SHADER_STAGE_ANY_HIT_BIT_NV},
+    {"VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV", VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV},
+    {"VK_SHADER_STAGE_MISS_BIT_NV", VK_SHADER_STAGE_MISS_BIT_NV},
+    {"VK_SHADER_STAGE_INTERSECTION_BIT_NV", VK_SHADER_STAGE_INTERSECTION_BIT_NV},
+    {"VK_SHADER_STAGE_CALLABLE_BIT_NV", VK_SHADER_STAGE_CALLABLE_BIT_NV},
+    {"VK_SHADER_STAGE_TASK_BIT_NV", VK_SHADER_STAGE_TASK_BIT_NV},
+    {"VK_SHADER_STAGE_MESH_BIT_NV", VK_SHADER_STAGE_MESH_BIT_NV},
+};
+
+template <> inline VkShaderStageFlagBits get_enum_val<VkShaderStageFlagBits>(fkyaml::node &n) {
+    return get_enum_val(n, vk_shader_stage_flag_bits_from_str);
+}
+
+inline std::unordered_map<std::string, VkDescriptorType> vk_descriptor_type_from_str = {
+    {"VK_DESCRIPTOR_TYPE_SAMPLER", VK_DESCRIPTOR_TYPE_SAMPLER}, 
+    {"VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER", VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, 
+    {"VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE", VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE}, 
+    {"VK_DESCRIPTOR_TYPE_STORAGE_IMAGE", VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 
+    {"VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER", VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER}, 
+    {"VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER", VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER}, 
+    {"VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER", VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, 
+    {"VK_DESCRIPTOR_TYPE_STORAGE_BUFFER", VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 
+    {"VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC", VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC}, 
+    {"VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC", VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC}, 
+    {"VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT", VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT}, 
+    {"VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV", VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV},
+    {"VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT", VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT},
+};
+
+template <> inline VkDescriptorType get_enum_val<VkDescriptorType>(fkyaml::node &n) {
+    return get_enum_val(n, vk_descriptor_type_from_str);
+}
+
 inline auto get_from_map(auto &m, const std::string& str) {
     if (!has(m, str))
         throw vku::err_t(std::format("Failed to get object: {} from: {}",
@@ -875,7 +1160,47 @@ co::task_t build_pseudo_object(ref_state_t *rs, const std::string& name, fkyaml:
 co::task<int64_t> resolve_int(ref_state_t *rs, fkyaml::node& node) {
     if (node.has_tag_name() && node.get_tag_name() == "!ref")
         co_return (co_await depend_resolver_t<integer_t>(rs, node.as_str()))->value;
-    co_return node.as_int();
+    if (node.is_string()) {
+        /* Try to resolve an expression resulting in an integer: */
+        std::string expr_str = node.as_str();
+        std::vector<std::pair<const char *, double>> constants = {
+            {"SIZEOF_FLOAT", sizeof(float)},
+            {"SIZEOF_DOUBLE", sizeof(double)},
+            {"SIZEOF_VEC_2F", sizeof(float)*2},
+            {"SIZEOF_VEC_3F", sizeof(float)*3},
+            {"SIZEOF_VEC_4F", sizeof(float)*4},
+            {"SIZEOF_VEC_2D", sizeof(double)*2},
+            {"SIZEOF_VEC_3D", sizeof(double)*3},
+            {"SIZEOF_VEC_4D", sizeof(double)*4},
+            {"SIZEOF_MAT_2x2F", sizeof(float)*2*2},
+            {"SIZEOF_MAT_3x3F", sizeof(float)*3*3},
+            {"SIZEOF_MAT_4x4F", sizeof(float)*4*4},
+            {"SIZEOF_MAT_2x2D", sizeof(double)*2*2},
+            {"SIZEOF_MAT_3x3D", sizeof(double)*3*3},
+            {"SIZEOF_MAT_4x4D", sizeof(double)*4*4},
+        };
+        std::vector<texpr::te_variable> vars;
+        for (auto &ct : constants)
+            vars.push_back(texpr::te_variable{
+                .name = ct.first,
+                .address = (void *)&ct.second,
+                .type = texpr::TE_VARIABLE,
+                .context = nullptr,
+            });
+
+        int err;
+        texpr::te_expr *expr = texpr::te_compile(expr_str.c_str(), vars.data(), vars.size(), &err);
+
+        if (expr) {
+            double expr_result = texpr::te_eval(expr);
+            texpr::te_free(expr);
+            co_return std::round(expr_result);
+        } else {
+            DBG("Parse error at %d\n", err);
+        }
+    }
+    else
+        co_return node.as_int();
 }
 
 /*! This either follows a reference to an integer or it returns the direct value if available */
@@ -925,7 +1250,8 @@ co::task<vku::ref_t<VkuT>> resolve_obj(ref_state_t *rs, fkyaml::node& node) {
     }
 
     /* None of the above */
-    co_return nullptr;
+    throw vku::err_t{std::format("node[{}] is invalid in this contex",
+            fkyaml::node::serialize(node))};
 }
 
 co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
@@ -941,7 +1267,7 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         for (auto attr : node["m_attrs"].as_seq()) {
             auto m_location = co_await resolve_int(rs, attr["m_location"]);
             auto m_binding = co_await resolve_int(rs, attr["m_binding"]);
-            auto m_format = get_enum_val<VkFormat>(node["m_format"]);
+            auto m_format = get_enum_val<VkFormat>(attr["m_format"]);
             auto m_offset = co_await resolve_int(rs, attr["m_offset"]);
             attrs.push_back(VkVertexInputAttributeDescription{
                 .location = (uint32_t)m_location,
@@ -965,7 +1291,7 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         co_return obj.to_base<vku::object_t>();
     }
     else if (node["m_type"] == "vkc::binding_desc_t") {
-        auto m_binding = co_await resolve_int(rs, node["m_binding"]);;
+        auto m_binding = co_await resolve_int(rs, node["m_binding"]);
         auto m_stage = get_enum_val<VkShaderStageFlagBits>(node["m_stage"]);
         auto m_desc_type = get_enum_val<VkDescriptorType>(node["m_desc_type"]);
         auto obj = binding_desc_t::create(VkDescriptorSetLayoutBinding{
@@ -978,7 +1304,13 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
-    else if (node["m_type"] == "vkc::lua_var_t") { /* not sure how is this usefull */
+    else if (node["m_type"] == "vkc::cpu_buffer_t") {
+        auto m_size = co_await resolve_int(rs, node["m_size"]);
+        auto obj = cpu_buffer_t::create(m_size);
+        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
+        co_return obj.to_base<vku::object_t>();
+    }
+    else if (node["m_type"] == "vkc::lua_var_t") { /* TODO: not sure how is this type usefull */
         /* lua_var has the same tag_name as the var name */
         auto obj = lua_var_t::create(name);
         mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
@@ -1097,9 +1429,9 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         for (auto& sh : node["m_shaders"])
             shaders.push_back(co_await resolve_obj<vku::shader_t>(rs, sh));
         auto topol = get_enum_val<VkPrimitiveTopology>(node["m_topology"]);
-        auto indesc = vku::vertex3d_t::get_input_desc(); /* TODO: resolve this */
+        auto indesc = co_await resolve_obj<vkc::vertex_input_desc_t>(rs, node["m_input_desc"]);
         auto binds = co_await resolve_obj<vku::binding_desc_set_t>(rs, node["m_bindings"]);
-        auto obj = vku::pipeline_t::create(w, h, rp, shaders, topol, indesc, binds);
+        auto obj = vku::pipeline_t::create(w, h, rp, shaders, topol, indesc->vid, binds);
         mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
         co_return obj.to_base<vku::object_t>();
     }
@@ -1197,21 +1529,6 @@ inline vkc_error_e parse_config(const char *path) {
     return VKC_ERROR_OK;
 }
 
-/* TODO: fix layout of this code... it is bad */
-/* TODO:
-    + We need to be able to parse dicts to yaml and build objects from it (same as initial parse)
-    - We still need to fix some functions
-    - We need a generic way to store some special types (mvp for example)
-    - We need to fix the stupidity that is descriptors
-    - We need a way to set buffers (based on descripors maybe?)
-    - We need some new types (matrices, vectors)
-    ~ We need to make std::vector and std::map an acceptable parameter/return type
-    + We need to make std::tuple an acceptable parameter
-    - We need to expose the way that we pack functions and members to the outside
-            (so that an user can use them to add his own functions (that user is me))
-
-    Once those are done, I think this is done */
-
 inline std::string lua_example_str = R"___(
 vku = require("vulkan_utils")
 
@@ -1259,8 +1576,8 @@ end
 function on_window_resize(w, h)
     vku.device_wait_handle(vku.dev)
 
-    vku.window.set_width(w)
-    vku.window.set_height(h)
+    vku.window.m_width = w
+    vku.window.m_height = h
 
     -- this will recurse and rebuild all dependees on window
     vku.window.rebuild()
@@ -1554,6 +1871,13 @@ template <std::integral Integer>
 struct luaw_returner_t<Integer> {
     void luaw_ret_push(lua_State *L, Integer&& x) {
         lua_pushinteger(L, x);
+    }
+};
+
+template <>
+struct luaw_returner_t<void *> {
+    void luaw_ret_push(lua_State *L, void *rawptr) {
+        lua_pushlightuserdata(L, rawptr);
     }
 };
 
@@ -1944,7 +2268,6 @@ fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
         for (int i = 1; i <= len; i++) {
             lua_rawgeti(L, index, i);
             auto to_add = create_yaml_from_lua_object(L, -1);
-            DBG("ADDING TYPE: %d", (int)to_add.get_type());
             to_ret.as_seq().push_back(to_add);
             lua_pop(L, 1);
         }
@@ -1958,7 +2281,6 @@ fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
             const char *key = lua_tostring(L, -2);
             if (key) {
                 auto to_add = create_yaml_from_lua_object(L, -1);
-                DBG("ADDING VAL TYPE: %d", (int)to_add.get_type());
                 to_ret[key] = to_add;
             }
             lua_pop(L, 1);
@@ -2044,16 +2366,31 @@ inline int internal_create_object(lua_State *L) {
     return 1;
 }
 
+inline uint32_t internal_device_wait_handle(vku::ref_t<vku::device_t> dev) {
+    return vkDeviceWaitIdle(dev->vk_dev);
+}
+
 inline const luaL_Reg vku_tab_funcs[] = {
-    {"glfw_pool_events",luaw_function_wrapper<glfw_pool_events>},
-    {"get_key",         luaw_function_wrapper<glfw_get_key, vku::ref_t<vku::window_t>, uint32_t>},
-    {"signal_close",    luaw_function_wrapper<internal_signal_close>},
-    {"aquire_next_img", luaw_function_wrapper<internal_aquire_next_img,
+    {"glfw_pool_events",    luaw_function_wrapper<glfw_pool_events>},
+    {"get_key",             luaw_function_wrapper<glfw_get_key,
+            vku::ref_t<vku::window_t>, uint32_t>},
+    {"signal_close",        luaw_function_wrapper<internal_signal_close>},
+    {"aquire_next_img",     luaw_function_wrapper<internal_aquire_next_img,
             vku::ref_t<vku::swapchain_t>, vku::ref_t<vku::sem_t>>},
-    {"submit_cmdbuff",  luaw_function_wrapper<vku::submit_cmdbuff,
+    {"submit_cmdbuff",      luaw_function_wrapper<vku::submit_cmdbuff,
             std::vector<std::pair<vku::ref_t<vku::sem_t>, bm_t<VkPipelineStageFlagBits>>>,
             vku::ref_t<vku::cmdbuff_t>, vku::ref_t<vku::fence_t>,
             std::vector<vku::ref_t<vku::sem_t>>>},
+    {"present",             luaw_function_wrapper<vku::present,
+            vku::ref_t<vku::swapchain_t>,
+            std::vector<vku::ref_t<vku::sem_t>>,
+            uint32_t>},
+    {"wait_fences",         luaw_function_wrapper<vku::wait_fences,
+            std::vector<vku::ref_t<vku::fence_t>>>},
+    {"reset_fences",        luaw_function_wrapper<vku::reset_fences,
+            std::vector<vku::ref_t<vku::fence_t>>>},
+    {"device_wait_handle",  luaw_function_wrapper<internal_device_wait_handle,
+            vku::ref_t<vku::device_t>>},
     {"create_object", internal_create_object},
     {NULL, NULL}
 };
@@ -2196,6 +2533,11 @@ inline int luaopen_vku(lua_State *L) {
         VKC_REG_FN(vku::cmdbuff_t, bind_compute, vku::ref_t<vku::compute_pipeline_t>);
         VKC_REG_FN(vku::cmdbuff_t, dispatch_compute, uint32_t, uint32_t, uint32_t);
 
+        /* vkc::cpu_buffer_t
+        ----------------------------------------------------------------------------------------- */
+        VKC_REG_FN(vkc::cpu_buffer_t, data);
+        VKC_REG_FN(vkc::cpu_buffer_t, size);
+
         /* Done objects
         ----------------------------------------------------------------------------------------- */
 
@@ -2240,6 +2582,10 @@ inline int luaopen_vku(lua_State *L) {
         };
 
         /* Registers vulkan enums in the lua library */
+        register_flag_mapping(L, vk_format_from_str);
+        register_flag_mapping(L, vk_vertex_input_rate_from_str);
+        register_flag_mapping(L, vk_shader_stage_flag_bits_from_str);
+        register_flag_mapping(L, vk_descriptor_type_from_str);
         register_flag_mapping(L, vk_pipeline_stage_flag_bits_from_str);
         register_flag_mapping(L, vk_index_type_from_str);
         register_flag_mapping(L, vk_pipeline_bind_point_from_str);

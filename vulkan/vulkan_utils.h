@@ -92,6 +92,7 @@ enum vku_object_type_e {
     VKC_TYPE_SPIRV,
     VKC_TYPE_STRING,
     VKC_TYPE_FLOAT,
+    VKC_TYPE_CPU_BUFFER,
     VKC_TYPE_INTEGER,
     VKC_TYPE_LUA_SCRIPT,
     VKC_TYPE_LUA_VARIABLE,
@@ -3030,10 +3031,11 @@ inline VkResult desc_set_t::_init() {
     for (auto &dw : desc_writes)
         dw.dstSet = vk_desc_set;
 
-    DBGVV("writes: %zu", desc_writes.size());
+    DBG("writes: %zu", desc_writes.size());
     for (auto &w : desc_writes) {
-        DBGVV("write: type: %x, bind: %d, dst_set: %p",
-                w.descriptorType, w.dstBinding, w.dstSet);
+        DBG("write: type: %s, bind: %d, dst_set: %p .pBufferInfo: %p",
+                vku_utils::to_string(w.descriptorType).c_str(), w.dstBinding, w.dstSet,
+                w.pBufferInfo);
     }
 
     vkUpdateDescriptorSets(dp->dev->vk_dev, (uint32_t)desc_writes.size(),
@@ -3371,6 +3373,7 @@ inline std::string to_string(vku_object_type_e type) {
         case VKC_TYPE_SPIRV: return "VKC_TYPE_SPIRV";
         case VKC_TYPE_STRING: return "VKC_TYPE_STRING";
         case VKC_TYPE_FLOAT: return "VKC_TYPE_FLOAT";
+        case VKC_TYPE_CPU_BUFFER: return "VKC_TYPE_CPU_BUFFER";
         case VKC_TYPE_INTEGER: return "VKC_TYPE_INTEGER";
         case VKC_TYPE_LUA_SCRIPT: return "VKC_TYPE_LUA_SCRIPT";
         case VKC_TYPE_LUA_VARIABLE: return "VKC_TYPE_LUA_VARIABLE";
@@ -3648,31 +3651,31 @@ inline std::string to_string(VkFilter shmod) {
 inline std::string to_string(VkDescriptorType dtype) {
     switch (dtype) {
         case VK_DESCRIPTOR_TYPE_SAMPLER: 
-                return "VK_DESCRIPTOR_TYPE_SAMPLER";
+            return "VK_DESCRIPTOR_TYPE_SAMPLER";
         case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: 
-                return "VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER";
+            return "VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER";
         case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: 
-                return "VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE";
+            return "VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE";
         case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: 
-                return "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE";
+            return "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE";
         case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER: 
-                return "VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER";
+            return "VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER";
         case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: 
-                return "VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER";
+            return "VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER";
         case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: 
-                return "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER";
+            return "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER";
         case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: 
-                return "VK_DESCRIPTOR_TYPE_STORAGE_BUFFER";
+            return "VK_DESCRIPTOR_TYPE_STORAGE_BUFFER";
         case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: 
-                return "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC";
+            return "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC";
         case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: 
-                return "VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC";
+            return "VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC";
         case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: 
-                return "VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT";
+            return "VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT";
         case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV:
-                return "VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV";
+            return "VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV";
         case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT:
-                return "VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT";
+            return "VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT";
         default: return "VK_UNKNOWN_TYPE";
     }
 }

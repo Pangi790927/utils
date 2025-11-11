@@ -116,7 +116,7 @@ bindings:
         m_type: vkc::binding_desc_t
         m_binding: 1
         m_stage: VK_SHADER_STAGE_VERTEX_BIT
-        m_desc_type: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+        m_desc_type: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
 vert:
   m_type: vku::shader_t
   m_device: !ref dev
@@ -144,21 +144,21 @@ pl:
     m_tag: "input_descriptor"
     m_type: vkc::vertex_input_desc_t
     m_binding: 0
-    m_stride: sizeof(vertex_struct_t)
+    m_stride: SIZEOF_VEC_2F + SIZEOF_VEC_3F + SIZEOF_VEC_2F
     m_in_rate: VK_VERTEX_INPUT_RATE_VERTEX
     m_attrs:
       - m_location: 0
         m_binding: 0
         m_format: VK_FORMAT_R32G32_SFLOAT
-        m_offset: offsetof(vertex_struct_t, pos)
+        m_offset: 0
       - m_location: 1
         m_binding: 0
         m_format: VK_FORMAT_R32G32B32_SFLOAT
-        m_offset: offsetof(vertex_struct_t, color)
+        m_offset: SIZEOF_VEC_2F
       - m_location: 2
         m_binding: 0
         m_format: VK_FORMAT_R32G32B32_SFLOAT
-        m_offset: offsetof(vertex_struct_t, tex)
+        m_offset: SIZEOF_VEC_2F + SIZEOF_VEC_3F
   m_bindings: !ref bindings
 fbs:
   m_type: vku::framebuffs_t
@@ -234,8 +234,8 @@ lua_script:
     function on_window_resize(w, h)
       vku.device_wait_handle(vku.dev)
 
-      vku.window.set_width(w)
-      vku.window.set_height(h)
+      vku.window.m_width = w
+      vku.window.m_height = h
 
       -- this will recurse and rebuild all dependees on window
       vku.window.rebuild()
