@@ -296,6 +296,8 @@ struct object_t {
 
     std::shared_ptr<object_cbks_t> cbks;
 
+    virtual void update() {}
+
 private:
     virtual VkResult _init() = 0;
     virtual VkResult _uninit() { return VK_SUCCESS; };
@@ -377,6 +379,13 @@ public:
         _init_all();
     }
 
+    void update() {
+        _obj->update();
+        for (auto wd : _dependees)
+            if (auto d = wd.lock()) {
+                d->update();
+            }
+    }
 
     template <typename VkuT> requires std::derived_from<VkuT, object_t>
     static std::shared_ptr<base_t> create_obj_ref(
@@ -971,7 +980,9 @@ struct desc_set_t : public object_t {
     virtual vku_object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET; }
+    virtual void update() override;
+
+    static vku_object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET; }
     static ref_t<desc_set_t> create(
             ref_t<desc_pool_t>          dp,
             ref_t<pipeline_t>           pl,
@@ -3051,6 +3062,23 @@ inline VkResult desc_set_t::_init() {
 }
 inline VkResult desc_set_t::_uninit() {
     return VK_SUCCESS;
+}
+inline void desc_set_t::update() {
+    auto desc_writes = m_bindings->get_writes();
+    for (auto &dw : desc_writes)
+        dw.dstSet = vk_desc_set;
+
+    DBG("writes: %zu", desc_writes.size());
+    for (auto &w : desc_writes) {
+        DBG("write: type: %s, bind: %d, dst_set: %p .pBufferInfo: %p",
+                vku_utils::to_string(w.descriptorType).c_str(), w.dstBinding, w.dstSet,
+                w.pBufferInfo);
+    }
+
+    vkUpdateDescriptorSets(m_descriptor_pool->m_device->vk_dev, (uint32_t)desc_writes.size(),
+            desc_writes.data(), 0, nullptr);
+
+    object_t::update();
 }
 inline ref_t<desc_set_t> desc_set_t::create(
         ref_t<desc_pool_t> desc_pool,

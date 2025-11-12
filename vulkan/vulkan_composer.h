@@ -1,6 +1,999 @@
 #ifndef VULKAN_COMPOSER_H
 #define VULKAN_COMPOSER_H
 
+/*!
+ * Core Objects and Functions:
+ * ===========================
+ * 
+ * The following are used to manage all the objects inside the Vulkan Utils (vkc) wrapper:
+ * 
+ * vku::ref_t<VkuT>
+ * ----------------
+ *
+ * Description: Reference handle to a Vulkan wrapper object (VkuT). Implements 
+ * safe shared ownership and automatic update propagation via base_t. Users hold 
+ * ref_t instead of direct object pointers.
+ *
+ * Member functions:
+ * - operator->(): Access the underlying VkuT object.
+ * - operator*(): Dereference to the underlying VkuT object.
+ * - get(): Returns raw pointer to the underlying VkuT object.
+ * - to_base()/to_derived()/to_related(): Cast between related reference types safely.
+ * - operator bool(): Checks if the reference holds a valid object.
+ *
+ * Init: create_obj_ref(obj, dependencies)
+ *   - Parameters:
+ *     - obj: Unique pointer to a VkuT object.
+ *     - dependencies: List of ref_base_t objects this object depends on.
+ *
+ * Notes:
+ * - Manages the DAG of dependencies for update propagation.
+ * - Allows safe, type-checked access to Vulkan wrapper objects.
+ * 
+ * 
+ * vku::ref_t<VkuT>::update()
+ * --------------------------
+ *
+ * Propagates changes in this object to all dependent objects in the DAG.
+ * 
+ * - Each Vulkan wrapper object (object_t) may implement update() to reflect
+ *   modifications to its GPU resources (e.g., updating descriptor sets or buffers).
+ * - The base_t wrapper ensures that calling update() on a ref_t-managed object
+ *   automatically calls update() on all dependees (objects that depend on it).
+ * - This allows changes to a low-level resource (like a buffer or image) to
+ *   cascade safely to higher-level objects (like pipelines or descriptor sets)
+ *   that rely on it.
+ *
+ * Example:
+ *   If a buffer bound in a descriptor set is modified, calling update() on
+ *   the buffer’s ref_t triggers update() on all desc_set_t objects that use it,
+ *   ensuring that GPU descriptor sets remain in sync.
+ *
+ * Notes:
+ * - The base_t update mechanism is recursive, but only follows _dependees.
+ * - Users usually call update() on high-level objects (e.g., desc_set_t),
+ *   which automatically propagates to underlying resources as needed.
+ * 
+ * 
+ * vku::ref_t<VkuT>::rebuild()
+ * ---------------------------
+ *
+ * Re-initializes this object and all dependent objects in the DAG.
+ * 
+ * - Each Vulkan wrapper object (object_t) implements _init() and _uninit() to 
+ *   allocate or release GPU resources as needed.
+ * - This allows structural changes to a low-level resource (like resizing an image,
+ *   changing a buffer format, or replacing a shader) to propagate safely to all 
+ *   higher-level objects (like pipelines or descriptor sets) that rely on it.
+ *
+ * Example:
+ *   If a window or swapchain’s dimensions change, calling rebuild() on the swapchain’s
+ *   ref_t will uninitialize and reinitialize the swapchain with the new size, then
+ *   automatically rebuild all framebuffers, pipelines, or descriptor sets that depend
+ *   on it, ensuring the GPU objects stay consistent with the new window size. All those
+ *   objects will be rebuilt using their stored parameters.
+ *
+ * Notes:
+ * - The base_t rebuild mechanism is recursive and follows _dependees.
+ * - rebuild() is used for structural or configuration changes that require full
+ *   GPU resource re-creation, whereas update() is for incremental changes.
+ * 
+ * 
+ * vku::object_t
+ * --------
+ *
+ * Description: Base class for all Vulkan wrapper objects in the library. Provides 
+ * virtual methods for initialization (_init/_uninit), type identification, 
+ * string representation, and optional update propagation.
+ *
+ * Members:
+ * - cbks: Optional callbacks invoked before/after init and uninit.
+ *
+ * Member functions:
+ * - type_id(): Returns the type identifier of the object.
+ * - to_string(): Returns a human-readable string describing the object.
+ * - update(): Default no-op. Can be overridden to propagate changes to dependent GPU resources.
+ *
+ * Notes:
+ * - update() may be called to refresh GPU state after modifying object parameters.
+ * 
+ * 
+ * LUA API: Vulkan Utils
+ * =====================
+ * 
+ * The Vulkan Utils (vulkan_utils or vku) Lua bindings provide a scripting interface for interacting
+ * with Vulkan objects managed by the C++ backend. The bindings are designed to give users a
+ * flexible way to control GPU resources, rendering loops, and engine logic directly from Lua
+ * scripts, without exposing the raw Vulkan API.
+ * 
+ * Key Concepts:
+ * -------------
+ *
+ * 1. Utility functions:
+ *    - Examples: glfw_pool_events, get_key, signal_close, etc.
+ *    - Used to manage input, events, and window state.
+ *
+ * 2. References to objects:
+ *    - Objects created in YAML or in C++ are accessible as named references in Lua:
+ *      vku.object_name
+ *    - These are ref_t-managed Vulkan objects, allowing safe manipulation and
+ *      automatic dependency propagation.
+ *
+ * 3. Constants and defines:
+ *    - Vulkan and framework-specific constants are exposed in Lua for convenience:
+ *      vku.VK_PIPELINE_STAGE_HOST_BIT
+ *
+ * 4. Object methods:
+ *    - Named objects in Lua can call internal methods implemented in C++:
+ *      - vku.cbuff:begin(...)
+ *      - vku.window:rebuild()
+ *    - Methods operate directly on GPU resources or manage Vulkan object lifetimes.
+ *
+ * How it works:
+ * -------------
+ * 1. YAML is loaded -> objects created -> Lua can be executed.
+ * 2. C++ backend creates objects wrapped in ref_t handles for safe reference counting
+ *    and dependency tracking.
+ * 3. Lua scripts interact with objects, submit GPU commands, and respond to events.
+ * 4. Users can expose C++ plugins to Lua (int function(lua_State *)) for advanced
+ *    GPU operations such as filling triangle data or analyzing compute shader results.
+ * 5. Lua can create internal objects dynamically, similar to YAML object creation.
+ *
+ * Example Usage:
+ * --------------
+ * vku = require("vulkan_utils")
+ *
+ * -- example filling buffers:
+ * vku.fill_buffer_with_triangles_vertices(vku.staging_buffer.data(), vku.staging_buffer.size())
+ * vku.copy_from_cpu_to_gpu(vku.staging_buffer, vku.vbuff, vku.staging_buffer.size(), 0)
+ *
+ * vku.fill_buffer_with_triangles_indexes(vku.staging_buffer.data(), vku.staging_buffer.size())
+ * vku.copy_from_cpu_to_gpu(vku.staging_buffer, vku.ibuff, vku.SIZEOF_INT*3, 0)
+ * 
+ * -- example creating a vku object (vkc::lua_var_t is a dummy object)
+ * t = {
+ *     m_type = "vkc::lua_var_t",
+ *     var1 = 1,
+ *     var2 = 2,
+ *     var3 = { var4 = "str" }
+ * }
+ * to = vku.create_object("tag_name", t)
+ *
+ * function on_loop_run()
+ *     vku.glfw_pool_events()
+ *     if vku.get_key(vku.window, vku.GLFW_KEY_ESCAPE) == vku.GLFW_PRESS then
+ *         vku.signal_close()
+ *     end
+ *
+ *     img_idx = vku.aquire_next_img(vku.swc, vku.img_sem)
+ *
+ *     vku.cbuff:begin(vku.VK_COMMAND_BUFFER_USAGE_NONE)
+ *     vku.cbuff:begin_rpass(vku.fbs, img_idx)
+ *     vku.cbuff:bind_vert_buffs(0, {{vku.vbuff, 0}})
+ *     vku.cbuff:bind_idx_buff(vku.ibuff, 0, vku.VK_INDEX_TYPE_UINT16)
+ *     vku.cbuff:bind_desc_set(vku.VK_PIPELINE_BIND_POINT_GRAPHICS, vku.pl, vku.desc_set)
+ *     vku.cbuff:draw_idx(vku.pl, 3)
+ *     vku.cbuff:end_rpass()
+ *     vku.cbuff:end()
+ *
+ *     vku.submit_cmdbuff({{vku.img_sem, vku.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
+ *         vku.cbuff, vku.fence, {vku.draw_sem})
+ *     vku.present(vku.swc, {vku.draw_sem}, img_idx)
+ *
+ *     vku.wait_fences({vku.fence})
+ *     vku.reset_fences({vku.fence})
+ * end
+ *
+ * function on_window_resize(w, h)
+ *     vku.device_wait_handle(vku.dev)
+ *     vku.window.m_width = w
+ *     vku.window.m_height = h
+ *     vku.window.rebuild()
+ * end
+ *
+ * Key Points:
+ * -----------
+ * - Lua scripts operate on top of C++ objects; everything is managed safely via ref_t.
+ * - Both static objects from YAML and dynamic objects from Lua can be manipulated similarly.
+ * - Lua functions can drive the render loop, event handling, GPU resource updates, and
+ *   compute shader analysis.
+ * - Provides rapid prototyping and scripting capabilities while keeping Vulkan resource
+ *   management safe and automatic.
+ * 
+ * 
+ * How objects work in the configuration(YAML) file:
+ * =================================================
+ *
+ * 1. Declaring a standalone object:
+ *    An object can be defined on its own, using a tag name as its identifier:
+ *
+ *    ```yaml
+ *     tag-name:
+ *         m_type: object_type
+ *         ...
+ *    ```
+ *
+ *    In this form:
+ *
+ *    * The tag name (e.g., `tag-name`) is automatically treated as the object's type identifier.
+ *    * The field `m_type` is required — it marks the entry as an object.
+ *    * Other properties or fields may follow.
+ *
+ * 2. Declaring an object within another object:
+ *    An object can also appear as a nested field inside another object:
+ *
+ *    ```yaml
+ *     another-tag-name:
+ *         ...
+ *         m_field:
+ *             tag-name:
+ *                 m_type: object_type
+ *                 ...
+ *    ```
+ *
+ *    In this case:
+ *
+ *    * `m_field` contains an object named `tag-name`.
+ *    * `tag-name` again includes an `m_type` to specify its type.
+ *
+ * 3. Declaring an inline (anonymous) object:
+ *    You can define an object directly within a field without giving it an outer tag.
+ *    However, you may optionally include an `m_tag` if you plan to reference it later:
+ *
+ *    ```yaml
+ *     another-tag-name:
+ *         ...
+ *         m_field:
+ *             m_type: object_type
+ *             m_tag: optional-tag-name
+ *    ```
+ *
+ *    Here:
+ *
+ *    * `m_type` identifies the object type.
+ *    * `m_tag` (optional) assigns a reference name so this object can be reused elsewhere.
+ * 
+ * 
+ * Object Types:
+ * =============
+ * 
+ * Following are the objects that are part of vulkan utils (vku) and vulkan composer (vkc):
+ * 
+ * vku::window_t
+ * -------------
+ *
+ * Description: Represents a GLFW window. This object manages a platform-specific window
+ * and serves as the target for Vulkan rendering. It allows resizing, title changes, and
+ * provides access to the underlying GLFWwindow* for integration with other libraries.
+ *
+ * Members:
+ * - m_name: Window title.
+ * - m_width, m_height: Window dimensions.
+ *
+ * Init: create(width, height, name)
+ *   - Parameters:
+ *     - width: Initial width of the window (default: 800).
+ *     - height: Initial height of the window (default: 600).
+ *     - name: Title of the window (default: "vku::window_name_placeholder").
+ * 
+ * 
+ * vku::instance_t
+ * ---------------
+ *
+ * Description: Represents a Vulkan instance. A Vulkan instance is the foundational 
+ * object that initializes the Vulkan library for a specific application. It manages 
+ * the connection between the application and the Vulkan runtime, and it enables 
+ * creation of devices, surfaces, and other Vulkan objects. This object also supports 
+ * optional debug layers for development and validation.
+ *
+ * Members:
+ * - m_app_name: Name of the application. Used for debugging and identification.
+ * - m_engine_name: Name of the engine. Used for debugging and identification.
+ * - m_extensions: List of Vulkan extensions to enable on creation.
+ * - m_layers: List of Vulkan layers (such as validation layers) to enable.
+ *
+ * Init: create(app_name, engine_name, extensions, layers)
+ *   - Parameters:
+ *     - app_name: Name of the application (default: "vku::app_name_placeholder").
+ *     - engine_name: Name of the engine (default: "vku::engine_name_placeholder").
+ *     - extensions: Vector of extension names to enable (default: { "VK_EXT_debug_utils" }).
+ *     - layers: Vector of layer names to enable (default: { "VK_LAYER_KHRONOS_validation" }).
+ *
+ * Notes:
+ * - Debug layers can be optionally enabled to catch errors and warnings during development.
+ * 
+ * 
+ * vku::surface_t
+ * --------------
+ *
+ * Description: Wraps a Vulkan surface. A Vulkan surface is an abstraction that allows 
+ * rendering to be presented to a window system. This object manages the relationship 
+ * between a Vulkan instance and a platform-specific window (GLFW in this case). 
+ * It handles creation and destruction of the VkSurfaceKHR handle and ensures that 
+ * the surface is properly associated with the correct window and Vulkan instance.
+ *
+ * Members:
+ * - m_window: Reference to a window_t object. This is the window that the surface 
+ *   is associated with. The surface will present images to this window.
+ * - m_instance: Reference to an instance_t object. The Vulkan instance that created 
+ *   and manages this surface.
+ *
+ * Init: create(window, instance)
+ *   - Parameters:
+ *     - window: A reference to a window_t object to associate the surface with.
+ *     - instance: A reference to an instance_t object used to create the surface.
+ *   - Returns: A reference-counted surface_t object with a valid VkSurfaceKHR handle.
+ * 
+ * vku::device_t
+ * -------------
+ *
+ * Description: Represents a Vulkan logical device. This object abstracts a physical 
+ * GPU and provides access to queues for graphics and presentation. It is used to 
+ * create buffers, images, pipelines, and other Vulkan resources.
+ *
+ * Members:
+ * - m_surface: Reference to a surface_t object. The surface used for presentation and 
+ *   swapchain creation.
+ *
+ * Init: create(surface)
+ *   - Parameters:
+ *     - surface: A reference to a surface_t object that this device will render to.
+ *
+ * Notes:
+ * - Automatically selects suitable graphics and presentation queues.
+ * - Provides access to device-local and host-visible memory through buffer objects.
+ * 
+ * TODO:
+ * - Add options for selecting the phys dev
+ * 
+ * 
+ * vku::swapchain_t
+ * ----------------
+ *
+ * Description: Wraps a Vulkan swapchain. A swapchain manages a set of images that 
+ * are presented to a window in a controlled manner. This object handles creation 
+ * of the VkSwapchainKHR, its images, and associated image views.
+ *
+ * Members:
+ * - m_device: Reference to a device_t object. The device used to create and manage 
+ *   the swapchain.
+ * - m_depth_imag: Reference to a depth image used for depth testing (automatically created).
+ * - m_depth_view: Reference to an image view for the depth image (automatically created).
+ *
+ * Init: create(device)
+ *   - Parameters:
+ *     - device: Reference to the device_t object.
+ *
+ * Notes:
+ * - Automatically chooses the surface format, present mode, and image count.
+ * - Provides access to the swapchain images and their views for rendering.
+ * 
+ * TODO:
+ * - more init hints?
+ * 
+ * 
+ * vku::shader_t
+ * -------------
+ *
+ * Description: Wraps a Vulkan shader module. This object represents a compiled 
+ * shader in SPIR-V format and can be used in graphics or compute pipelines. It 
+ * supports initialization from a SPIR-V object or directly from a precompiled file.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this shader.
+ * - m_type: Shader stage (vertex, fragment, compute, etc.).
+ * - m_spirv: Reference to a spirv_t object containing the compiled SPIR-V code.
+ * - m_path: Path to the shader file (used if initialized from file).
+ * - m_init_from_path: Flag indicating whether the shader was initialized from a file.
+ *
+ * Init:
+ * - create(device, spirv): Initialize from a spirv_t object.
+ * - create(device, path, type): Initialize from a compiled shader file.
+ *
+ * Notes:
+ * - For graphics pipelines, shaders must match the pipeline’s stage requirements.
+ * 
+ * 
+ * vku::renderpass_t
+ * -----------------
+ *
+ * Description: Wraps a Vulkan render pass. A render pass defines how framebuffer 
+ * attachments are used during rendering, including their load/store operations 
+ * and the subpass dependencies. This object manages the creation of a VkRenderPass 
+ * for a given swapchain.
+ *
+ * Members:
+ * - m_swapchain: Reference to a swapchain_t object. The swapchain whose images 
+ *   will be rendered into using this render pass.
+ *
+ * Init: create(swc)
+ *   - Parameters:
+ *     - swc: Reference to a swapchain_t object that will provide the framebuffer images.
+ *
+ * Notes:
+ * - Handles attachment descriptions, subpass definitions, and dependencies automatically.
+ * 
+ * 
+ * vku::pipeline_t
+ * ---------------
+ *
+ * Description: Wraps a Vulkan graphics pipeline. This object encapsulates the entire 
+ * pipeline state, including shaders, vertex input, topology, viewport, rasterization, 
+ * and descriptor set bindings. It is used for rendering commands submitted to a 
+ * command buffer.
+ *
+ * Members:
+ * - m_renderpass: Reference to a renderpass_t object. The render pass this pipeline 
+ *   will be used with.
+ * - m_shaders: Vector of references to shader_t objects. The shaders used in the 
+ *   pipeline stages.
+ * - m_topology: Primitive topology (triangle list, line list, etc.).
+ * - m_input_desc: Vertex input description (binding, attributes, stride, input rate).
+ * - m_bindings: Reference to a binding_desc_set_t object. Descriptor sets used 
+ *   by the pipeline.
+ * - m_width, m_height: Pipeline viewport dimensions.
+ *
+ * Init: create(width, height, renderpass, shaders, topology, input_desc, bindings)
+ *   - Parameters:
+ *     - width, height: Pipeline viewport dimensions.
+ *     - renderpass: Reference to the renderpass_t object.
+ *     - shaders: Vector of shader_t references for each stage.
+ *     - topology: Primitive topology.
+ *     - input_desc: Vertex input description.
+ *     - bindings: Reference to binding_desc_set_t describing descriptor sets.
+ *
+ * TODO:
+ * - maybe get rid of m_width, m_height, create new objects for viewport and stuff
+ * 
+ * vku::compute_pipeline_t
+ * -----------------------
+ *
+ * Description: Wraps a Vulkan compute pipeline. This object encapsulates a compute 
+ * shader and the descriptor sets it uses. It is used to dispatch compute workloads 
+ * on the GPU.
+ *
+ * Members:
+ * - m_device: Reference to a device_t object. The device that owns this compute pipeline.
+ * - m_shader: Reference to a shader_t object containing the compute shader.
+ * - m_bindings: Reference to a binding_desc_set_t object describing descriptor sets 
+ *   used by the shader.
+ *
+ * Init: create(device, shader, bindings)
+ *   - Parameters:
+ *     - device: Reference to the device_t object.
+ *     - shader: Reference to the compute shader (shader_t).
+ *     - bindings: Reference to binding_desc_set_t describing descriptor sets.
+ * 
+ * 
+ * vku::framebuffs_t
+ * -----------------
+ *
+ * Description: Wraps Vulkan framebuffers. A framebuffer represents a collection of 
+ * attachments (color, depth, etc.) used by a render pass for rendering. This object 
+ * manages the creation of VkFramebuffer objects corresponding to the swapchain images.
+ *
+ * Members:
+ * - m_renderpass: Reference to a renderpass_t object. The render pass that these 
+ *   framebuffers are compatible with.
+ *
+ * Init: create(renderpass)
+ *   - Parameters:
+ *     - renderpass: Reference to the renderpass_t object these framebuffers will be used with.
+ * 
+ *
+ * vku::cmdpool_t
+ * --------------
+ *
+ * Description: Wraps a Vulkan command pool. A command pool manages the memory and 
+ * allocation of command buffers, which record rendering and compute commands. This 
+ * object simplifies creation and management of command buffers for a device.
+ *
+ * Members:
+ * - m_device: Reference to a device_t object. The device that owns this command pool.
+ *
+ * Init: create(device)
+ *   - Parameters:
+ *     - device: Reference to the device_t object that will own this command pool.
+ *
+ * Notes:
+ * - All command buffers allocated from this pool are implicitly associated with
+ * the device’s queues.
+ * 
+ * 
+ * vku::cmdbuff_t
+ * --------------
+ *
+ * Description: Wraps a Vulkan command buffer. Command buffers record rendering and 
+ * compute commands that are submitted to a queue for execution. This object manages 
+ * allocation, recording, and submission of commands, and provides utility functions 
+ * for common operations like binding vertex buffers, descriptor sets, and drawing.
+ *
+ * Members:
+ * - m_cmdpool: Reference to a cmdpool_t object. The command pool from which this 
+ *   command buffer was allocated.
+ * - m_host_free: TODO explanation
+ *
+ * Member functions:
+ * - begin(flags): Begin recording commands with specified usage flags.
+ * - begin_rpass(fbs, img_idx): Begin a render pass using the specified framebuffers.
+ * - bind_vert_buffs(first_bind, buffs): Bind vertex buffers.
+ * - bind_idx_buff(ibuff, offset, idx_type): Bind an index buffer.
+ * - bind_desc_set(bind_point, pl, desc_set): Bind a descriptor set for the pipeline.
+ * - draw(pl, vert_cnt): Issue a non-indexed draw call.
+ * - draw_idx(pl, vert_cnt): Issue an indexed draw call.
+ * - end_rpass(): End the current render pass.
+ * - end(): Finish recording commands.
+ * - reset(): Reset the command buffer for reuse.
+ * - bind_compute(cpl): Bind a compute pipeline.
+ * - dispatch_compute(x, y, z): Dispatch compute shader workgroups.
+ *
+ * Init: create(cmdpool, host_free=false)
+ *   - Parameters:
+ *     - cmdpool: Reference to the cmdpool_t object from which this buffer will be allocated.
+ *     - host_free: Optional flag indicating whether the buffer is host-allocated (default: false).
+ *
+ * TODO:
+ * - check this description again
+ * 
+ * 
+ * vku::sem_t
+ * ----------
+ *
+ * Description: Wraps a Vulkan semaphore. Semaphores are synchronization primitives 
+ * used to coordinate execution between command buffers and queues, and to synchronize 
+ * presentation with rendering.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this semaphore.
+ *
+ * Init: create(device)
+ *   - Parameters:
+ *     - device: Reference to the device_t object that will own this semaphore.
+ *
+ * Notes:
+ * - Typically used to signal when an image is available from the swapchain or when 
+ *   rendering is complete.
+ * 
+ * 
+ * vku::fence_t
+ * ------------
+ *
+ * Description: Wraps a Vulkan fence. Fences are synchronization primitives used to 
+ * coordinate CPU and GPU operations. They allow the host to wait for GPU execution 
+ * to complete, ensuring proper synchronization between command submissions.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this fence.
+ * - m_flags: Fence creation flags. These control initial fence state (e.g., signaled 
+ *   or unsignaled).
+ *
+ * Init: create(device, flags=0)
+ *   - Parameters:
+ *     - device: Reference to the device_t object that will own this fence.
+ *     - flags: Optional fence creation flags (default: 0).
+ *
+ * Notes:
+ * - Fences can be waited on from the CPU to ensure GPU completion of submitted work.
+ * 
+ * 
+ * vku::buffer_t
+ * -------------
+ *
+ * Description: Wraps a Vulkan buffer and its associated device memory. Buffers are 
+ * linear memory resources used to store vertex data, index data, uniform data, or 
+ * any other structured GPU-accessible data. This object manages both the VkBuffer 
+ * and its backing VkDeviceMemory, and provides helper functions for mapping and 
+ * unmapping memory for CPU access.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this buffer.
+ * - m_size: The total size of the buffer in bytes.
+ * - m_usage_flags: Vulkan usage flags (e.g., VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) that 
+ *   determine how the buffer will be used by the GPU.
+ * - m_sharing_mode: Vulkan sharing mode (exclusive or concurrent) that determines 
+ *   how the buffer is accessed across multiple queue families.
+ * - m_memory_flags: Vulkan memory property flags that specify the type of memory 
+ *   allocation (e.g., host-visible, device-local, coherent).
+ * - m_map_ptr: Pointer to mapped memory (valid only when the buffer is mapped).
+ *
+ * Member functions:
+ * - map_data(offset, size): Maps the buffer's device memory to CPU-visible address space 
+ *   so that data can be written directly from the host.
+ * - unmap_data(): Unmaps the buffer's device memory after CPU writes are complete.
+ *
+ * Init: create(device, size, usage_flags, sharing_mode, memory_flags)
+ *   - Parameters:
+ *     - device: Reference to the device_t that will own this buffer.
+ *     - size: The total size of the buffer in bytes.
+ *     - usage_flags: Vulkan usage flags indicating how the buffer will be used.
+ *     - sharing_mode: How the buffer is shared across queue families.
+ *     - memory_flags: Memory properties for the buffer’s allocation.
+ *
+ * 
+ * vku::image_t
+ * ------------
+ *
+ * Description: Wraps a Vulkan image and its associated device memory. Images are
+ * multidimensional resources used for textures, color attachments, depth buffers,
+ * and other GPU-readable or -writable image data. This object manages the VkImage
+ * handle, its VkDeviceMemory allocation, and supports layout transitions and view creation.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this image.
+ * - m_width, m_height: Dimensions of the image in pixels.
+ * - m_format: Vulkan format (e.g., VK_FORMAT_R8G8B8A8_SRGB) that defines the pixel layout.
+ *   how the image will be used.
+ * - m_usage: Vulkan usage flags (e.g., VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) indicating 
+ *   how the image will be used.
+ *
+ * Member functions:
+ * - transition_layout(cmd_buff, old_layout, new_layout): Records a layout transition
+ *   command for this image, changing how the GPU interprets its contents.
+ * - set_data(cmd_pool, ptr, size, cmd_buff=nullptr): Copies data from a buffer into the image.
+ *
+ * Init: create(device, width, height, format, usage)
+ *   - Parameters:
+ *     - device: Reference to the device_t that will own this image.
+ *     - width, height: Dimensions of the image.
+ *     - format: Image format.
+ *     - usage: Usage flags describing intended image use.
+ *
+ * TODO:
+ * - add m_tiling and m_mem_flags? 
+ * 
+ * vku::img_view_t
+ * ---------------
+ *
+ * Description: Wraps a Vulkan image view. An image view defines how a Vulkan image’s
+ * data can be accessed and interpreted within shaders or as attachments. This object
+ * manages the VkImageView handle and ensures it is correctly associated with its
+ * underlying VkImage.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this image view.
+ * - m_image: Reference to the image_t object that this view is based on.
+ * - m_aspect_flags: Aspect flags defining which parts of the image are accessible 
+ *   (e.g., color, depth, or stencil).
+ *
+ * Init: create(device, image, aspect_flags)
+ *   - Parameters:
+ *     - device: Reference to the device_t object that owns this image view.
+ *     - image: Reference to the image_t object to create a view for.
+ *     - aspect_flags: Aspect flags specifying which parts of the image the view will access.
+ *
+ * Notes:
+ * - Required for using images as color or depth attachments, or as sampled textures.
+ * - The view type (1D, 2D, 3D, or cube) is inferred from the image and usage flags.
+ * - Multiple views can be created from the same image to represent different mip levels
+ *   or aspects.
+ * 
+ * 
+ * vku::img_sampl_t
+ * ----------------
+ *
+ * Description: Wraps a Vulkan sampler. A sampler defines how image data is read in shaders, 
+ * including filtering, addressing modes, and mipmap behavior. This object manages the 
+ * VkSampler handle and its configuration, and is used in combination with an img_view_t 
+ * when binding textures to descriptor sets.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this sampler.
+ * - m_filter: Filtering mode used for magnification and minification (e.g., 
+ *   VK_FILTER_LINEAR, VK_FILTER_NEAREST).
+ *
+ * Init: create(device, filter)
+ *   - Parameters:
+ *     - device: Reference to the device_t object that will own this sampler.
+ *     - filter: Filtering mode for magnification and minification.
+ *
+ * Notes:
+ * - Samplers are independent of specific images and can be reused across multiple textures.
+ * 
+ * TODO:
+ * - add m_address_mode, max_anisotropy, mipmap_mode
+ * 
+ * 
+ * vku::binding_desc_set_t
+ * -----------------------
+ *
+ * Description: Represents a collection of Vulkan descriptor bindings that define 
+ * how GPU resources (buffers, images, samplers) are connected to shaders. 
+ * This object holds a list of binding descriptors (either buffer or sampler bindings) 
+ * and provides helper functions to produce Vulkan structures used during 
+ * descriptor set and layout creation.
+ *
+ * Members:
+ * - m_binds: Vector of binding_desc_t objects, each describing a single resource 
+ *   binding (uniform buffer, storage buffer, or combined image sampler).
+ *
+ * Nested types:
+ * - binding_desc_t: Abstract base class for a descriptor binding. 
+ *   Defines a common interface for obtaining a VkWriteDescriptorSet structure.
+ * - buff_binding_t: Represents a buffer descriptor binding. Holds a reference 
+ *   to a buffer_t and its associated VkDescriptorBufferInfo.
+ * - sampl_binding_t: Represents a combined image sampler binding. Holds references 
+ *   to an img_view_t and an img_sampl_t, as well as the associated VkDescriptorImageInfo.
+ *
+ * Member functions:
+ * - get_writes(): Returns a vector of VkWriteDescriptorSet structures for updating 
+ *   descriptor sets.
+ * - get_descriptors(): Returns a vector of VkDescriptorSetLayoutBinding structures 
+ *   describing all bindings for layout creation.
+ *
+ * Init: create(binds)
+ *   - Parameters:
+ *     - binds: Vector of binding_desc_t references (each created using buff_binding_t::create 
+ *       or sampl_binding_t::create).
+ *
+ * Notes:
+ * - This object is used by desc_pool_t and desc_set_t to create and populate 
+ *   Vulkan descriptor sets.
+ * 
+ * 
+ * vku::binding_desc_set_t::buff_binding_t
+ * ---------------------------------------
+ *
+ * Description: Represents a buffer binding within a Vulkan descriptor set. 
+ * This binding connects a GPU buffer (uniform or storage) to a shader stage. 
+ * It wraps a buffer_t reference and the corresponding VkDescriptorBufferInfo needed 
+ * for descriptor updates.
+ *
+ * Members:
+ * - m_buffer: Reference to a buffer_t object containing the GPU buffer.
+ *
+ * Member functions:
+ * - get_write(): Returns a VkWriteDescriptorSet structure suitable for updating 
+ *   a descriptor set with this buffer binding.
+ *
+ * Init: create(desc, buffer)
+ *   - Parameters:
+ *     - desc: VkDescriptorSetLayoutBinding describing this binding (binding index, 
+ *       descriptor type, stage flags, etc.).
+ *     - buffer: Reference to a buffer_t object to bind.
+ *
+ * Notes:
+ * - Typically used for uniform buffers or storage buffers in graphics or compute pipelines.
+ * 
+ * 
+ * vku::binding_desc_set_t::sampl_binding_t
+ * ----------------------------------------
+ *
+ * Description: Represents a combined image sampler binding within a Vulkan descriptor set. 
+ * This binding connects a GPU image (via img_view_t) and a sampler (img_sampl_t) 
+ * to a shader stage, allowing shaders to sample textures.
+ *
+ * Members:
+ * - m_view: Reference to an img_view_t object representing the image to be sampled.
+ * - m_sampler: Reference to an img_sampl_t object representing the sampler used for filtering.
+ *
+ * Member functions:
+ * - get_write(): Returns a VkWriteDescriptorSet structure suitable for updating 
+ *   a descriptor set with this image-sampler binding.
+ *
+ * Init: create(desc, view, sampler)
+ *   - Parameters:
+ *     - desc: VkDescriptorSetLayoutBinding describing this binding (binding index, 
+ *       descriptor type, stage flags, etc.).
+ *     - view: Reference to an img_view_t object to bind.
+ *     - sampler: Reference to an img_sampl_t object to bind.
+ *
+ * 
+ * vkc::vertex_input_desc_t
+ * ------------------------
+ *
+ * Description: Represents a Vulkan vertex input description, including the binding 
+ * and attribute layouts. Wraps a vku::vertex_input_desc_t structure containing the 
+ * binding description (stride, input rate) and attribute descriptions (format, 
+ * location, offset, etc.).
+ *
+ * Member functions:
+ * - to_string(): Returns a formatted string showing the binding, stride, input rate, 
+ *   and attribute descriptions.
+ *
+ * TODO: more clear: Init: create(vid)
+ *   - Parameters:
+ *     - vid: A vku::vertex_input_desc_t object describing the vertex input layout.
+ *
+ * Notes:
+ * - Serves as a reusable object to describe vertex buffer layout for pipeline creation.
+ * 
+ * 
+ * vkc::binding_t
+ * --------------
+ *
+ * Description: Represents a generic descriptor set binding in Vulkan. 
+ * This object wraps a VkDescriptorSetLayoutBinding structure, which defines 
+ * the binding index, descriptor type, number of descriptors, and shader stage flags.
+ *
+ * Init: create(bd)
+ *   - Parameters:
+ *     - bd: A VkDescriptorSetLayoutBinding structure describing the binding.
+ *
+ * Notes:
+ * - Serves as a base or standalone representation for descriptor set bindings.
+ * - Can be used to initialize more specific binding types such as buffer or 
+ *   sampler bindings.
+ * 
+ * 
+ * vkc::desc_pool_t
+ * ----------------
+ *
+ * Description: Represents a Vulkan descriptor pool. A descriptor pool allocates 
+ * and manages descriptor sets, which are used to bind resources (buffers, 
+ * images, samplers) to shaders. This object wraps the VkDescriptorPool handle 
+ * and tracks associated bindings and allocation count.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this pool.
+ * - m_bindings: Reference to a binding_desc_set_t object describing the types 
+ *   of bindings this pool can allocate.
+ * - m_cnt: Number of descriptor sets this pool can allocate.
+ * - vk_descpool: Vulkan descriptor pool handle.
+ *
+ *
+ * Init: create(dev, bindings, cnt)
+ *   - Parameters:
+ *     - dev: Reference to the device_t object used to create the pool.
+ *     - bindings: Reference to a binding_desc_set_t describing the binding types.
+ *     - cnt: Maximum number of descriptor sets that can be allocated from this pool.
+ * 
+ * 
+ * vkc::desc_set_t
+ * ---------------
+ *
+ * Description: Represents a Vulkan descriptor set. Descriptor sets are allocated 
+ * from a descriptor pool and define how resources (buffers, images, samplers) 
+ * are bound to shaders in a pipeline. This object wraps the VkDescriptorSet handle 
+ * and tracks the pool, pipeline, and bindings associated with the set.
+ *
+ * Members:
+ * - m_descriptor_pool: Reference to the desc_pool_t object that allocated this set.
+ * - m_pipeline: Reference to the pipeline_t object using this descriptor set.
+ * - m_bindings: Reference to a binding_desc_set_t object describing the resources 
+ *   bound to this descriptor set.
+ * - vk_desc_set: Vulkan descriptor set handle.
+ *
+ * Member functions:
+ * - update(): Updates the GPU descriptor set with the current resources from the
+ *   associated binding_desc_set_t. Should be called after changing any buffers, images,
+ *   or samplers in the bindings. This function must be called before binding the descriptor set in
+ *   a command buffer if any resources have changed.
+ *
+ * Init: create(dp, pl, bindings)
+ *   - Parameters:
+ *     - dp: Reference to the desc_pool_t to allocate the descriptor set from.
+ *     - pl: Reference to the pipeline_t that will use this descriptor set.
+ *     - bindings: Reference to a binding_desc_set_t describing the bindings for this set.
+ * 
+ * Notes:
+ * - desc_set_t represents an actual Vulkan descriptor set allocated from a descriptor pool.
+ *   It implements the resources described by a binding_desc_set_t. While binding_desc_set_t
+ *   defines the layout and points to the specific resources (buffers, images, samplers),
+ *   desc_set_t is the concrete GPU object that can be bound in a pipeline. Multiple 
+ *   desc_set_t instances can share the same binding_desc_set_t layout.
+ * - Buffers and samplers are stored in the binding_desc_set_t bindings. To change the
+ *   resource used by a desc_set_t, modify the resource in the corresponding 
+ *   binding_desc_set_t::binding_desc_t and call update() on the desc_set_t. Alternatively,
+ *   calling update() on the binding_desc_set_t itself also works, as desc_set_t depends
+ *   on it and will propagate the changes automatically.
+ * 
+ *
+ * vkc::lua_function_t
+ * -------------------
+ *
+ * Description: Represents a C++ function exposed to Lua. Can be called from Lua scripts 
+ * using a Lua state, allowing integration of native C++ callbacks into Lua code.
+ *
+ * Members:
+ * - m_name: Name of the function as seen in Lua.
+ * - m_source: Source or context of the function (e.g., shared object path or C++ module).
+ *
+ * Member functions:
+ * - call(L): Executes the C++ callback using a given Lua state.
+ *
+ * Init: create(name, source)
+ *   - Parameters:
+ *     - name: Name of the function in Lua.
+ *     - source: Source or context of the function.
+ * 
+ * 
+ * vkc::lua_script_t
+ * -----------------
+ *
+ * Description: Holds a Lua script as a string. Can be loaded or executed from C++ 
+ * code using a Lua state, enabling scripting functionality.
+ *
+ * Members:
+ * - content: The text of the Lua script.
+ *
+ * Init: create(content)
+ *   - Parameters:
+ *     - content: The Lua script source code as a string.
+ * 
+ * 
+ * vkc::integer_t
+ * --------------
+ *
+ * Description: Wraps a 64-bit integer for bookkeeping or parameter storage within the 
+ * Vulkan wrapper framework. Useful for tracking values in a reference-managed system.
+ *
+ * Members:
+ * - value: The stored 64-bit integer.
+ *
+ * Init: create(value)
+ *   - Parameters:
+ *     - value: Initial integer value.
+ * 
+ * 
+ * vkc::float_t
+ * ------------
+ *
+ * Description: Wraps a double-precision floating-point value for bookkeeping or 
+ * parameter storage within the Vulkan wrapper framework. Useful for tracking values 
+ * in a reference-managed system.
+ *
+ * Members:
+ * - value: The stored double-precision floating-point number.
+ *
+ * Member functions:
+ * (none specific; access value directly)
+ *
+ * Init: create(value)
+ *   - Parameters:
+ *     - value: Initial floating-point value.
+ * 
+ * 
+ * vkc::string_t
+ * -------------
+ *
+ * Description: Wraps a standard string for bookkeeping or parameter storage within 
+ * the Vulkan wrapper framework. Useful for managing text values in a reference-managed 
+ * system.
+ *
+ * Members:
+ * - value: The stored string.
+ *
+ * Init: create(value)
+ *   - Parameters:
+ *     - value: Initial string content.
+ * 
+ * 
+ * vkc::cpu_buffer_t
+ * -----------------
+ *
+ * Description: Represents a CPU-side memory buffer. Can be used for passing data between Lua
+ * scripts and C++ callbacks, or for staging data to  and from Vulkan buffers. Essentially,
+ * this object wraps a byte array.
+ *
+ * Member functions:
+ * - data(): Returns a pointer to the buffer data.
+ * - size(): Returns the size of the buffer.
+ *
+ * Init: create(sz)
+ *   - Parameters:
+ *     - sz: Initial size of the buffer in bytes
+ *
+ *
+ * vkc::spirv_t
+ * ------------
+ * 
+ * Description: Wraps a SPIR-V shader module representation. Stores the SPIR-V bytecode 
+ * along with metadata (type, stage, etc.) and allows it to be passed around in the Vulkan 
+ * framework or used for shader module creation.
+ *
+ * Members:
+ * - spirv: The SPIR-V representation, including type and bytecode content.
+ *
+ * Member functions:
+ * - to_string(): Returns a formatted string showing the SPIR-V type and a hex dump of the content.
+ *
+ * TODO: fix: Init: create(spirv)
+ *   - Parameters:
+ *     - spirv: The SPIR-V object containing bytecode and type information.
+ * 
+ * 
+ */
+
 /*! @file This file will be used to auto-initialize Vulkan. This file will describe the structure
  * of the Vulkan objects and create an vulkan_obj_t with the specific type and an associated name.
  * In this way you can configure all the semaphores and buffers from here and ask for them inside
@@ -3330,627 +4323,3 @@ inline void luaw_set_glfw_fields(lua_State *L) {
 }; /* namespace vkc */
 
 #endif
-
-
-/*!
- * WIP TUTORIAL
- * 
- * OBS: Only vku objects ierarhize from one-another, vkc objects do not do that.
- * TODO: spirv should be part of hierarchy, hence part of vku, to enable it to be re-created?
- * 
- * How objects work in the configuration file:
- * ===========================================
- *
- * 1. Declaring a standalone object:
- *    An object can be defined on its own, using a tag name as its identifier:
- *
- *    ```yaml
- *     tag-name:
- *         m_type: object_type
- *         ...
- *    ```
- *
- *    In this form:
- *
- *    * The tag name (e.g., `tag-name`) is automatically treated as the object's type identifier.
- *    * The field `m_type` is required — it marks the entry as an object.
- *    * Other properties or fields may follow.
- *
- * 2. Declaring an object within another object:
- *    An object can also appear as a nested field inside another object:
- *
- *    ```yaml
- *     another-tag-name:
- *         ...
- *         m_field:
- *             tag-name:
- *                 m_type: object_type
- *                 ...
- *    ```
- *
- *    In this case:
- *
- *    * `m_field` contains an object named `tag-name`.
- *    * `tag-name` again includes an `m_type` to specify its type.
- *
- * 3. Declaring an inline (anonymous) object:
- *    You can define an object directly within a field without giving it an outer tag.
- *    However, you may optionally include an `m_tag` if you plan to reference it later:
- *
- *    ```yaml
- *     another-tag-name:
- *         ...
- *         m_field:
- *             m_type: object_type
- *             m_tag: optional-tag-name
- *    ```
- *
- *    Here:
- *
- *    * `m_type` identifies the object type.
- *    * `m_tag` (optional) assigns a reference name so this object can be reused elsewhere.
- * 
- * 
- * Object Types:
- * =============
- * 
- * window_t
- * --------
- *
- * Description: Represents a GLFW window. This object manages a platform-specific window
- * and serves as the target for Vulkan rendering. It allows resizing, title changes, and
- * provides access to the underlying GLFWwindow* for integration with other libraries.
- *
- * Members:
- * - m_name: Window title.
- * - m_width, m_height: Window dimensions.
- *
- * Init: create(width, height, name)
- *   - Parameters:
- *     - width: Initial width of the window (default: 800).
- *     - height: Initial height of the window (default: 600).
- *     - name: Title of the window (default: "vku::window_name_placeholder").
- * 
- * 
- * instance_t
- * ----------
- *
- * Description: Represents a Vulkan instance. A Vulkan instance is the foundational 
- * object that initializes the Vulkan library for a specific application. It manages 
- * the connection between the application and the Vulkan runtime, and it enables 
- * creation of devices, surfaces, and other Vulkan objects. This object also supports 
- * optional debug layers for development and validation.
- *
- * Members:
- * - m_app_name: Name of the application. Used for debugging and identification.
- * - m_engine_name: Name of the engine. Used for debugging and identification.
- * - m_extensions: List of Vulkan extensions to enable on creation.
- * - m_layers: List of Vulkan layers (such as validation layers) to enable.
- *
- * Init: create(app_name, engine_name, extensions, layers)
- *   - Parameters:
- *     - app_name: Name of the application (default: "vku::app_name_placeholder").
- *     - engine_name: Name of the engine (default: "vku::engine_name_placeholder").
- *     - extensions: Vector of extension names to enable (default: { "VK_EXT_debug_utils" }).
- *     - layers: Vector of layer names to enable (default: { "VK_LAYER_KHRONOS_validation" }).
- *
- * Notes:
- * - Debug layers can be optionally enabled to catch errors and warnings during development.
- * 
- * 
- * surface_t
- * ----------
- *
- * Description: Wraps a Vulkan surface. A Vulkan surface is an abstraction that allows 
- * rendering to be presented to a window system. This object manages the relationship 
- * between a Vulkan instance and a platform-specific window (GLFW in this case). 
- * It handles creation and destruction of the VkSurfaceKHR handle and ensures that 
- * the surface is properly associated with the correct window and Vulkan instance.
- *
- * Members:
- * - m_window: Reference to a window_t object. This is the window that the surface 
- *   is associated with. The surface will present images to this window.
- * - m_instance: Reference to an instance_t object. The Vulkan instance that created 
- *   and manages this surface.
- *
- * Init: create(window, instance)
- *   - Parameters:
- *     - window: A reference to a window_t object to associate the surface with.
- *     - instance: A reference to an instance_t object used to create the surface.
- *   - Returns: A reference-counted surface_t object with a valid VkSurfaceKHR handle.
- * 
- * device_t
- * --------
- *
- * Description: Represents a Vulkan logical device. This object abstracts a physical 
- * GPU and provides access to queues for graphics and presentation. It is used to 
- * create buffers, images, pipelines, and other Vulkan resources.
- *
- * Members:
- * - m_surface: Reference to a surface_t object. The surface used for presentation and 
- *   swapchain creation.
- *
- * Init: create(surface)
- *   - Parameters:
- *     - surface: A reference to a surface_t object that this device will render to.
- *
- * Notes:
- * - Automatically selects suitable graphics and presentation queues.
- * - Provides access to device-local and host-visible memory through buffer objects.
- * 
- * TODO:
- * - Add options for selecting the phys dev
- * 
- * 
- * swapchain_t
- * -----------
- *
- * Description: Wraps a Vulkan swapchain. A swapchain manages a set of images that 
- * are presented to a window in a controlled manner. This object handles creation 
- * of the VkSwapchainKHR, its images, and associated image views.
- *
- * Members:
- * - m_device: Reference to a device_t object. The device used to create and manage 
- *   the swapchain.
- * - m_depth_imag: Reference to a depth image used for depth testing (automatically created).
- * - m_depth_view: Reference to an image view for the depth image (automatically created).
- *
- * Init: create(device)
- *   - Parameters:
- *     - device: Reference to the device_t object.
- *
- * Notes:
- * - Automatically chooses the surface format, present mode, and image count.
- * - Provides access to the swapchain images and their views for rendering.
- * 
- * TODO:
- * - more init hints?
- * 
- * 
- * shader_t
- * --------
- *
- * Description: Wraps a Vulkan shader module. This object represents a compiled 
- * shader in SPIR-V format and can be used in graphics or compute pipelines. It 
- * supports initialization from a SPIR-V object or directly from a precompiled file.
- *
- * Members:
- * - m_device: Reference to the device_t object that owns this shader.
- * - m_type: Shader stage (vertex, fragment, compute, etc.).
- * - m_spirv: Reference to a spirv_t object containing the compiled SPIR-V code.
- * - m_path: Path to the shader file (used if initialized from file).
- * - m_init_from_path: Flag indicating whether the shader was initialized from a file.
- *
- * Init:
- * - create(device, spirv): Initialize from a spirv_t object.
- * - create(device, path, type): Initialize from a compiled shader file.
- *
- * Notes:
- * - For graphics pipelines, shaders must match the pipeline’s stage requirements.
- * 
- * 
- * renderpass_t
- * -------------
- *
- * Description: Wraps a Vulkan render pass. A render pass defines how framebuffer 
- * attachments are used during rendering, including their load/store operations 
- * and the subpass dependencies. This object manages the creation of a VkRenderPass 
- * for a given swapchain.
- *
- * Members:
- * - m_swapchain: Reference to a swapchain_t object. The swapchain whose images 
- *   will be rendered into using this render pass.
- *
- * Init: create(swc)
- *   - Parameters:
- *     - swc: Reference to a swapchain_t object that will provide the framebuffer images.
- *
- * Notes:
- * - Handles attachment descriptions, subpass definitions, and dependencies automatically.
- * 
- * 
- * pipeline_t
- * ----------
- *
- * Description: Wraps a Vulkan graphics pipeline. This object encapsulates the entire 
- * pipeline state, including shaders, vertex input, topology, viewport, rasterization, 
- * and descriptor set bindings. It is used for rendering commands submitted to a 
- * command buffer.
- *
- * Members:
- * - m_renderpass: Reference to a renderpass_t object. The render pass this pipeline 
- *   will be used with.
- * - m_shaders: Vector of references to shader_t objects. The shaders used in the 
- *   pipeline stages.
- * - m_topology: Primitive topology (triangle list, line list, etc.).
- * - m_input_desc: Vertex input description (binding, attributes, stride, input rate).
- * - m_bindings: Reference to a binding_desc_set_t object. Descriptor sets used 
- *   by the pipeline.
- * - m_width, m_height: Pipeline viewport dimensions.
- *
- * Init: create(width, height, renderpass, shaders, topology, input_desc, bindings)
- *   - Parameters:
- *     - width, height: Pipeline viewport dimensions.
- *     - renderpass: Reference to the renderpass_t object.
- *     - shaders: Vector of shader_t references for each stage.
- *     - topology: Primitive topology.
- *     - input_desc: Vertex input description.
- *     - bindings: Reference to binding_desc_set_t describing descriptor sets.
- *
- * TODO:
- * - maybe get rid of m_width, m_height, create new objects for viewport and stuff
- * 
- * compute_pipeline_t
- * ------------------
- *
- * Description: Wraps a Vulkan compute pipeline. This object encapsulates a compute 
- * shader and the descriptor sets it uses. It is used to dispatch compute workloads 
- * on the GPU.
- *
- * Members:
- * - m_device: Reference to a device_t object. The device that owns this compute pipeline.
- * - m_shader: Reference to a shader_t object containing the compute shader.
- * - m_bindings: Reference to a binding_desc_set_t object describing descriptor sets 
- *   used by the shader.
- *
- * Init: create(device, shader, bindings)
- *   - Parameters:
- *     - device: Reference to the device_t object.
- *     - shader: Reference to the compute shader (shader_t).
- *     - bindings: Reference to binding_desc_set_t describing descriptor sets.
- * 
- * 
- * framebuffs_t
- * -------------
- *
- * Description: Wraps Vulkan framebuffers. A framebuffer represents a collection of 
- * attachments (color, depth, etc.) used by a render pass for rendering. This object 
- * manages the creation of VkFramebuffer objects corresponding to the swapchain images.
- *
- * Members:
- * - m_renderpass: Reference to a renderpass_t object. The render pass that these 
- *   framebuffers are compatible with.
- *
- * Init: create(renderpass)
- *   - Parameters:
- *     - renderpass: Reference to the renderpass_t object these framebuffers will be used with.
- * 
- *
- * cmdpool_t
- * ----------
- *
- * Description: Wraps a Vulkan command pool. A command pool manages the memory and 
- * allocation of command buffers, which record rendering and compute commands. This 
- * object simplifies creation and management of command buffers for a device.
- *
- * Members:
- * - m_device: Reference to a device_t object. The device that owns this command pool.
- *
- * Init: create(device)
- *   - Parameters:
- *     - device: Reference to the device_t object that will own this command pool.
- *
- * Notes:
- * - All command buffers allocated from this pool are implicitly associated with
- * the device’s queues.
- * 
- * 
- * cmdbuff_t
- * ----------
- *
- * Description: Wraps a Vulkan command buffer. Command buffers record rendering and 
- * compute commands that are submitted to a queue for execution. This object manages 
- * allocation, recording, and submission of commands, and provides utility functions 
- * for common operations like binding vertex buffers, descriptor sets, and drawing.
- *
- * Members:
- * - m_cmdpool: Reference to a cmdpool_t object. The command pool from which this 
- *   command buffer was allocated.
- * - m_host_free: TODO explanation
- *
- * Member functions:
- * - begin(flags): Begin recording commands with specified usage flags.
- * - begin_rpass(fbs, img_idx): Begin a render pass using the specified framebuffers.
- * - bind_vert_buffs(first_bind, buffs): Bind vertex buffers.
- * - bind_idx_buff(ibuff, offset, idx_type): Bind an index buffer.
- * - bind_desc_set(bind_point, pl, desc_set): Bind a descriptor set for the pipeline.
- * - draw(pl, vert_cnt): Issue a non-indexed draw call.
- * - draw_idx(pl, vert_cnt): Issue an indexed draw call.
- * - end_rpass(): End the current render pass.
- * - end(): Finish recording commands.
- * - reset(): Reset the command buffer for reuse.
- * - bind_compute(cpl): Bind a compute pipeline.
- * - dispatch_compute(x, y, z): Dispatch compute shader workgroups.
- *
- * Init: create(cmdpool, host_free=false)
- *   - Parameters:
- *     - cmdpool: Reference to the cmdpool_t object from which this buffer will be allocated.
- *     - host_free: Optional flag indicating whether the buffer is host-allocated (default: false).
- *
- * TODO:
- * - check this description again
- * 
- * 
- * sem_t
- * -----
- *
- * Description: Wraps a Vulkan semaphore. Semaphores are synchronization primitives 
- * used to coordinate execution between command buffers and queues, and to synchronize 
- * presentation with rendering.
- *
- * Members:
- * - m_device: Reference to the device_t object that owns this semaphore.
- *
- * Member functions:
- * - None exposed publicly. Semaphores are used internally when submitting command buffers 
- *   and presenting images.
- *
- * Init: create(device)
- *   - Parameters:
- *     - device: Reference to the device_t object that will own this semaphore.
- *
- * Notes:
- * - Typically used to signal when an image is available from the swapchain or when 
- *   rendering is complete.
- * - Must be created after the device is initialized.
- * 
- * 
- * fence_t
- * -------
- *
- * Description: Vulkan fence wrapper.
- *
- * Members:
- * - vk_fence: Vulkan fence handle
- * - m_device: Reference to device_t
- * - m_flags: Fence creation flags
- *
- * Member Functions: None
- *
- * Init: create(device, flags=0)
- * 
- * 
- * buffer_t
- * --------
- *
- * Description: Vulkan buffer wrapper.
- *
- * Members:
- * - vk_buff: Buffer handle
- * - vk_mem: Device memory
- * - m_map_ptr: CPU mapped pointer
- * - m_device: Reference to device_t
- * - m_size, m_usage_flags, m_sharing_mode, m_memory_flags
- *
- * Member Functions:
- * - map_data(offset, size)
- * - unmap_data()
- *
- * Init: create(device, size, usage_flags, sharing_mode, memory_flags)
- * 
- * 
- * image_t
- * -------
- *
- * Description: Vulkan image abstraction.
- *
- * Members:
- * - vk_img, vk_img_mem
- * - m_device: Reference to device_t
- * - m_width, m_height
- * - m_format, m_usage
- *
- * Member Functions:
- * - transition_layout(cmdpool, old_layout, new_layout, cmdbuff=nullptr)
- * - set_data(cmdpool, data, size, cmdbuff=nullptr)
- *
- * Init: create(device, width, height, format, usage)
- * 
- * 
- * img_view_t
- * -----------
- *
- * Description: Vulkan image view wrapper.
- *
- * Members:
- * - vk_view: Image view handle
- * - m_image: Reference to image_t
- * - m_aspect_mask
- *
- * member functions: None
- *
- * Init: create(image, aspect_mask)
- * 
- * 
- * img_sampl_t
- * ------------
- *
- * Description: Vulkan image sampler wrapper.
- *
- * Members:
- * - vk_sampler
- * - m_device: Reference to device_t
- * - m_filter
- *
- * member functions:
- * - get_desc_set(binding, stage)
- *
- * Init: create(device, filter=LINEAR)
- * 
- * 
- * binding_desc_set_t
- * ------------------
- *
- * Description: Represents a set of descriptor bindings.
- *
- * Members:
- * - m_binds: Vector of binding_desc_t
- *
- * member functions:
- * - get_writes()
- * - get_descriptors()
- *
- * Init: create(vector<binding_desc_t>)
- * 
- * 
- * desc_pool_t
- * ------------
- *
- * Description: Vulkan descriptor pool wrapper.
- *
- * Members:
- * - vk_descpool
- * - m_device: Reference to device_t
- * - m_bindings: Reference to binding_desc_set_t
- * - m_cnt: Number of descriptor sets
- *
- * member functions: None
- *
- * Init: create(device, bindings, count)
- * 
- * 
- * desc_set_t
- * -----------
- *
- * Description: Vulkan descriptor set wrapper.
- *
- * Members:
- * - vk_desc_set
- * - m_descriptor_pool: Reference to desc_pool_t
- * - m_pipeline: Reference to pipeline_t
- * - m_bindings: Reference to binding_desc_set_t
- *
- * member functions: None
- *
- * Init: create(pool, pipeline, bindings)
- * 
- * 
- * lua_var_t
- * ---------
- *
- * Description: Represents a Lua variable reference.
- *
- * Members:
- * - name
- *
- * member functions: None
- *
- * Init: create(name)
- * 
- * 
- * lua_function_t
- * ---------------
- *
- * Description: Represents a Lua callable function.
- *
- * Members:
- * - m_name
- * - m_source
- *
- * member functions:
- * - call(lua_State *L)
- *
- * Init: create(name, source)
- * 
- * 
- * lua_script_t
- * -------------
- *
- * Description: Represents a Lua script.
- *
- * Members:
- * - content
- *
- * member functions: None
- *
- * Init: create(content)
- * 
- * 
- * integer_t
- * ----------
- *
- * Description: Holds a 64-bit integer.
- *
- * Members:
- * - value
- *
- * member functions: None
- *
- * Init: create(value)
- * 
- * 
- * float_t
- * --------
- *
- * Description: Holds a double-precision float.
- *
- * Members:
- * - value
- *
- * member functions: None
- *
- * Init: create(value)
- * 
- * 
- * cpu_buffer_t
- * -------------
- *
- * Description: Holds a CPU-accessible memory buffer.
- *
- * Members:
- * - _data: internal storage
- *
- * member functions:
- * - data(): returns pointer to buffer
- * - size(): returns buffer size
- *
- * Init: create(size)
- * 
- * 
- * string_t
- * --------
- *
- * Description: Holds a string value.
- *
- * Members:
- * - value
- *
- * member functions: None
- *
- * Init: create(value)
- * 
- * 
- * spirv_t
- * --------
- *
- * Description: Holds SPIR-V code.
- *
- * Members:
- * - spirv: SPIR-V structure with stage and content
- *
- * member functions: None
- *
- * Init: create(spirv)
- * 
- * 
- * vertex_input_desc_t
- * -------------------
- *
- * Description: Wraps a vertex input description.
- *
- * Members:
- * - vid: Vertex input description structure
- *
- * Init: create(vid)
- * 
- * 
- * binding_t
- * ----------
- *
- * Description: Wraps VkDescriptorSetLayoutBinding.
- *
- * Members:
- * - bd
- *
- * Init: create(binding)
- */
