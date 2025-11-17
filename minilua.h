@@ -1,3 +1,4 @@
+/* Very minor tweaks for safety; functionality unchanged; original license retained */
 /*
   minilua.h -- Lua in a single header
   Project URL: https://github.com/edubart/minilua
@@ -21372,9 +21373,9 @@ LUALIB_API char *luaL_prepbuffsize (luaL_Buffer *B, size_t sz) {
 
 
 LUALIB_API void luaL_addlstring (luaL_Buffer *B, const char *s, size_t l) {
-  if (l > 0) {  /* avoid 'memcpy' when 's' can be NULL */
+  if (l > 0 && l < INT64_MAX) {  /* avoid 'memcpy' when 's' can be NULL */
     char *b = prepbuffsize(B, l, -1);
-    memcpy(b, s, l * sizeof(char));
+    memcpy(b, s, l);
     luaL_addsize(B, l);
   }
 }

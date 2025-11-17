@@ -100,6 +100,77 @@ struct FnScope {
     }
 };
 
+/*!
+ * This insanity needs some sort of explanation.
+ *
+ * Origin of the code:
+ *   https://stackoverflow.com/a/74453799/7107236
+ * The original idea comes from Filip Roséen:
+ *   https://refp.se/articles/constexpr-counter
+ *
+ * In my own words and understanding:
+ *
+ *   - The core of this code is the function `is_defined`. Initially, it is *not*
+ *     defined in the context of the templated `exists`, so the call to
+ *     `is_defined(Tag{})` fails SFINAE and selects the second `exists` overload.
+ *
+ *   - That second overload returns `false`, but it also explicitly instantiates
+ *     `generator`. Instantiating `generator` defines `is_defined` for the
+ *     respective number. Therefore, the next time `exists` is queried for the
+ *     same Id, `is_defined` *is* defined.
+ *
+ * This code raises `-Wnon-template-friend` (as you would've guessed already) and
+ * may become unusable in the future. I hope not.
+ * 
+ * It is obvious, but the counter is unique only within its translation unit.
+ * Do not depend on its uniqueness across multiple objects, shared libraries,
+ * or other separate translation units.
+ */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnon-template-friend"
+template<typename UniqueTag, auto Id>
+struct compile_counter {
+    using tag = compile_counter;
+
+    struct generator { friend consteval auto is_defined(tag) { return true; } };
+    friend consteval auto is_defined(tag);
+
+    template<typename Tag = tag, auto = is_defined(Tag{})>
+    static consteval auto exists(auto) { return true; }
+
+    static consteval auto exists(...) { return generator(), false; }
+
+
+    template<typename Tag = tag, auto = is_defined(Tag{})>
+    static consteval auto exists_non_generating(auto) { return true; }
+
+    static consteval auto exists_non_generating(...) { return generator(), false; }
+};
+
+template<typename UniqueTag, auto Id = int{}, typename = decltype([]{})>
+consteval auto compile_max_id() {
+    if constexpr (not compile_counter<UniqueTag, Id>::exists_non_generating(Id))
+        return Id;
+    else
+        return compile_max_id<UniqueTag, Id + 1>();
+}
+template<typename UniqueTag, auto Id = int{}, typename = decltype([]{})>
+consteval auto compile_unique_id() {
+    if constexpr (not compile_counter<UniqueTag, Id>::exists(Id))
+        return Id;
+    else
+        return compile_unique_id<UniqueTag, Id + 1>();
+}
+#pragma GCC diagnostic pop
+
+/* Example for the above example, you can use whatever type as a tag.  */
+struct compile_counter_example_tag_t;
+static_assert(compile_unique_id<compile_counter_example_tag_t>() == 0);
+static_assert(compile_unique_id<compile_counter_example_tag_t>() == 1);
+static_assert(compile_unique_id<compile_counter_example_tag_t>() == 2);
+static_assert(compile_unique_id<compile_counter_example_tag_t>() == 3);
+
+
 // https://stackoverflow.com/questions/1259099/stdqueue-iteration
 template<typename T, typename Container=std::deque<T> >
 class iter_queue : public std::queue<T,Container> {

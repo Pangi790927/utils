@@ -8,7 +8,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-namespace vku = vku_utils;
+namespace vku = vulkan_utils;
 
 struct part_t {
     glm::vec2 pos;

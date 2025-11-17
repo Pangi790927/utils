@@ -14,6 +14,7 @@
 #include "debug.h"
 #include "demangle.h"
 #include "cpp_backtrace.h"
+#include "virt_object.h"
 
 #if __has_include(<glslang/Include/glslang_c_interface.h>)
 # define VKU_HAS_NEW_GLSLANG
@@ -46,9 +47,11 @@ do {                                                                            
     VkResult vk_err = (fn_call);                                                                   \
     if (vk_err != VK_SUCCESS) {                                                                    \
         DBG("Failed vk assert: [%s: %d]", vk_err_str(vk_err), vk_err);                             \
-        throw vku_utils::err_t(vk_err);                                                            \
+        throw vulkan_utils::err_t(vk_err);                                                         \
     }                                                                                              \
 } while (false);
+
+
 
 enum vku_shader_stage_e {
     VKU_SPIRV_VERTEX,
@@ -59,52 +62,50 @@ enum vku_shader_stage_e {
     VKU_SPIRV_TESS_EVAL,
 };
 
+
+namespace vulkan_utils {
+
+
+struct vulkan_tag_t {};
+
+namespace vo = virt_object;
+
 /* This is a common type enumeration for all the types that can be derived from vku_object_t */
-enum vku_object_type_e {
+using object_type_e = vo::EnumClass<vulkan_tag_t>;
 
-    /* Those are the types from this file: */
-    VKU_TYPE_OBJECT = 0, /* object_t is pure virtual, so no object should have this type */
-    VKU_TYPE_WINDOW,
-    VKU_TYPE_INSTANCE,
-    VKU_TYPE_SURFACE,
-    VKU_TYPE_DEVICE,
-    VKU_TYPE_SWAPCHAIN,
-    VKU_TYPE_SHADER,
-    VKU_TYPE_RENDERPASS,
-    VKU_TYPE_PIPELINE,
-    VKU_TYPE_COMPUTE_PIPELINE,
-    VKU_TYPE_FRAMEBUFFERS,
-    VKU_TYPE_COMMAND_POOL,
-    VKU_TYPE_COMMAND_BUFFER,
-    VKU_TYPE_SEMAPHORE,
-    VKU_TYPE_FENCE,
-    VKU_TYPE_BUFFER,
-    VKU_TYPE_IMAGE,
-    VKU_TYPE_IMAGE_VIEW,
-    VKU_TYPE_IMAGE_SAMPLER,
-    VKU_TYPE_DESCRIPTOR_SET,
-    VKU_TYPE_DESCRIPTOR_POOL,
-    VKU_TYPE_SAMPLER_BINDING,
-    VKU_TYPE_BUFFER_BINDING,
-    VKU_TYPE_BINDING_DESCRIPTOR_SET,
-
-    /* Those are the types from the vulkan composer file: */
-    VKC_TYPE_SPIRV,
-    VKC_TYPE_STRING,
-    VKC_TYPE_FLOAT,
-    VKC_TYPE_CPU_BUFFER,
-    VKC_TYPE_INTEGER,
-    VKC_TYPE_LUA_SCRIPT,
-    VKC_TYPE_LUA_VARIABLE,
-    VKC_TYPE_LUA_FUNCTION,
-    VKC_TYPE_VERTEX_INPUT_DESC,
-    VKC_TYPE_BINDING_DESC,
-
-    /* Total number of different types */
-    VKU_TYPE_CNT,
+struct vulkan_traits_t {
+    using ret_t = VkResult;
+    using type_t = object_type_e;
 };
 
-namespace vku_utils {
+/* Those are the types from this file, this file promises not to invalidate the counter, you can
+use it later on. */
+/* object_t is pure virtual, so no object should have this type */
+constexpr object_type_e VKU_TYPE_OBJECT                 {vo::compile_unique_id<vulkan_tag_t>()}; 
+constexpr object_type_e VKU_TYPE_WINDOW                 {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_INSTANCE               {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_SURFACE                {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_DEVICE                 {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_SWAPCHAIN              {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_SHADER                 {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_RENDERPASS             {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_PIPELINE               {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_COMPUTE_PIPELINE       {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_FRAMEBUFFERS           {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_COMMAND_POOL           {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_COMMAND_BUFFER         {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_SEMAPHORE              {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_FENCE                  {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_BUFFER                 {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_IMAGE                  {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_IMAGE_VIEW             {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_IMAGE_SAMPLER          {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_DESCRIPTOR_SET         {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_DESCRIPTOR_POOL        {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_SAMPLER_BINDING        {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_BUFFER_BINDING         {vo::compile_unique_id<vulkan_tag_t>()};
+constexpr object_type_e VKU_TYPE_BINDING_DESCRIPTOR_SET {vo::compile_unique_id<vulkan_tag_t>()};
+
 
 /* TODO:
     - Add logs for all the creations/deletions of objects with type and id(ptr)
@@ -128,10 +129,11 @@ struct mvp_t;
 struct ubo_t;
 struct ssbo_t;
 
-template <typename VkuT>
-struct ref_t;
+using object_t = virt_object::object_t<vulkan_traits_t>;
 
-struct object_t;
+template <typename VkuT>
+using ref_t = virt_object::ref_t<VkuT, vulkan_traits_t>;
+
 struct instance_t;      /* uses (opts) */
 struct surface_t;       /* uses (instance) */
 struct device_t;        /* uses (surface) */
@@ -182,7 +184,7 @@ inline void copy_buff(
 
 /* To string for own enums: */
 inline std::string to_string(vku_shader_stage_e stage);
-inline std::string to_string(vku_object_type_e type);
+inline std::string to_string(object_type_e type);
 
 /* To string for own objects: */
 template <typename T>
@@ -243,241 +245,6 @@ struct err_t : public std::exception {
                 str);
     }
     const char *what() const noexcept override { return err_str.c_str(); };
-};
-
-
-/*! Callbacks used by object_t for re-initializing the managed vulkan obeject */
-struct object_cbks_t {
-    std::shared_ptr<void> usr_ptr;
-
-    /*! This function is called when an ref_t calls the object_t::init function, just before
-     * init is called, with the object and usr_ptr as arguments. This call is made if
-     * object_t::cbks is not null and if object_cbks_t::pre_init is also not null. */
-    std::function<void(object_t *, std::shared_ptr<void> &)> pre_init;
-
-    /*! Same as above, called after init. */
-    std::function<void(object_t *, std::shared_ptr<void> &)> post_init;
-
-    /*! Same as for init, but this time for the uninit function */
-    std::function<void(object_t *, std::shared_ptr<void> &)> pre_uninit;
-
-    /*! Same as above, called after uninit. */
-    std::function<void(object_t *, std::shared_ptr<void> &)> post_uninit;
-};
-
-/*! This is virtual only for init/uninit, which need to describe how the object should be
- * initialized once it is created and it's parameters are filled */
-struct object_t {
-    virtual ~object_t() { _call_uninit(); }
-
-    template <typename VkuT>
-    friend struct ref_t;
-
-    VkResult _call_init() {
-        if (cbks && cbks->pre_init)
-            cbks->pre_init(this, cbks->usr_ptr);
-        auto ret = _init();
-        if (cbks && cbks->post_init)
-            cbks->post_init(this, cbks->usr_ptr);
-        return ret;
-    }
-
-    VkResult _call_uninit() {
-        if (cbks && cbks->pre_uninit)
-            cbks->pre_uninit(this, cbks->usr_ptr);
-        auto ret = _uninit();
-        if (cbks && cbks->post_uninit)
-            cbks->post_uninit(this, cbks->usr_ptr);
-        return ret;
-    }
-
-    virtual vku_object_type_e type_id() const = 0;
-    virtual std::string to_string() const = 0;
-
-    std::shared_ptr<object_cbks_t> cbks;
-
-    virtual void update() {}
-
-private:
-    virtual VkResult _init() = 0;
-    virtual VkResult _uninit() { return VK_SUCCESS; };
-};
-
-/*!
- * The idea:
- * - No object is directly referenced, but they all are referenced by this reference. What this does
- * is it enables us to keep an internal representation of the vulkan data structures while also
- * letting us rebuild the internal object when needed. The vulkan structures will be rebuilt using
- * the last parameters that where used to build them.
- */
-/* TODO: Think if it makes sense to implement a locking mechanism, especially for the rebuild stuff.
-
-ref_t practically implements a DAG of dependencies, this means that to protect a node, all it's
-dependees must be also locked. An observation is that even if a dependee can pe added to a
-dependency, no dependency from the target node to the leaf nodes can ever be removed before removing
-the target node. As such, the ideea is to implement a spinlock for an address variable, such that
-the node is protected by a spinlock and a mutex at the same time.
-
-Let's take an example of a graph (nodes in the right, depend on those on the left, in the example,
-D depends on A, B and C):
-
-A     E              L
- \   / \            /
-  \ /   \          /
-B--D     G--------H---N
-  / \   /        / \
- /   \ /        /   \
-C     F        /     M
-     / \      /
-    /   \    J
-   I     K    \
-               \
-                O
-
-So in this example, If we want to do a modification to G, we must lock away G, H, M, N, L. If we
-want to modify J, we need to lock J, H, M, N, L, O. But the only known fact is that G is a
-dependency of H, We don't know that J is a lso a dependency of H, and we must stop H from...
-
-Need to figure this out if I want to implement it, do I really need to remember depends, besides
-dependees? This is kinda annoying. So I will need to also hold _depends, and figure out a way to
-manage them, somehow. This also does another bad thing, stores twice as many pointers as I really
-need, bacause depends are not going to go anywhere, so bad... Maybe I can keep them as raw pointers,
-since I already hold them once as shared pointers?
-
-struct node : public std::enable_shared_from_this<ref_base_t> {
-    std::vector<std::weak_ptr<node>>  _dependees;
-    // std::vector<node *>  _depends; //  <- maybe like this? And maybe only if locking is enabled?
-    Data data;
-};
-
-*/
-
-struct base_t;
-
-struct ref_base_t {
-    std::shared_ptr<base_t> _base;
-};
-
-struct base_t : public std::enable_shared_from_this<base_t> {
-protected:
-    /*! This is here to force the creation of references by create_obj, this makes sure */
-    struct private_param_t { explicit private_param_t() = default; };
-
-    std::unique_ptr<object_t>           _obj;
-    std::vector<std::weak_ptr<base_t>>  _dependees;
-
-public:
-    template <typename VkuT>
-    base_t(private_param_t, std::unique_ptr<VkuT> obj) : _obj(std::move(obj)) {}
-
-    template <typename VkuT>
-    friend struct ref_t;
-
-    void rebuild() {
-        /* TODO: maybe thread-protect this somehow? */
-        _uninit_all();
-        _init_all();
-    }
-
-    void update() {
-        _obj->update();
-        for (auto wd : _dependees)
-            if (auto d = wd.lock()) {
-                d->update();
-            }
-    }
-
-    template <typename VkuT> requires std::derived_from<VkuT, object_t>
-    static std::shared_ptr<base_t> create_obj_ref(
-            std::unique_ptr<VkuT>       obj,
-            std::vector<ref_base_t> dependencies)
-    {
-        auto ret = std::make_shared<base_t>(private_param_t{}, std::move(obj));
-        for (auto &d : dependencies)
-            d._base->_dependees.push_back(ret);
-        return ret;
-    }
-
-private:
-    void _clean_deps() {
-        _dependees.erase(std::remove_if(_dependees.begin(), _dependees.end(), [](auto wp){
-                return wp.expired(); }), _dependees.end());
-    }
-
-    void _uninit_all() {
-        _clean_deps(); /* we lazy clear the deps whenever we want to iterate over them */
-        for (auto wd : _dependees)
-            wd.lock()->_uninit_all();
-        VK_ASSERT(_obj->_call_uninit());
-    }
-
-    void _init_all() {
-        VK_ASSERT(_obj->_call_init());
-        for (auto wd : _dependees)
-            wd.lock()->_init_all();
-    }
-
-};
-
-/*! This holds a reference to an instance of VkuT, instance that is initiated and held by this
- * library. All objects and the user will use the instance via this reference. This is implemented
- * here because it has a small footprint and I consider making it visible would made the library
- * easier to use. */
-template <typename VkuT>
-class ref_t : public ref_base_t {
-public:
-    ref_t(std::nullptr_t) {}
-    ref_t() {}
-    ref_t(std::shared_ptr<base_t> obj) : ref_base_t{obj} {
-        /* We either hold nullptr or an object that can be casted to VkuT */
-        if (obj && !dynamic_cast<VkuT *>(_base->_obj.get())) {
-            throw err_t{std::format("Tried to build a reference of invalid type {} to {}",
-                    demangle(typeid(*_base->_obj.get()).name()),
-                    demangle<VkuT>())};
-        }
-    }
-
-    template <typename U> requires std::derived_from<U, object_t>
-    ref_t(ref_t<U> oth) : ref_base_t{oth._base} {
-        /* We either hold nullptr or an object that can be casted to VkuT */
-        if (oth && !dynamic_cast<VkuT *>(_base->_obj.get())) {
-            throw err_t{std::format("Tried to build a reference of invalid type {} to {}",
-                    demangle(typeid(*_base->_obj.get()).name()),
-                    demangle<VkuT>())};
-        }
-    }
-
-    void rebuild() { _base->rebuild(); }
-
-    ref_t &operator = (std::nullptr_t) { _base = nullptr; return *this; } 
-
-    VkuT *operator ->() { return static_cast<VkuT *>(_base->_obj.get()); }
-    const VkuT *operator ->() const { return static_cast<const VkuT *>(_base->_obj.get()); }
-
-    VkuT &operator *() { return *static_cast<VkuT *>(_base->_obj.get()); }
-    const VkuT &operator *() const { return *static_cast<const VkuT *>(_base->_obj.get()); }
-
-    VkuT *get() { return static_cast<VkuT *>(_base->_obj.get()); }
-    const VkuT *get() const { return static_cast<const VkuT *>(_base->_obj.get()); }
-
-    template <typename VkuB> requires std::derived_from<VkuT, VkuB>
-    ref_t<VkuB> to_base() { return ref_t<VkuB>{_base}; };
-
-    template <typename VkuB> requires std::derived_from<VkuB, VkuT>
-    ref_t<VkuB> to_derived() { return ref_t<VkuB>{_base}; };
-
-    template <typename VkuB> requires std::derived_from<VkuB, VkuT> || std::derived_from<VkuT, VkuB>
-    ref_t<VkuB> to_related() { return ref_t<VkuB>{_base}; };
-
-    operator bool() { return !!_base; }
-    friend bool operator == (std::nullptr_t, ref_t obj) { return obj._base == nullptr; } 
-    friend bool operator == (ref_t obj, std::nullptr_t) { return obj._base == nullptr; } 
-
-    static ref_t<VkuT> create_obj_ref(std::unique_ptr<VkuT> obj,
-            std::vector<ref_base_t> dependencies)
-    {
-        return ref_t<VkuT>{base_t::create_obj_ref(std::move(obj), dependencies)};
-    }
 };
 
 struct gpu_family_ids_t {
@@ -546,10 +313,10 @@ struct window_t : public object_t {
     static ref_t<window_t> create(int width = 800, int height = 600,
             std::string name = "vku::window_name_placeholder");
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_WINDOW; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_WINDOW; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_WINDOW; }
+    static  object_type_e type_id_static() { return VKU_TYPE_WINDOW; }
     GLFWwindow *get_window() const { return _window; }
 
 private:
@@ -568,10 +335,10 @@ struct instance_t : public object_t {
     std::vector<std::string>    m_extensions;
     std::vector<std::string>    m_layers;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_INSTANCE; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_INSTANCE; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_INSTANCE; }
+    static  object_type_e type_id_static() { return VKU_TYPE_INSTANCE; }
     static ref_t<instance_t> create(
             const std::string app_name = "vku::app_name_placeholder",
             const std::string engine_name = "vku::engine_name_placeholder",
@@ -590,10 +357,10 @@ struct surface_t : public object_t {
     ref_t<window_t>     m_window;
     ref_t<instance_t>   m_instance;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_SURFACE; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_SURFACE; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_SURFACE; }
+    static  object_type_e type_id_static() { return VKU_TYPE_SURFACE; }
     static ref_t<surface_t> create(ref_t<window_t> window, ref_t<instance_t> inst);
 
 private:
@@ -611,10 +378,10 @@ struct device_t : public object_t {
 
     ref_t<surface_t>    m_surface;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_DEVICE; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_DEVICE; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_DEVICE; }
+    static  object_type_e type_id_static() { return VKU_TYPE_DEVICE; }
     static ref_t<device_t> create(ref_t<surface_t> surf);
 
 private:
@@ -635,10 +402,10 @@ struct swapchain_t : public object_t {
 
     ref_t<device_t>             m_device;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_SWAPCHAIN; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_SWAPCHAIN; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_SWAPCHAIN; }
+    static  object_type_e type_id_static() { return VKU_TYPE_SWAPCHAIN; }
     static ref_t<swapchain_t> create(ref_t<device_t> dev);
 
 private:
@@ -656,10 +423,10 @@ struct shader_t : public object_t {
     ref_t<device_t>     m_device;
     spirv_t             m_spirv;    /* TODO: maybe switch to vku::rev_t? */
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_SHADER; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_SHADER; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_SHADER; }
+    static  object_type_e type_id_static() { return VKU_TYPE_SHADER; }
     /* not init from path */
     static ref_t<shader_t> create(ref_t<device_t> dev, const spirv_t& spirv);
 
@@ -677,10 +444,10 @@ struct renderpass_t : public object_t {
 
     ref_t<swapchain_t>  m_swapchain;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_RENDERPASS; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_RENDERPASS; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_RENDERPASS; }
+    static  object_type_e type_id_static() { return VKU_TYPE_RENDERPASS; }
     static ref_t<renderpass_t> create(ref_t<swapchain_t> swc);
 
 private:
@@ -701,10 +468,10 @@ struct pipeline_t : public object_t {
     vertex_input_desc_t             m_input_desc;
     ref_t<binding_desc_set_t>       m_bindings;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_PIPELINE; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_PIPELINE; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_PIPELINE; }
+    static  object_type_e type_id_static() { return VKU_TYPE_PIPELINE; }
     static ref_t<pipeline_t> create(
             int                                 width,
             int                                 height,
@@ -728,10 +495,10 @@ struct compute_pipeline_t : public object_t {
     ref_t<shader_t>             m_shader;
     ref_t<binding_desc_set_t>   m_bindings;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_COMPUTE_PIPELINE; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_COMPUTE_PIPELINE; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_COMPUTE_PIPELINE; }
+    static  object_type_e type_id_static() { return VKU_TYPE_COMPUTE_PIPELINE; }
     static ref_t<compute_pipeline_t> create(
             ref_t<device_t>             dev,
             ref_t<shader_t>             shader,
@@ -748,10 +515,10 @@ struct framebuffs_t : public object_t {
 
     ref_t<renderpass_t>         m_renderpass;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_FRAMEBUFFERS; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_FRAMEBUFFERS; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_FRAMEBUFFERS; }
+    static  object_type_e type_id_static() { return VKU_TYPE_FRAMEBUFFERS; }
     static ref_t<framebuffs_t> create(ref_t<renderpass_t> rp);
 
 private:
@@ -765,10 +532,10 @@ struct cmdpool_t : public object_t {
 
     ref_t<device_t> m_device;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_COMMAND_POOL; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_COMMAND_POOL; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_COMMAND_POOL; }
+    static  object_type_e type_id_static() { return VKU_TYPE_COMMAND_POOL; }
     static ref_t<cmdpool_t> create(ref_t<device_t> dev);
 
 private:
@@ -782,10 +549,10 @@ struct cmdbuff_t : public object_t {
     ref_t<cmdpool_t>    m_cmdpool;
     bool                m_host_free;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_COMMAND_BUFFER; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_COMMAND_BUFFER; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_COMMAND_BUFFER; }
+    static  object_type_e type_id_static() { return VKU_TYPE_COMMAND_BUFFER; }
     static ref_t<cmdbuff_t> create(ref_t<cmdpool_t> cp, bool host_free = false);
 
     void begin(VkCommandBufferUsageFlags flags);
@@ -815,7 +582,7 @@ struct sem_t : public object_t {
 
     ref_t<device_t> m_device;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_SEMAPHORE; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_SEMAPHORE; }
     virtual std::string to_string() const override;
 
     static ref_t<sem_t> create(ref_t<device_t> dev);
@@ -831,10 +598,10 @@ struct fence_t : public object_t {
     ref_t<device_t>     m_device;
     VkFenceCreateFlags  m_flags;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_FENCE; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_FENCE; }
     virtual std::string to_string() const override;
 
-    static vku_object_type_e type_id_static() { return VKU_TYPE_FENCE; }
+    static object_type_e type_id_static() { return VKU_TYPE_FENCE; }
     static ref_t<fence_t> create(ref_t<device_t> dev, VkFenceCreateFlags flags = 0);
 
 private:
@@ -853,10 +620,10 @@ struct buffer_t : public object_t {
     VkSharingMode           m_sharing_mode;
     VkMemoryPropertyFlags   m_memory_flags;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_BUFFER; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_BUFFER; }
     virtual std::string to_string() const override;
 
-    static vku_object_type_e type_id_static() { return VKU_TYPE_BUFFER; }
+    static object_type_e type_id_static() { return VKU_TYPE_BUFFER; }
     static ref_t<buffer_t> create(
             ref_t<device_t>         dev,
             size_t                  size,
@@ -883,10 +650,10 @@ struct image_t : public object_t {
     VkFormat            m_format;
     VkImageUsageFlags   m_usage;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_IMAGE; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_IMAGE; }
     virtual std::string to_string() const override;
 
-    static vku_object_type_e type_id_static() { return VKU_TYPE_IMAGE; }
+    static object_type_e type_id_static() { return VKU_TYPE_IMAGE; }
     static ref_t<image_t> create(
             ref_t<device_t>     dev,
             uint32_t            width,
@@ -920,10 +687,10 @@ struct img_view_t : public object_t {
     ref_t<image_t>      m_image;
     VkImageAspectFlags  m_aspect_mask;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_IMAGE_VIEW; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_IMAGE_VIEW; }
     virtual std::string to_string() const override;
 
-    static vku_object_type_e type_id_static() { return VKU_TYPE_IMAGE_VIEW; }
+    static object_type_e type_id_static() { return VKU_TYPE_IMAGE_VIEW; }
     static ref_t<img_view_t> create(ref_t<image_t> img, VkImageAspectFlags aspect_mask);
 
 private:
@@ -937,10 +704,10 @@ struct img_sampl_t : public object_t {
     ref_t<device_t> m_device;
     VkFilter        m_filter;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_IMAGE_SAMPLER; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_IMAGE_SAMPLER; }
     virtual std::string to_string() const override;
 
-    static vku_object_type_e type_id_static() { return VKU_TYPE_IMAGE_SAMPLER; }
+    static object_type_e type_id_static() { return VKU_TYPE_IMAGE_SAMPLER; }
     static ref_t<img_sampl_t> create(ref_t<device_t> dev, VkFilter filter = VK_FILTER_LINEAR);
     static VkDescriptorSetLayoutBinding get_desc_set(uint32_t binding, VkShaderStageFlags stage);
 
@@ -956,10 +723,10 @@ struct desc_pool_t : public object_t {
     ref_t<binding_desc_set_t>   m_bindings;
     uint32_t                    m_cnt;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_POOL; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_POOL; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_POOL; }
+    static  object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_POOL; }
     static ref_t<desc_pool_t> create(
             ref_t<device_t>             dev,
             ref_t<binding_desc_set_t>   bindings,
@@ -977,12 +744,12 @@ struct desc_set_t : public object_t {
     ref_t<pipeline_t>           m_pipeline;
     ref_t<binding_desc_set_t>   m_bindings;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET; }
     virtual std::string to_string() const override;
 
     virtual void update() override;
 
-    static vku_object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET; }
+    static object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET; }
     static ref_t<desc_set_t> create(
             ref_t<desc_pool_t>          dp,
             ref_t<pipeline_t>           pl,
@@ -1011,10 +778,10 @@ struct binding_desc_set_t : public object_t {
         ref_t<buffer_t>         m_buffer;
 
         virtual VkWriteDescriptorSet get_write() const override;
-        virtual vku_object_type_e type_id() const override { return VKU_TYPE_BUFFER_BINDING; }
+        virtual object_type_e type_id() const override { return VKU_TYPE_BUFFER_BINDING; }
         virtual std::string to_string() const override;
 
-        static  vku_object_type_e type_id_static() { return VKU_TYPE_BUFFER_BINDING; }
+        static  object_type_e type_id_static() { return VKU_TYPE_BUFFER_BINDING; }
         static ref_t<buff_binding_t> create(
                 VkDescriptorSetLayoutBinding    desc,
                 ref_t<buffer_t>                 buff);
@@ -1030,10 +797,10 @@ struct binding_desc_set_t : public object_t {
         ref_t<img_sampl_t>      m_sampler;
 
         virtual VkWriteDescriptorSet get_write() const override;
-        virtual vku_object_type_e type_id() const override { return VKU_TYPE_SAMPLER_BINDING; }
+        virtual object_type_e type_id() const override { return VKU_TYPE_SAMPLER_BINDING; }
         virtual std::string to_string() const;
 
-        static  vku_object_type_e type_id_static() { return VKU_TYPE_SAMPLER_BINDING; }
+        static  object_type_e type_id_static() { return VKU_TYPE_SAMPLER_BINDING; }
         static ref_t<sampl_binding_t> create(
                 VkDescriptorSetLayoutBinding    desc,
                 ref_t<img_view_t>               view,
@@ -1045,10 +812,10 @@ struct binding_desc_set_t : public object_t {
 
     std::vector<ref_t<binding_desc_t>> m_binds;
 
-    virtual vku_object_type_e type_id() const override { return VKU_TYPE_BINDING_DESCRIPTOR_SET; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_BINDING_DESCRIPTOR_SET; }
     virtual std::string to_string() const override;
 
-    static  vku_object_type_e type_id_static() { return VKU_TYPE_BINDING_DESCRIPTOR_SET; }
+    static  object_type_e type_id_static() { return VKU_TYPE_BINDING_DESCRIPTOR_SET; }
     static ref_t<binding_desc_set_t> create(std::vector<ref_t<binding_desc_t>> binds);
 
     std::vector<VkWriteDescriptorSet> get_writes() const;
@@ -1753,7 +1520,7 @@ inline ref_t<shader_t> shader_t::create(
 
 inline std::string shader_t::to_string() const {
     return std::format("vku::shader[{}]: m_device={} m_type={} {}",
-            (void*)this, (void*)m_device.get(), vku_utils::to_string(m_type),
+            (void*)this, (void*)m_device.get(), vulkan_utils::to_string(m_type),
             m_init_from_path ? m_path : std::string("[Initialized from string, holds only spirv.]"));
 }
 
@@ -2089,7 +1856,7 @@ inline ref_t<pipeline_t> pipeline_t::create(
         vertex_input_desc_t input_desc,
         ref_t<binding_desc_set_t> bindings)
 {
-    std::vector<ref_base_t> deps;
+    std::vector<vo::ref_base_t<vulkan_traits_t>> deps;
     for (auto sh : shaders)
         deps.push_back(sh);
     deps.push_back(rp);
@@ -2115,7 +1882,7 @@ inline std::string pipeline_t::to_string() const {
     return std::format("vku::pipeline[{}]: m_width={} m_height={} m_renderpass={} m_shaders={} "
             "m_topology={} m_vertex_input_descriptor={} m_binding_desc_set={}",
             (void*)this, m_width, m_height, (void*)m_renderpass.get(), sh_str,
-            vku_utils::to_string(m_topology), vku_utils::to_string(m_input_desc),
+            vulkan_utils::to_string(m_topology), vulkan_utils::to_string(m_input_desc),
             (void*)m_bindings.get());
 }
 
@@ -2514,7 +2281,7 @@ inline ref_t<fence_t> fence_t::create(
 inline std::string fence_t::to_string() const {
     return std::format("vku::fence_t[{}]: m_device={} m_flags={}",
             (void*)this, (void*)m_device.get(),
-            vku_utils::to_string((VkFenceCreateFlagBits)m_flags));
+            vulkan_utils::to_string((VkFenceCreateFlagBits)m_flags));
 }
 
 /* buffer_t
@@ -2577,9 +2344,9 @@ inline std::string buffer_t::to_string() const {
     return std::format("vku::buffer_t[{}]: m_device={} m_size={} m_usage={} m_share_mode={} "
             "m_mem_flags={}",
             (void*)this, (void*)m_device.get(), m_size,
-            vku_utils::to_string((VkBufferUsageFlagBits)m_usage_flags),
-            vku_utils::to_string(m_sharing_mode),
-            vku_utils::to_string((VkMemoryPropertyFlagBits)m_memory_flags));
+            vulkan_utils::to_string((VkBufferUsageFlagBits)m_usage_flags),
+            vulkan_utils::to_string(m_sharing_mode),
+            vulkan_utils::to_string((VkMemoryPropertyFlagBits)m_memory_flags));
 }
 
 inline void *buffer_t::map_data(VkDeviceSize offset, VkDeviceSize size) {
@@ -2670,8 +2437,8 @@ inline ref_t<image_t> image_t::create(
 
 inline std::string image_t::to_string() const {
     return std::format("vku::sem_t[{}]: m_device={} m_width={} m_height={} m_format={} m_usage={}",
-            (void*)this, (void*)m_device.get(), m_width, m_height, vku_utils::to_string(m_format),
-            vku_utils::to_string((VkImageUsageFlagBits)m_usage));
+            (void*)this, (void*)m_device.get(), m_width, m_height, vulkan_utils::to_string(m_format),
+            vulkan_utils::to_string((VkImageUsageFlagBits)m_usage));
 }
 
 inline void image_t::transition_layout(ref_t<cmdpool_t> cp,
@@ -2879,7 +2646,7 @@ inline ref_t<img_view_t> img_view_t::create(
 
 inline std::string img_view_t::to_string() const {
     return std::format("vku::img_view_t[{}]: m_image={}", (void*)this, (void*)m_image.get(),
-            vku_utils::to_string((VkImageAspectFlagBits)m_aspect_mask));
+            vulkan_utils::to_string((VkImageAspectFlagBits)m_aspect_mask));
 }
 
 /* img_sampl_t
@@ -2934,7 +2701,7 @@ inline ref_t<img_sampl_t> img_sampl_t::create(
 
 inline std::string img_sampl_t::to_string() const {
     return std::format("vku::img_sampl[{}]: m_device={} m_filter={}", (void*)this,
-            (void*)m_device.get(), vku_utils::to_string(m_filter));
+            (void*)m_device.get(), vulkan_utils::to_string(m_filter));
 }
 
 inline VkDescriptorSetLayoutBinding img_sampl_t::get_desc_set(uint32_t binding,
@@ -3051,7 +2818,7 @@ inline VkResult desc_set_t::_init() {
     DBG("writes: %zu", desc_writes.size());
     for (auto &w : desc_writes) {
         DBG("write: type: %s, bind: %d, dst_set: %p .pBufferInfo: %p",
-                vku_utils::to_string(w.descriptorType).c_str(), w.dstBinding, w.dstSet,
+                vulkan_utils::to_string(w.descriptorType).c_str(), w.dstBinding, w.dstSet,
                 w.pBufferInfo);
     }
 
@@ -3071,7 +2838,7 @@ inline void desc_set_t::update() {
     DBG("writes: %zu", desc_writes.size());
     for (auto &w : desc_writes) {
         DBG("write: type: %s, bind: %d, dst_set: %p .pBufferInfo: %p",
-                vku_utils::to_string(w.descriptorType).c_str(), w.dstBinding, w.dstSet,
+                vulkan_utils::to_string(w.descriptorType).c_str(), w.dstBinding, w.dstSet,
                 w.pBufferInfo);
     }
 
@@ -3117,7 +2884,7 @@ inline ref_t<binding_desc_set_t::buff_binding_t> binding_desc_set_t::buff_bindin
 
 inline std::string binding_desc_set_t::buff_binding_t::to_string() const {
     return std::format("vku::binding_desc_set_t::buff_binding_t[{}]: m_desc={} m_buffer={}",
-            (void*)this, vku_utils::to_string(m_desc), (void*)m_buffer.get());
+            (void*)this, vulkan_utils::to_string(m_desc), (void*)m_buffer.get());
 }
 
 inline VkResult binding_desc_set_t::buff_binding_t::_init() {
@@ -3166,7 +2933,7 @@ inline ref_t<binding_desc_set_t::sampl_binding_t> binding_desc_set_t::sampl_bind
 inline std::string binding_desc_set_t::sampl_binding_t::to_string() const {
     return std::format("vku::binding_desc_set_t::sampl_binding_t[{}]: m_desc={} m_view={} "
             "m_sampler={}",
-            (void*)this, vku_utils::to_string(m_desc), (void*)m_view.get(), (void*)m_sampler.get());
+            (void*)this, vulkan_utils::to_string(m_desc), (void*)m_view.get(), (void*)m_sampler.get());
 }
 
 inline VkResult binding_desc_set_t::sampl_binding_t::_init() {
@@ -3206,7 +2973,7 @@ inline VkResult binding_desc_set_t::_uninit() {
 inline ref_t<binding_desc_set_t> binding_desc_set_t::create(
         std::vector<ref_t<binding_desc_t>> binds)
 {
-    std::vector<ref_base_t> deps;
+    std::vector<vo::ref_base_t<vulkan_traits_t>> deps;
     for (auto b : binds)
         deps.push_back(b);
     auto ret = ref_t<binding_desc_set_t>::create_obj_ref(
@@ -3379,7 +3146,7 @@ inline std::string to_string(vku_shader_stage_e stage) {
     return "VKU_UNKNOWN_SHADER_STAGE";
 }
 
-inline std::string to_string(vku_object_type_e type) {
+inline std::string to_string(object_type_e type) {
     switch (type) {
         case VKU_TYPE_OBJECT: return "VKU_TYPE_OBJECT";
         case VKU_TYPE_WINDOW: return "VKU_TYPE_WINDOW";
@@ -3405,17 +3172,17 @@ inline std::string to_string(vku_object_type_e type) {
         case VKU_TYPE_SAMPLER_BINDING: return "VKU_TYPE_SAMPLER_BINDING";
         case VKU_TYPE_BUFFER_BINDING: return "VKU_TYPE_BUFFER_BINDING";
         case VKU_TYPE_BINDING_DESCRIPTOR_SET: return "VKU_TYPE_BINDING_DESCRIPTOR_SET";
-        case VKC_TYPE_SPIRV: return "VKC_TYPE_SPIRV";
-        case VKC_TYPE_STRING: return "VKC_TYPE_STRING";
-        case VKC_TYPE_FLOAT: return "VKC_TYPE_FLOAT";
-        case VKC_TYPE_CPU_BUFFER: return "VKC_TYPE_CPU_BUFFER";
-        case VKC_TYPE_INTEGER: return "VKC_TYPE_INTEGER";
-        case VKC_TYPE_LUA_SCRIPT: return "VKC_TYPE_LUA_SCRIPT";
-        case VKC_TYPE_LUA_VARIABLE: return "VKC_TYPE_LUA_VARIABLE";
-        case VKC_TYPE_LUA_FUNCTION: return "VKC_TYPE_LUA_FUNCTION";
-        case VKC_TYPE_VERTEX_INPUT_DESC: return "VKC_TYPE_VERTEX_INPUT_DESC";
-        case VKC_TYPE_BINDING_DESC: return "VKC_TYPE_BINDING_DESC";
-        case VKU_TYPE_CNT: return "VKC_INVALID_TYPE_CNT"; /* object can't be of this type */
+            /* TODO: make those also exist, somehow: (this somehow is to move it in vkc) */
+        // case VKC_TYPE_SPIRV: return "VKC_TYPE_SPIRV";
+        // case VKC_TYPE_STRING: return "VKC_TYPE_STRING";
+        // case VKC_TYPE_FLOAT: return "VKC_TYPE_FLOAT";
+        // case VKC_TYPE_CPU_BUFFER: return "VKC_TYPE_CPU_BUFFER";
+        // case VKC_TYPE_INTEGER: return "VKC_TYPE_INTEGER";
+        // case VKC_TYPE_LUA_SCRIPT: return "VKC_TYPE_LUA_SCRIPT";
+        // case VKC_TYPE_LUA_VARIABLE: return "VKC_TYPE_LUA_VARIABLE";
+        // case VKC_TYPE_LUA_FUNCTION: return "VKC_TYPE_LUA_FUNCTION";
+        // case VKC_TYPE_VERTEX_INPUT_DESC: return "VKC_TYPE_VERTEX_INPUT_DESC";
+        // case VKC_TYPE_BINDING_DESC: return "VKC_TYPE_BINDING_DESC";
     }
     return "VKC_TYPE_UNKNOWN";
 }
@@ -3721,9 +3488,9 @@ inline std::string to_string(const VkDescriptorSetLayoutBinding& bind) {
     return std::format("VkDescriptorSetLayoutBinding{{ .binding={} .type={} .count={} "
             ".stage_flags={} .immutable_samplers={} }}",
             bind.binding,
-            vku_utils::to_string(bind.descriptorType),
+            vulkan_utils::to_string(bind.descriptorType),
             bind.descriptorCount,
-            vku_utils::to_string(VkShaderStageFlagBits(bind.stageFlags)),
+            vulkan_utils::to_string(VkShaderStageFlagBits(bind.stageFlags)),
             (void*)bind.pImmutableSamplers);
 }
 

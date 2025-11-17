@@ -1014,53 +1014,27 @@ vulkan_composer would stay better in a CPP file) */
 #include <coroutine>
 #include <filesystem>
 
-/* TODO: figure out what to do with this: */
+/* TODO: this also needs to stay in an implementation file */
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-namespace co = colib;
-namespace vku = vku_utils;
 
-/* TODO: find a better name for this file */
-
-/* What do I really care about? So I can make a format that covers all the things I want:
-    1. I want to be able to have buffers with:
-        a. matrices of different dimensionalities, dimensions and object sizes:
-            - one cell for a simple struct buffer
-            - vectors of floats, ints, complex, etc.
-            - vectors of more complex objects
-            - matrices of the above with 1 dimension, 2, 3, etc.
-        b. images (specifically rgb data), those will also be (I think) framebuffers and the sorts
-        c. not a category, but different types of buffers, ubo's and normal in/outs
-    2. Semaphores and Fences with clear linkages with objects (buffer - shaders, etc)
-    3. Shaders, here, I need to have a way to describe what inputs I can have maybe? Or maybe a way
-    to describe a computation pipeline
-    4. User defined steps, for example moments the user needs to fill in data to be drawn, or moment
-    the user sets ubos
-    5. End point of drawing step
-
-    (I should create a json in the way I want it to look, maybe in this way I figure the thing
-    better)
+/* TODO: Thsi is almost done now, I must think what I want to further expose, and some tweaks:
+    - I want to be able to add objects from the outside, so those need to be:
+        1. added to build_object, such that those will be created from yaml/lua
+        2. added to lua
+        3. integrated with vku::ref_t
+    - I want to be able to add more enums to lua
+    - I want to be able to add more functions to lua (maybe add something to identify builtins)
+    - I still need to create matrices and vectors
+    - I want to have includes for shaders
+    - I want this header to be split into some objects because it takes too much to compile and
+    there is no real point of having the composer in a single file 
+    - Add functions to manipulate buffers, matrices and vectors
+    ~ We need to fix the stupidity that is descriptors?
  */
 
-/* TODO: fix layout of this code... it is bad */
-/* DONE: all members that are public MUST have m_ in front, example m_width */
-/* TODO:
-    + We need to be able to parse dicts to yaml and build objects from it (same as initial parse)
-    - We still need to fix some functions
-    + We need a generic way to store some special types (vid, bd for example)
-    - We need to fix the stupidity that is descriptors
-    - We need a way to set buffers (based on descripors maybe?)
-    - We need some new types (matrices, vectors) ? do we?
-    - TODO: add functions to init buffers with those above
-    - TODO: add functions to copy to and from gpu
-    + We need to make std::vector an acceptable parameter/return type
-    + We need to make std::tuple an acceptable parameter
-    - We need to expose the way that we pack functions and members to the outside
-            (so that an user can use them to add his own functions (that user is me))
-
-    Once those are done, I think this is done */
-
+/* TODO: also in implementation: */
 #define ASSERT_VKC_CO(fn_call)     \
 do {                               \
     auto ret = (fn_call);          \
@@ -1070,6 +1044,7 @@ do {                               \
     }                              \
 } while (0)
 
+/* TODO: also in implementation: */
 #define ASSERT_BOOL_CO(bool_expr)  \
 do {                               \
     auto ret = (bool_expr);        \
@@ -1094,6 +1069,26 @@ enum vkc_error_e : int32_t {
 
 namespace vkc {
 
+namespace co = colib;
+namespace vku = vulkan_utils;
+namespace vo = virt_object;
+
+constexpr vku::object_type_e VKC_TYPE_SPIRV             {vo::compile_unique_id<vku::vulkan_tag_t>()};
+constexpr vku::object_type_e VKC_TYPE_STRING            {vo::compile_unique_id<vku::vulkan_tag_t>()};
+constexpr vku::object_type_e VKC_TYPE_FLOAT             {vo::compile_unique_id<vku::vulkan_tag_t>()};
+constexpr vku::object_type_e VKC_TYPE_CPU_BUFFER        {vo::compile_unique_id<vku::vulkan_tag_t>()};
+constexpr vku::object_type_e VKC_TYPE_INTEGER           {vo::compile_unique_id<vku::vulkan_tag_t>()};
+constexpr vku::object_type_e VKC_TYPE_LUA_SCRIPT        {vo::compile_unique_id<vku::vulkan_tag_t>()};
+constexpr vku::object_type_e VKC_TYPE_LUA_VARIABLE      {vo::compile_unique_id<vku::vulkan_tag_t>()};
+constexpr vku::object_type_e VKC_TYPE_LUA_FUNCTION      {vo::compile_unique_id<vku::vulkan_tag_t>()};
+constexpr vku::object_type_e VKC_TYPE_VERTEX_INPUT_DESC {vo::compile_unique_id<vku::vulkan_tag_t>()};
+constexpr vku::object_type_e VKC_TYPE_BINDING_DESC      {vo::compile_unique_id<vku::vulkan_tag_t>()};
+
+/* Total number of different types. This file consumes this counter, so all types must be known
+before this file */
+constexpr vku::object_type_e VKU_TYPE_CNT{vo::compile_max_id<vku::vulkan_tag_t>() + 1};
+
+/* Max number of named references That are concomitent */
 inline constexpr const int MAX_NUMBER_OF_OBJECTS = 16384;
 
 inline std::string app_path = std::filesystem::canonical("./");
@@ -1181,14 +1176,14 @@ inline int g_lua_table;
 struct lua_var_t : public vku::object_t {
     std::string name;
 
-    static vku_object_type_e type_id_static() { return VKC_TYPE_LUA_VARIABLE; }
+    static vku::object_type_e type_id_static() { return VKC_TYPE_LUA_VARIABLE; }
     static vku::ref_t<lua_var_t> create(std::string name) {
         auto ret = vku::ref_t<lua_var_t>::create_obj_ref(std::make_unique<lua_var_t>(), {});
         ret->name = name;
         return ret;
     }
 
-    virtual vku_object_type_e type_id() const override { return VKC_TYPE_LUA_VARIABLE; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_LUA_VARIABLE; }
 
     inline std::string to_string() const override {
         return std::format("vkc::lua_var[{}]: m_name={} ", (void*)this, name);
@@ -1205,7 +1200,7 @@ struct lua_function_t : public vku::object_t {
     std::string m_name;
     std::string m_source;
 
-    static vku_object_type_e type_id_static() { return VKC_TYPE_LUA_VARIABLE; }
+    static vku::object_type_e type_id_static() { return VKC_TYPE_LUA_VARIABLE; }
     static vku::ref_t<lua_function_t> create(std::string name, std::string source) {
         auto ret = vku::ref_t<lua_function_t>::create_obj_ref(
                 std::make_unique<lua_function_t>(), {});
@@ -1214,10 +1209,11 @@ struct lua_function_t : public vku::object_t {
         return ret;
     }
 
-    virtual vku_object_type_e type_id() const override { return VKC_TYPE_LUA_VARIABLE; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_LUA_VARIABLE; }
 
     int call(lua_State *L) {
         DBG("Calling %s from %s", m_name.c_str(), m_source.c_str());
+        (void)L;
         return 0;
     }
 
@@ -1234,14 +1230,14 @@ private:
 struct lua_script_t : public vku::object_t {
     std::string content;
 
-    static vku_object_type_e type_id_static() { return VKC_TYPE_LUA_SCRIPT; }
+    static vku::object_type_e type_id_static() { return VKC_TYPE_LUA_SCRIPT; }
     static vku::ref_t<lua_script_t> create(std::string content) {
         auto ret = vku::ref_t<lua_script_t>::create_obj_ref(std::make_unique<lua_script_t>(), {});
         ret->content = content;
         return ret;
     }
 
-    virtual vku_object_type_e type_id() const override { return VKC_TYPE_LUA_SCRIPT; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_LUA_SCRIPT; }
 
     inline std::string to_string() const override {
         return std::format("vkc::lua_script[{}]: m_content=\n{}", (void*)this, content);
@@ -1256,14 +1252,14 @@ private:
 struct integer_t : public vku::object_t {
     int64_t value = 0;
 
-    static vku_object_type_e type_id_static() { return VKC_TYPE_INTEGER; }
+    static vku::object_type_e type_id_static() { return VKC_TYPE_INTEGER; }
     static vku::ref_t<integer_t> create(int64_t value) {
         auto ret = vku::ref_t<integer_t>::create_obj_ref(std::make_unique<integer_t>(), {});
         ret->value = value;
         return ret;
     }
 
-    virtual vku_object_type_e type_id() const override { return VKC_TYPE_INTEGER; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_INTEGER; }
 
     inline std::string to_string() const override {
         return std::format("vkc::integer[{}]: value={} ", (void*)this, value);
@@ -1277,14 +1273,14 @@ private:
 struct float_t : public vku::object_t {
     double value = 0;
 
-    static vku_object_type_e type_id_static() { return VKC_TYPE_FLOAT; }
+    static vku::object_type_e type_id_static() { return VKC_TYPE_FLOAT; }
     static vku::ref_t<float_t> create(double value) {
         auto ret = vku::ref_t<float_t>::create_obj_ref(std::make_unique<float_t>(), {});
         ret->value = value;
         return ret;
     }
 
-    virtual vku_object_type_e type_id() const override { return VKC_TYPE_FLOAT; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_FLOAT; }
 
     inline std::string to_string() const override {
         return std::format("vkc::float[{}]: value={} ", (void*)this, value);
@@ -1298,7 +1294,7 @@ private:
 /* This does the following: creates a buffer in cpu-memory space that can be used to copy data to
 from it */
 struct cpu_buffer_t : public vku::object_t {
-    static vku_object_type_e type_id_static() { return VKC_TYPE_CPU_BUFFER; }
+    static vku::object_type_e type_id_static() { return VKC_TYPE_CPU_BUFFER; }
     static vku::ref_t<cpu_buffer_t> create(size_t sz) {
         auto ret = vku::ref_t<cpu_buffer_t>::create_obj_ref(std::make_unique<cpu_buffer_t>(), {});
         ret->_data.resize(sz);
@@ -1308,7 +1304,7 @@ struct cpu_buffer_t : public vku::object_t {
     void *data() { return (void *)_data.data(); }
     size_t size() const { return _data.size(); }
 
-    virtual vku_object_type_e type_id() const override { return VKC_TYPE_CPU_BUFFER; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_CPU_BUFFER; }
 
     inline std::string to_string() const override {
         return std::format("vkc::cpu_buffer_t[{}]: size={} ", (void*)this, size());
@@ -1325,14 +1321,14 @@ private:
 struct string_t : public vku::object_t {
     std::string value;
 
-    static vku_object_type_e type_id_static() { return VKC_TYPE_STRING; }
+    static vku::object_type_e type_id_static() { return VKC_TYPE_STRING; }
     static vku::ref_t<string_t> create(const std::string& value) {
         auto ret = vku::ref_t<string_t>::create_obj_ref(std::make_unique<string_t>(), {});
         ret->value = value;
         return ret;
     }
 
-    virtual vku_object_type_e type_id() const override { return VKC_TYPE_STRING; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_STRING; }
 
     inline std::string to_string() const override {
         return std::format("vkc::string[{}]: value={} ", (void*)this, value);
@@ -1346,18 +1342,18 @@ private:
 struct spirv_t : public vku::object_t {
     vku::spirv_t spirv;
 
-    static  vku_object_type_e type_id_static() { return VKC_TYPE_SPIRV; }
+    static vku::object_type_e type_id_static() { return VKC_TYPE_SPIRV; }
     static vku::ref_t<spirv_t> create(const vku::spirv_t& spirv) {
         auto ret = vku::ref_t<spirv_t>::create_obj_ref(std::make_unique<spirv_t>(), {});
         ret->spirv = spirv;
         return ret;
     }
 
-    virtual vku_object_type_e type_id() const override { return VKC_TYPE_SPIRV; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_SPIRV; }
 
     inline std::string to_string() const override {
         return std::format("vkc::spirv[{}]: spirv-type={} spirv-content=\n{}", (void*)this,
-                vku_utils::to_string(spirv.type),
+                vulkan_utils::to_string(spirv.type),
                 hexdump_str((void *)spirv.content.data(), spirv.content.size() * sizeof(uint32_t)));
     }
 
@@ -1369,7 +1365,7 @@ private:
 struct vertex_input_desc_t : public vku::object_t {
     vku::vertex_input_desc_t vid;
 
-    static vku_object_type_e type_id_static() { return VKC_TYPE_VERTEX_INPUT_DESC; }
+    static vku::object_type_e type_id_static() { return VKC_TYPE_VERTEX_INPUT_DESC; }
     static vku::ref_t<vertex_input_desc_t> create(const vku::vertex_input_desc_t& vid) {
         auto ret = vku::ref_t<vertex_input_desc_t>::create_obj_ref(
                 std::make_unique<vertex_input_desc_t>(), {});
@@ -1377,7 +1373,7 @@ struct vertex_input_desc_t : public vku::object_t {
         return ret;
     }
 
-    virtual vku_object_type_e type_id() const override { return VKC_TYPE_VERTEX_INPUT_DESC; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_VERTEX_INPUT_DESC; }
 
     inline std::string to_string() const override {
         std::string ret = std::format("[binding={}, stride={}, in_rate={}]{{",
@@ -1398,7 +1394,7 @@ private:
 struct binding_t : public vku::object_t {
     VkDescriptorSetLayoutBinding bd;
 
-    static vku_object_type_e type_id_static() { return VKC_TYPE_BINDING_DESC; }
+    static vku::object_type_e type_id_static() { return VKC_TYPE_BINDING_DESC; }
     static vku::ref_t<binding_t> create(const VkDescriptorSetLayoutBinding& bd) {
         auto ret = vku::ref_t<binding_t>::create_obj_ref(
                 std::make_unique<binding_t>(), {});
@@ -1406,7 +1402,7 @@ struct binding_t : public vku::object_t {
         return ret;
     }
 
-    virtual vku_object_type_e type_id() const override { return VKC_TYPE_BINDING_DESC; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_BINDING_DESC; }
 
     inline std::string to_string() const override {
         return std::format("[binding={}, type={}, stage={}]",
@@ -1461,7 +1457,8 @@ struct depend_resolver_t {
         if (!ret) {
             DBG("Invalid ref...");
             throw vku::err_t(sformat("Invalid reference, maybe cast doesn't work?: [cast: %s to: %s]",
-                    demangle<4>(typeid(rs->objects[rs->objects_map[required_depend]].obj.get()).name()).c_str(),
+                    demangle<4>(typeid(
+                        rs->objects[rs->objects_map[required_depend]].obj.get()).name()).c_str(),
                     demangle<VkuT, 4>().c_str()));
         }
         return ret;
@@ -1488,7 +1485,7 @@ void mark_dependency_solved(ref_state_t *rs,
 
     DBG("Adding object: %s [%d]", depend->to_string().c_str(), new_id);
     rs->objects_map[depend_name] = new_id;
-    depend->cbks = std::make_shared<vku::object_cbks_t>();
+    depend->cbks = std::make_shared<vo::object_cbks_t<vku::vulkan_traits_t>>();
     depend->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
     rs->objects[new_id].obj = depend;
     rs->objects[new_id].name = depend_name;
@@ -3166,8 +3163,8 @@ struct luaw_member_t {
     lua_CFunction fn;
     luaw_member_e member_type;
 };
-inline std::unordered_map<std::string, luaw_member_t> lua_class_members[VKU_TYPE_CNT];
-inline std::unordered_map<std::string, lua_CFunction> lua_class_member_setters[VKU_TYPE_CNT];
+inline std::unordered_map<std::string, luaw_member_t> lua_class_members[VKU_TYPE_CNT.value()];
+inline std::unordered_map<std::string, lua_CFunction> lua_class_member_setters[VKU_TYPE_CNT.value()];
 
 template <typename VkuT, auto member_ptr, typename ...Params>
 void luaw_register_member_function(const char *function_name) {
@@ -3460,8 +3457,8 @@ inline int luaopen_vku(lua_State *L) {
                 luaw_push_error(L, std::format("invalid object id: {}", id));
                 lua_error(L);
             }
-            vku_object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
-            if (class_id < 0 || class_id >= VKU_TYPE_CNT) {
+            vku::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
+            if (class_id < 0 || class_id >= VKU_TYPE_CNT.value()) {
                 luaw_push_error(L, std::format("invalid class id: {}", vku::to_string(class_id)));
                 lua_error(L);
             }
@@ -3505,8 +3502,8 @@ inline int luaopen_vku(lua_State *L) {
                 luaw_push_error(L, std::format("invalid object id: {}", id));
                 lua_error(L);
             }
-            vku_object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
-            if (class_id < 0 || class_id >= VKU_TYPE_CNT) {
+            vku::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
+            if (class_id < 0 || class_id >= VKU_TYPE_CNT.value()) {
                 luaw_push_error(L, std::format("invalid class id: {}", vku::to_string(class_id)));
                 lua_error(L);
             }
@@ -3532,7 +3529,7 @@ inline int luaopen_vku(lua_State *L) {
                 luaw_push_error(L, std::format("invalid object id: {}", id));
                 lua_error(L);
             }
-            vku_object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
+            vku::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
             if (class_id != VKC_TYPE_LUA_FUNCTION) {
                 luaw_push_error(L, std::format("invalid class id: {} is not VKC_TYPE_LUA_FUNCTION",
                         vku::to_string(class_id)));
