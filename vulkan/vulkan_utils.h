@@ -41,6 +41,14 @@
 #include <string>
 #include <vector>
 
+#ifdef VULKAN_UTILS_ADD_TYPE
+# error "VULKAN_UTILS_ADD_TYPE already defined"
+#endif
+
+#define VULKAN_UTILS_REGISTER_TYPE(type) \
+        constexpr vulkan_utils::object_type_e type{\
+        vo::compile_unique_id<vulkan_utils::vulkan_tag_t>(), #type}
+
 /* TODO: Check if throw may be better transformed in a return. */
 #define VK_ASSERT(fn_call)                                                                         \
 do {                                                                                               \
@@ -81,31 +89,31 @@ struct vulkan_traits_t {
 /* Those are the types from this file, this file promises not to invalidate the counter, you can
 use it later on. */
 /* object_t is pure virtual, so no object should have this type */
-constexpr object_type_e VKU_TYPE_OBJECT                 {vo::compile_unique_id<vulkan_tag_t>()}; 
-constexpr object_type_e VKU_TYPE_WINDOW                 {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_INSTANCE               {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_SURFACE                {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_DEVICE                 {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_SWAPCHAIN              {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_SHADER                 {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_RENDERPASS             {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_PIPELINE               {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_COMPUTE_PIPELINE       {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_FRAMEBUFFERS           {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_COMMAND_POOL           {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_COMMAND_BUFFER         {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_SEMAPHORE              {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_FENCE                  {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_BUFFER                 {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_IMAGE                  {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_IMAGE_VIEW             {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_IMAGE_SAMPLER          {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_DESCRIPTOR_SET         {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_DESCRIPTOR_POOL        {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_SAMPLER_BINDING        {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_BUFFER_BINDING         {vo::compile_unique_id<vulkan_tag_t>()};
-constexpr object_type_e VKU_TYPE_BINDING_DESCRIPTOR_SET {vo::compile_unique_id<vulkan_tag_t>()};
 
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_OBJECT);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_WINDOW);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_INSTANCE);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_SURFACE);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_DEVICE);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_SWAPCHAIN);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_SHADER);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_RENDERPASS);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_PIPELINE);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_COMPUTE_PIPELINE);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_FRAMEBUFFERS);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_COMMAND_POOL);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_COMMAND_BUFFER);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_SEMAPHORE);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_FENCE);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_BUFFER);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_IMAGE);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_IMAGE_VIEW);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_IMAGE_SAMPLER);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_DESCRIPTOR_SET);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_DESCRIPTOR_POOL);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_SAMPLER_BINDING);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_BUFFER_BINDING);
+VULKAN_UTILS_REGISTER_TYPE(VKU_TYPE_BINDING_DESCRIPTOR_SET);
 
 /* TODO:
     - Add logs for all the creations/deletions of objects with type and id(ptr)
@@ -3147,44 +3155,7 @@ inline std::string to_string(vku_shader_stage_e stage) {
 }
 
 inline std::string to_string(object_type_e type) {
-    switch (type) {
-        case VKU_TYPE_OBJECT: return "VKU_TYPE_OBJECT";
-        case VKU_TYPE_WINDOW: return "VKU_TYPE_WINDOW";
-        case VKU_TYPE_INSTANCE: return "VKU_TYPE_INSTANCE";
-        case VKU_TYPE_SURFACE: return "VKU_TYPE_SURFACE";
-        case VKU_TYPE_DEVICE: return "VKU_TYPE_DEVICE";
-        case VKU_TYPE_SWAPCHAIN: return "VKU_TYPE_SWAPCHAIN";
-        case VKU_TYPE_SHADER: return "VKU_TYPE_SHADER";
-        case VKU_TYPE_RENDERPASS: return "VKU_TYPE_RENDERPASS";
-        case VKU_TYPE_PIPELINE: return "VKU_TYPE_PIPELINE";
-        case VKU_TYPE_COMPUTE_PIPELINE: return "VKU_TYPE_COMPUTE_PIPELINE";
-        case VKU_TYPE_FRAMEBUFFERS: return "VKU_TYPE_FRAMEBUFFERS";
-        case VKU_TYPE_COMMAND_POOL: return "VKU_TYPE_COMMAND_POOL";
-        case VKU_TYPE_COMMAND_BUFFER: return "VKU_TYPE_COMMAND_BUFFER";
-        case VKU_TYPE_SEMAPHORE: return "VKU_TYPE_SEMAPHORE";
-        case VKU_TYPE_FENCE: return "VKU_TYPE_FENCE";
-        case VKU_TYPE_BUFFER: return "VKU_TYPE_BUFFER";
-        case VKU_TYPE_IMAGE: return "VKU_TYPE_IMAGE";
-        case VKU_TYPE_IMAGE_VIEW: return "VKU_TYPE_IMAGE_VIEW";
-        case VKU_TYPE_IMAGE_SAMPLER: return "VKU_TYPE_IMAGE_SAMPLER";
-        case VKU_TYPE_DESCRIPTOR_SET: return "VKU_TYPE_DESCRIPTOR_SET";
-        case VKU_TYPE_DESCRIPTOR_POOL: return "VKU_TYPE_DESCRIPTOR_POOL";
-        case VKU_TYPE_SAMPLER_BINDING: return "VKU_TYPE_SAMPLER_BINDING";
-        case VKU_TYPE_BUFFER_BINDING: return "VKU_TYPE_BUFFER_BINDING";
-        case VKU_TYPE_BINDING_DESCRIPTOR_SET: return "VKU_TYPE_BINDING_DESCRIPTOR_SET";
-            /* TODO: make those also exist, somehow: (this somehow is to move it in vkc) */
-        // case VKC_TYPE_SPIRV: return "VKC_TYPE_SPIRV";
-        // case VKC_TYPE_STRING: return "VKC_TYPE_STRING";
-        // case VKC_TYPE_FLOAT: return "VKC_TYPE_FLOAT";
-        // case VKC_TYPE_CPU_BUFFER: return "VKC_TYPE_CPU_BUFFER";
-        // case VKC_TYPE_INTEGER: return "VKC_TYPE_INTEGER";
-        // case VKC_TYPE_LUA_SCRIPT: return "VKC_TYPE_LUA_SCRIPT";
-        // case VKC_TYPE_LUA_VARIABLE: return "VKC_TYPE_LUA_VARIABLE";
-        // case VKC_TYPE_LUA_FUNCTION: return "VKC_TYPE_LUA_FUNCTION";
-        // case VKC_TYPE_VERTEX_INPUT_DESC: return "VKC_TYPE_VERTEX_INPUT_DESC";
-        // case VKC_TYPE_BINDING_DESC: return "VKC_TYPE_BINDING_DESC";
-    }
-    return "VKC_TYPE_UNKNOWN";
+    return type.name();
 }
 
 template <typename T>

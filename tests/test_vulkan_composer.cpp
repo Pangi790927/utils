@@ -1,5 +1,7 @@
 #include "vulkan_composer.h"
 
+namespace vku = vulkan_utils;
+
 int main(int argc, char const *argv[])
 {
     (void)argc, (void)argv;

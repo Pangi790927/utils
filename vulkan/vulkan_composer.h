@@ -1073,16 +1073,16 @@ namespace co = colib;
 namespace vku = vulkan_utils;
 namespace vo = virt_object;
 
-constexpr vku::object_type_e VKC_TYPE_SPIRV             {vo::compile_unique_id<vku::vulkan_tag_t>()};
-constexpr vku::object_type_e VKC_TYPE_STRING            {vo::compile_unique_id<vku::vulkan_tag_t>()};
-constexpr vku::object_type_e VKC_TYPE_FLOAT             {vo::compile_unique_id<vku::vulkan_tag_t>()};
-constexpr vku::object_type_e VKC_TYPE_CPU_BUFFER        {vo::compile_unique_id<vku::vulkan_tag_t>()};
-constexpr vku::object_type_e VKC_TYPE_INTEGER           {vo::compile_unique_id<vku::vulkan_tag_t>()};
-constexpr vku::object_type_e VKC_TYPE_LUA_SCRIPT        {vo::compile_unique_id<vku::vulkan_tag_t>()};
-constexpr vku::object_type_e VKC_TYPE_LUA_VARIABLE      {vo::compile_unique_id<vku::vulkan_tag_t>()};
-constexpr vku::object_type_e VKC_TYPE_LUA_FUNCTION      {vo::compile_unique_id<vku::vulkan_tag_t>()};
-constexpr vku::object_type_e VKC_TYPE_VERTEX_INPUT_DESC {vo::compile_unique_id<vku::vulkan_tag_t>()};
-constexpr vku::object_type_e VKC_TYPE_BINDING_DESC      {vo::compile_unique_id<vku::vulkan_tag_t>()};
+VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_SPIRV);
+VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_STRING);
+VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_FLOAT);
+VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_CPU_BUFFER);
+VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_INTEGER);
+VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_LUA_SCRIPT);
+VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_LUA_VARIABLE);
+VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_LUA_FUNCTION);
+VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_VERTEX_INPUT_DESC);
+VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_BINDING_DESC);
 
 /* Total number of different types. This file consumes this counter, so all types must be known
 before this file */
