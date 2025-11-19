@@ -27,8 +27,10 @@ namespace virt_object {
  * This code raises `-Wnon-template-friend` (as you would've guessed already) and
  * may become unusable in the future. I hope not.
  */
+#if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnon-template-friend"
+#endif
 template<typename UniqueTag, auto Id>
 struct compile_counter {
     using tag = compile_counter;
@@ -68,7 +70,9 @@ consteval auto compile_unique_id() {
     else
         return compile_unique_id<UniqueTag, Id + 1>();
 }
+#if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
+#endif
 
 /* Example for the above example, you can use whatever type as a tag */
 struct compile_counter_example_tag_t;
@@ -327,12 +331,6 @@ public:
 
     T *get() { return static_cast<T *>(ref_base_t<R>::_base->_obj.get()); }
     const T *get() const { return static_cast<const T *>(ref_base_t<R>::_base->_obj.get()); }
-
-    template <typename U> requires std::derived_from<T, U>
-    ref_t<U, R> to_base() { return ref_t<U, R>{ref_base_t<R>::_base}; };
-
-    template <typename U> requires std::derived_from<U, T>
-    ref_t<U, R> to_derived() { return ref_t<U, R>{ref_base_t<R>::_base}; };
 
     template <typename U> requires std::derived_from<U, T> || std::derived_from<T, U>
     ref_t<U, R> to_related() { return ref_t<U, R>{ref_base_t<R>::_base}; };

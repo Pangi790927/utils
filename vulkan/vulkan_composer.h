@@ -18,7 +18,7 @@
  * - operator->(): Access the underlying VkuT object.
  * - operator*(): Dereference to the underlying VkuT object.
  * - get(): Returns raw pointer to the underlying VkuT object.
- * - to_base()/to_derived()/to_related(): Cast between related reference types safely.
+ * - to_related(): Cast between related reference types safely.
  * - operator bool(): Checks if the reference holds a valid object.
  *
  * Init: create_obj_ref(obj, dependencies)
@@ -2074,13 +2074,13 @@ inline auto load_image(auto cp, std::string path) {
 co::task_t build_pseudo_object(ref_state_t *rs, const std::string& name, fkyaml::node& node) {
     if (node.is_integer()) {
         auto obj = integer_t::create(node.as_int());
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
         co_return 0;
     }
 
     if (node.is_string()) {
         auto obj = string_t::create(node.as_str());
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
         co_return 0;
     }
 
@@ -2142,7 +2142,7 @@ co::task_t build_pseudo_object(ref_state_t *rs, const std::string& name, fkyaml:
         }
 
         auto obj = spirv_t::create(spirv);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
 
         co_return 0;
     }
@@ -2161,7 +2161,7 @@ co::task_t build_pseudo_object(ref_state_t *rs, const std::string& name, fkyaml:
 
         if (node.contains("m_source")) {
             auto obj = lua_script_t::create(node["m_source"].as_str());
-            mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
+            mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
             co_return 0;
         }
 
@@ -2169,7 +2169,7 @@ co::task_t build_pseudo_object(ref_state_t *rs, const std::string& name, fkyaml:
             std::string source = get_file_string_content(node["m_source_path"].as_str());
 
             auto obj = lua_script_t::create(source);
-            mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
+            mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
             co_return 0;
         }
     }
@@ -2309,8 +2309,8 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
             },
             .attr_desc = attrs,
         });
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vkc::binding_t") {
         auto m_binding = co_await resolve_int(rs, node["m_binding"]);
@@ -2323,79 +2323,79 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
             .stageFlags = m_stage,
             .pImmutableSamplers = nullptr
         });
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vkc::cpu_buffer_t") {
         auto m_size = co_await resolve_int(rs, node["m_size"]);
         auto obj = cpu_buffer_t::create(m_size);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vkc::lua_var_t") { /* TODO: not sure how is this type usefull */
         /* lua_var has the same tag_name as the var name */
         auto obj = lua_var_t::create(name);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vkc::lua_function_t") {
         /* lua_function has the same tag_name as the function name */
         auto src = co_await resolve_str(rs, node["m_source"]);
         auto obj = lua_function_t::create(name, src);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::instance_t") {
         auto obj = vku::instance_t::create();
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::window_t") {
         auto w = co_await resolve_int(rs, node["m_width"]);
         auto h = co_await resolve_int(rs, node["m_height"]);
         auto window_name = co_await resolve_str(rs, node["m_name"]);
         auto obj = vku::window_t::create(w, h, window_name);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::surface_t") {
         auto window = co_await resolve_obj<vku::window_t>(rs, node["m_window"]);
         auto instance = co_await resolve_obj<vku::instance_t>(rs, node["m_instance"]);
         auto obj = vku::surface_t::create(window, instance);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::device_t") {
         auto surf = co_await resolve_obj<vku::surface_t>(rs, node["m_surface"]);
         auto obj = vku::device_t::create(surf);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::cmdpool_t") {
         auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
         auto obj = vku::cmdpool_t::create(dev);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::image_t") {
         auto cp = co_await resolve_obj<vku::cmdpool_t>(rs, node["m_cmdpool"]);
         auto path = co_await resolve_str(rs, node["m_path"]);
         auto obj = load_image(cp, path);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::img_view_t") {
         auto img = co_await resolve_obj<vku::image_t>(rs, node["m_image"]);
         auto aspect_mask = get_enum_val<VkImageAspectFlagBits>(node["m_aspect_mask"]);
         auto obj = vku::img_view_t::create(img, aspect_mask);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::img_sampl_t") {
         auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
         auto obj = vku::img_sampl_t::create(dev);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::buffer_t") {
         auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
@@ -2404,8 +2404,8 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         auto share_mode = get_enum_val<VkSharingMode>(node["m_sharing_mode"]);
         auto memory_flags = get_enum_val<VkMemoryPropertyFlagBits>(node["m_memory_flags"]);
         auto obj = vku::buffer_t::create(dev, sz, usage_flags, share_mode, memory_flags);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::binding_desc_set_t") {
         std::vector<vku::ref_t<vku::binding_desc_set_t::binding_desc_t>> bindings;
@@ -2413,42 +2413,42 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
             bindings.push_back(
                     co_await resolve_obj<vku::binding_desc_set_t::binding_desc_t>(rs, subnode));
         auto obj = vku::binding_desc_set_t::create(bindings);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::binding_desc_set_t::buff_binding_t") {
         auto buff = co_await resolve_obj<vku::buffer_t>(rs, node["m_buffer"]);
         auto desc = co_await resolve_obj<vkc::binding_t>(rs, node["m_desc"]);
         auto obj = vku::binding_desc_set_t::buff_binding_t::create(desc->bd, buff);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::binding_desc_set_t::sampl_binding_t") {
         auto view = co_await resolve_obj<vku::img_view_t>(rs, node["m_view"]);
         auto sampler = co_await resolve_obj<vku::img_sampl_t>(rs, node["m_sampler"]);
         auto desc = co_await resolve_obj<vkc::binding_t>(rs, node["m_desc"]);
         auto obj = vku::binding_desc_set_t::sampl_binding_t::create(desc->bd, view, sampler);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::shader_t") {
         auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
         auto spirv = co_await resolve_obj<spirv_t>(rs, node["m_spirv"]);
         auto obj = vku::shader_t::create(dev, spirv->spirv);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::swapchain_t") {
         auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
         auto obj = vku::swapchain_t::create(dev);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::renderpass_t") {
         auto swc = co_await resolve_obj<vku::swapchain_t>(rs, node["m_swapchain"]);
         auto obj = vku::renderpass_t::create(swc);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::pipeline_t") {
         auto w = co_await resolve_int(rs, node["m_width"]);
@@ -2461,48 +2461,48 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         auto indesc = co_await resolve_obj<vkc::vertex_input_desc_t>(rs, node["m_input_desc"]);
         auto binds = co_await resolve_obj<vku::binding_desc_set_t>(rs, node["m_bindings"]);
         auto obj = vku::pipeline_t::create(w, h, rp, shaders, topol, indesc->vid, binds);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::framebuffs_t") {
         auto rp = co_await resolve_obj<vku::renderpass_t>(rs, node["m_renderpass"]);
         auto obj = vku::framebuffs_t::create(rp);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::sem_t") {
         auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
         auto obj = vku::sem_t::create(dev);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::fence_t") {
         auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
         auto obj = vku::fence_t::create(dev);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::cmdbuff_t") {
         auto cp = co_await resolve_obj<vku::cmdpool_t>(rs, node["m_cmdpool"]);
         auto obj = vku::cmdbuff_t::create(cp);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::desc_pool_t") {
         auto dev = co_await resolve_obj<vku::device_t>(rs, node["m_device"]);
         auto binds = co_await resolve_obj<vku::binding_desc_set_t>(rs, node["m_bindings"]);
         int cnt = co_await resolve_int(rs, node["m_cnt"]);
         auto obj = vku::desc_pool_t::create(dev, binds, cnt);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
     else if (node["m_type"] == "vku::desc_set_t") {
         auto descriptor_pool = co_await resolve_obj<vku::desc_pool_t>(rs, node["m_descriptor_pool"]);
         auto pipeline = co_await resolve_obj<vku::pipeline_t>(rs, node["m_pipeline"]);
         auto bindings = co_await resolve_obj<vku::binding_desc_set_t>(rs, node["m_bindings"]);
         auto obj = vku::desc_set_t::create(descriptor_pool, pipeline, bindings);
-        mark_dependency_solved(rs, name, obj.to_base<vku::object_t>());
-        co_return obj.to_base<vku::object_t>();
+        mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
+        co_return obj.to_related<vku::object_t>();
     }
 
     DBG("Object m_type is not known: %s", node["m_type"].as_str().c_str());
