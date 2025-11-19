@@ -86,8 +86,11 @@ template <typename Tag>
 class EnumClass {
   private:
     int value_;
+    const char *str_;
   public:
-    explicit constexpr EnumClass(int value) : value_(value) {}
+    explicit constexpr EnumClass(int value, const char *str = "UNNAMED_ENUM")
+    : value_(value), str_(str) {}
+
     constexpr EnumClass() = default;
     ~EnumClass() = default;
     constexpr EnumClass(const EnumClass &) = default;
@@ -95,7 +98,7 @@ class EnumClass {
 
     constexpr operator int() const {return    value_;}
     constexpr int value() const {return value_;}
-
+    constexpr const char *name() const {return str_;}
 };
 
 template <typename R>
