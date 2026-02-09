@@ -1,6 +1,19 @@
 #ifndef VULKAN_COMPOSER_H
 #define VULKAN_COMPOSER_H
 
+/*! TODO:
+ * 
+ * - It is not at all clear what functions can be used in here
+ * - This should be further split:
+ *      1. The drawing part should be one, ie, those vku::ref_t thigs
+ *      2. The lua part
+ *      3. The config reading part (not the gpu defines, only the parsing logic)
+ * - The functions that can be used should be clearly marked at the start of the code.
+ * - There should be less global objects (none that do not define things) and the state should be
+ * remembered in a state object. This object should be able to follow stages of completness.
+ * (function definitions)
+ */
+
 /*!
  * Core Objects and Functions:
  * ===========================
