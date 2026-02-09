@@ -1009,7 +1009,7 @@ vulkan_composer would stay better in a CPP file) */
 #include "tinyexpr.h"
 #include "minilua.h"
 #include "demangle.h"
-#include "colib.h"
+#include "co_utils.h"
 
 #include <coroutine>
 #include <filesystem>
@@ -1034,26 +1034,6 @@ vulkan_composer would stay better in a CPP file) */
     ~ We need to fix the stupidity that is descriptors?
  */
 
-/* TODO: also in implementation: */
-#define ASSERT_VKC_CO(fn_call)     \
-do {                               \
-    auto ret = (fn_call);          \
-    if (ret != VKC_ERROR_OK) {     \
-        DBG("Failed " #fn_call);   \
-        co_return -1;              \
-    }                              \
-} while (0)
-
-/* TODO: also in implementation: */
-#define ASSERT_BOOL_CO(bool_expr)  \
-do {                               \
-    auto ret = (bool_expr);        \
-    if (!ret) {                    \
-        DBG("Failed " #bool_expr); \
-        co_return -1;              \
-    }                              \
-} while (0)
-
 enum vkc_error_e : int32_t {
     VKC_ERROR_OK = 0,
     VKC_ERROR_GENERIC = -1, 
@@ -1067,11 +1047,11 @@ enum vkc_error_e : int32_t {
     VKC_ERROR_FAILED_LUA_EXEC = -8,
 };
 
-namespace vkc {
+namespace vulkan_composer {
 
-namespace co = colib;
-namespace vku = vulkan_utils;
 namespace vo = virt_object;
+namespace vku = vulkan_utils;
+namespace vkc = vulkan_composer;
 
 VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_SPIRV);
 VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_STRING);
@@ -1084,93 +1064,10 @@ VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_LUA_FUNCTION);
 VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_VERTEX_INPUT_DESC);
 VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_BINDING_DESC);
 
-/* Total number of different types. This file consumes this counter, so all types must be known
-before this file */
-constexpr vku::object_type_e VKU_TYPE_CNT{vo::compile_max_id<vku::vulkan_tag_t>() + 1};
-
+/*! OBS: This is static not inline because we want to make sure this won't conflict with another's
+ * translation unit variables */
 /* Max number of named references That are concomitent */
-inline constexpr const int MAX_NUMBER_OF_OBJECTS = 16384;
-
-inline std::string app_path = std::filesystem::canonical("./");
-
-/* This holds the obhects reference such that lua can use them */
-struct object_ref_t {
-    vku::ref_t<vku::object_t> obj;  /* The actual reference to the vku/vkc object */
-
-    std::string name;               /* this is required such that when this object gets removed it
-                                       also gets removed from objects_map */
-};
-
-/* Holds all the references to the objects, it is held as on object so it can be initialized by
-the lua code and upon success, merged */
-struct ref_state_t {
-    std::vector<object_ref_t> objects;
-    std::map<std::string, int> objects_map;
-    std::map<std::string, std::vector<co::state_t *>> wanted_objects;
-    std::deque<std::coroutine_handle<void>> work;
-    std::vector<int> free_objects;
-
-    ref_state_t() : objects(MAX_NUMBER_OF_OBJECTS) {
-        for (int i = MAX_NUMBER_OF_OBJECTS-1; i >= 1; i--)
-            free_objects.push_back(i);
-    }
-
-    /* TODO: this is stupid slow, must be made faster (create a clear interface of adding and
-    removing objects and make get_new and append return the internal held update list) */
-
-    std::vector<int> get_new(const ref_state_t &oth) {
-        std::set<int> free_objects_this(free_objects.begin(), free_objects.end());
-        std::set<int> free_objects_other(oth.free_objects.begin(), oth.free_objects.end());
-
-        std::vector<int> new_other;
-        std::set_difference(
-            free_objects_this.begin(), free_objects_this.end(),
-            free_objects_other.begin(), free_objects_other.end(),
-            std::back_inserter(new_other)
-        );
-
-        std::vector<int> new_this;
-        std::set_difference(
-            free_objects_other.begin(), free_objects_other.end(),
-            free_objects_this.begin(), free_objects_this.end(),
-            std::back_inserter(new_this)
-        );
-
-        if (new_this.size())
-            throw vku::err_t(
-                    "How could the state change while we where creating a new object? huh?");
-        return new_other;
-    }
-
-    void append(const ref_state_t &oth) {
-        std::set<int> free_objects_this(free_objects.begin(), free_objects.end());
-        std::set<int> free_objects_other(oth.free_objects.begin(), oth.free_objects.end());
-
-        std::vector<int> new_other;
-        std::set_difference(
-            free_objects_this.begin(), free_objects_this.end(),
-            free_objects_other.begin(), free_objects_other.end(),
-            std::back_inserter(new_other)
-        );
-
-        std::vector<int> new_this;
-        std::set_difference(
-            free_objects_other.begin(), free_objects_other.end(),
-            free_objects_this.begin(), free_objects_this.end(),
-            std::back_inserter(new_this)
-        );
-
-        for (int idx : new_other) {
-            this->objects[idx] = oth.objects[idx];
-            this->objects_map[oth.objects[idx].name] = idx;
-        }
-        this->free_objects = std::vector<int>(free_objects_other.begin(), free_objects_other.end());
-    }
-};
-
-/* The state is initially created to have  */
-inline ref_state_t g_rs;
-inline int g_lua_table;
+static constexpr const int MAX_NUMBER_OF_OBJECTS = 16384;
 
 /* Does this really have any irl usage? */
 struct lua_var_t : public vku::object_t {
@@ -1200,7 +1097,7 @@ struct lua_function_t : public vku::object_t {
     std::string m_name;
     std::string m_source;
 
-    static vku::object_type_e type_id_static() { return VKC_TYPE_LUA_VARIABLE; }
+    static vku::object_type_e type_id_static() { return VKC_TYPE_LUA_FUNCTION; }
     static vku::ref_t<lua_function_t> create(std::string name, std::string source) {
         auto ret = vku::ref_t<lua_function_t>::create_obj_ref(
                 std::make_unique<lua_function_t>(), {});
@@ -1209,7 +1106,7 @@ struct lua_function_t : public vku::object_t {
         return ret;
     }
 
-    virtual vku::object_type_e type_id() const override { return VKC_TYPE_LUA_VARIABLE; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_LUA_FUNCTION; }
 
     int call(lua_State *L) {
         DBG("Calling %s from %s", m_name.c_str(), m_source.c_str());
@@ -1416,7 +1313,107 @@ private:
     virtual VkResult _uninit() override { return VK_SUCCESS; }
 };
 
+/*! IMPLEMENTATION
+ ***************************************************************************************************
+ ***************************************************************************************************
+ ***************************************************************************************************
+ */
 
+static std::string app_path = std::filesystem::canonical("./");
+
+enum luaw_member_e {
+    LUAW_MEMBER_FUNCTION,
+    LUAW_MEMBER_OBJECT,
+};
+
+struct luaw_member_t {
+    lua_CFunction fn;
+    luaw_member_e member_type;
+};
+
+extern int VKU_TYPE_CNT;
+extern std::unordered_map<std::string, luaw_member_t> *lua_class_members;
+extern std::unordered_map<std::string, lua_CFunction> *lua_class_member_setters;
+
+
+/* This holds the obhects reference such that lua can use them */
+struct object_ref_t {
+    vku::ref_t<vku::object_t> obj;  /* The actual reference to the vku/vkc object */
+
+    std::string name;               /* this is required such that when this object gets removed it
+                                       also gets removed from objects_map */
+};
+
+/* Holds all the references to the objects, it is held as on object so it can be initialized by
+the lua code and upon success, merged */
+struct ref_state_t {
+    std::vector<object_ref_t> objects;
+    std::map<std::string, int> objects_map;
+    std::map<std::string, std::vector<co::state_t *>> wanted_objects;
+    std::deque<std::coroutine_handle<void>> work;
+    std::vector<int> free_objects;
+
+    ref_state_t() : objects(MAX_NUMBER_OF_OBJECTS) {
+        for (int i = MAX_NUMBER_OF_OBJECTS-1; i >= 1; i--)
+            free_objects.push_back(i);
+    }
+
+    /* TODO: this is stupid slow, must be made faster (create a clear interface of adding and
+    removing objects and make get_new and append return the internal held update list) */
+
+    std::vector<int> get_new(const ref_state_t &oth) {
+        std::set<int> free_objects_this(free_objects.begin(), free_objects.end());
+        std::set<int> free_objects_other(oth.free_objects.begin(), oth.free_objects.end());
+
+        std::vector<int> new_other;
+        std::set_difference(
+            free_objects_this.begin(), free_objects_this.end(),
+            free_objects_other.begin(), free_objects_other.end(),
+            std::back_inserter(new_other)
+        );
+
+        std::vector<int> new_this;
+        std::set_difference(
+            free_objects_other.begin(), free_objects_other.end(),
+            free_objects_this.begin(), free_objects_this.end(),
+            std::back_inserter(new_this)
+        );
+
+        if (new_this.size())
+            throw vku::err_t(
+                    "How could the state change while we where creating a new object? huh?");
+        return new_other;
+    }
+
+    void append(const ref_state_t &oth) {
+        std::set<int> free_objects_this(free_objects.begin(), free_objects.end());
+        std::set<int> free_objects_other(oth.free_objects.begin(), oth.free_objects.end());
+
+        std::vector<int> new_other;
+        std::set_difference(
+            free_objects_this.begin(), free_objects_this.end(),
+            free_objects_other.begin(), free_objects_other.end(),
+            std::back_inserter(new_other)
+        );
+
+        std::vector<int> new_this;
+        std::set_difference(
+            free_objects_other.begin(), free_objects_other.end(),
+            free_objects_this.begin(), free_objects_this.end(),
+            std::back_inserter(new_this)
+        );
+
+        for (int idx : new_other) {
+            this->objects[idx] = oth.objects[idx];
+            this->objects_map[oth.objects[idx].name] = idx;
+        }
+        this->free_objects = std::vector<int>(free_objects_other.begin(), free_objects_other.end());
+    }
+};
+
+/* The state is initially created to have  */
+static ref_state_t g_rs;
+static int g_lua_table;
 
 template <typename T, typename K>
 constexpr auto has(T&& data_struct, K&& key) {
@@ -1502,7 +1499,7 @@ inline bool starts_with(const std::string& a, const std::string& b) {
     return a.size() >= b.size() && a.compare(0, b.size(), b) == 0;
 }
 
-inline std::unordered_map<std::string, vku_shader_stage_e> shader_stage_from_string = {
+static std::unordered_map<std::string, vku_shader_stage_e> shader_stage_from_string = {
     {"VKU_SPIRV_VERTEX",    VKU_SPIRV_VERTEX},
     {"VKU_SPIRV_FRAGMENT",  VKU_SPIRV_FRAGMENT},
     {"VKU_SPIRV_COMPUTE",   VKU_SPIRV_COMPUTE},
@@ -1533,7 +1530,7 @@ inline T get_enum_val(fkyaml::node &n) {
     throw vku::err_t{std::format("Type {} not implemented", demangle<T>())};
 }
 
-inline std::unordered_map<std::string, VkBufferUsageFlagBits> vk_buffer_usage_flag_bits_from_str = {
+static std::unordered_map<std::string, VkBufferUsageFlagBits> vk_buffer_usage_flag_bits_from_str = {
     {"VK_BUFFER_USAGE_NONE", (VkBufferUsageFlagBits)0},
     {"VK_BUFFER_USAGE_TRANSFER_SRC_BIT",
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT},
@@ -1603,7 +1600,7 @@ template <> inline VkBufferUsageFlagBits get_enum_val<VkBufferUsageFlagBits>(fky
     return get_enum_val(n, vk_buffer_usage_flag_bits_from_str);
 }
 
-inline std::unordered_map<std::string, VkSharingMode> vk_sharing_mode_from_str = {
+static std::unordered_map<std::string, VkSharingMode> vk_sharing_mode_from_str = {
     {"VK_SHARING_MODE_EXCLUSIVE", VK_SHARING_MODE_EXCLUSIVE},
     {"VK_SHARING_MODE_CONCURRENT", VK_SHARING_MODE_CONCURRENT},
 };
@@ -1612,7 +1609,7 @@ template <> inline VkSharingMode get_enum_val<VkSharingMode>(fkyaml::node &n) {
     return get_enum_val(n, vk_sharing_mode_from_str);
 }
 
-inline std::unordered_map<std::string, VkMemoryPropertyFlagBits>
+static std::unordered_map<std::string, VkMemoryPropertyFlagBits>
         vk_memory_property_flag_bits_from_str =
 {
     {"VK_MEMORY_PROPERTY_NONE", (VkMemoryPropertyFlagBits)0},
@@ -1631,7 +1628,7 @@ template <> inline VkMemoryPropertyFlagBits get_enum_val<VkMemoryPropertyFlagBit
     return get_enum_val(n, vk_memory_property_flag_bits_from_str);
 }
 
-inline std::unordered_map<std::string, VkPrimitiveTopology> vk_primitive_topology_from_str = {
+static std::unordered_map<std::string, VkPrimitiveTopology> vk_primitive_topology_from_str = {
     {"VK_PRIMITIVE_TOPOLOGY_POINT_LIST",
             VK_PRIMITIVE_TOPOLOGY_POINT_LIST},
     {"VK_PRIMITIVE_TOPOLOGY_LINE_LIST",
@@ -1660,7 +1657,7 @@ template <> inline VkPrimitiveTopology get_enum_val<VkPrimitiveTopology>(fkyaml:
     return get_enum_val(n, vk_primitive_topology_from_str);
 }
 
-inline std::unordered_map<std::string, VkImageAspectFlagBits> vk_image_aspect_flag_bits_from_str = {
+static std::unordered_map<std::string, VkImageAspectFlagBits> vk_image_aspect_flag_bits_from_str = {
     {"VK_IMAGE_ASPECT_NONE", (VkImageAspectFlagBits)0},
     {"VK_IMAGE_ASPECT_COLOR_BIT", VK_IMAGE_ASPECT_COLOR_BIT},
     {"VK_IMAGE_ASPECT_DEPTH_BIT", VK_IMAGE_ASPECT_DEPTH_BIT},
@@ -1682,7 +1679,7 @@ template <> inline VkImageAspectFlagBits get_enum_val<VkImageAspectFlagBits>(fky
     return get_enum_val(n, vk_image_aspect_flag_bits_from_str);
 }
 
-inline std::unordered_map<std::string, VkCommandBufferUsageFlagBits>
+static std::unordered_map<std::string, VkCommandBufferUsageFlagBits>
         vk_command_buffer_usage_flag_bits_from_str =
 {
     {"VK_COMMAND_BUFFER_USAGE_NONE", (VkCommandBufferUsageFlagBits)0},
@@ -1700,7 +1697,7 @@ template <> inline VkCommandBufferUsageFlagBits get_enum_val<VkCommandBufferUsag
     return get_enum_val(n, vk_command_buffer_usage_flag_bits_from_str);
 }
 
-inline std::unordered_map<std::string, VkPipelineBindPoint> vk_pipeline_bind_point_from_str = {
+static std::unordered_map<std::string, VkPipelineBindPoint> vk_pipeline_bind_point_from_str = {
     {"VK_PIPELINE_BIND_POINT_GRAPHICS",
             VK_PIPELINE_BIND_POINT_GRAPHICS},
     {"VK_PIPELINE_BIND_POINT_COMPUTE",
@@ -1713,7 +1710,7 @@ template <> inline VkPipelineBindPoint get_enum_val<VkPipelineBindPoint>(fkyaml:
     return get_enum_val(n, vk_pipeline_bind_point_from_str);
 }
 
-inline std::unordered_map<std::string, VkIndexType> vk_index_type_from_str = {
+static std::unordered_map<std::string, VkIndexType> vk_index_type_from_str = {
     {"VK_INDEX_TYPE_UINT16", VK_INDEX_TYPE_UINT16},
     {"VK_INDEX_TYPE_UINT32", VK_INDEX_TYPE_UINT32},
     {"VK_INDEX_TYPE_NONE_NV", VK_INDEX_TYPE_NONE_NV},
@@ -1724,7 +1721,7 @@ template <> inline VkIndexType get_enum_val<VkIndexType>(fkyaml::node &n) {
     return get_enum_val(n, vk_index_type_from_str);
 }
 
-inline std::unordered_map<std::string, VkPipelineStageFlagBits>
+static std::unordered_map<std::string, VkPipelineStageFlagBits>
         vk_pipeline_stage_flag_bits_from_str =
 {
     {"VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT",
@@ -1783,7 +1780,7 @@ template <> inline VkPipelineStageFlagBits get_enum_val<VkPipelineStageFlagBits>
     return get_enum_val(n, vk_pipeline_stage_flag_bits_from_str);
 }
 
-inline std::unordered_map<std::string, VkFormat> vk_format_from_str = {
+static std::unordered_map<std::string, VkFormat> vk_format_from_str = {
     {"VK_FORMAT_UNDEFINED", VK_FORMAT_UNDEFINED},
     {"VK_FORMAT_R4G4_UNORM_PACK8", VK_FORMAT_R4G4_UNORM_PACK8},
     {"VK_FORMAT_R4G4B4A4_UNORM_PACK16", VK_FORMAT_R4G4B4A4_UNORM_PACK16},
@@ -1975,7 +1972,7 @@ template <> inline VkFormat get_enum_val<VkFormat>(fkyaml::node &n) {
     return get_enum_val(n, vk_format_from_str);
 }
 
-inline std::unordered_map<std::string, VkVertexInputRate> vk_vertex_input_rate_from_str = {
+static std::unordered_map<std::string, VkVertexInputRate> vk_vertex_input_rate_from_str = {
     {"VK_VERTEX_INPUT_RATE_VERTEX", VK_VERTEX_INPUT_RATE_VERTEX},
     {"VK_VERTEX_INPUT_RATE_INSTANCE", VK_VERTEX_INPUT_RATE_INSTANCE},
 };
@@ -1984,7 +1981,7 @@ template <> inline VkVertexInputRate get_enum_val<VkVertexInputRate>(fkyaml::nod
     return get_enum_val(n, vk_vertex_input_rate_from_str);
 }
 
-inline std::unordered_map<std::string, VkShaderStageFlagBits> vk_shader_stage_flag_bits_from_str = {
+static std::unordered_map<std::string, VkShaderStageFlagBits> vk_shader_stage_flag_bits_from_str = {
     {"VK_SHADER_STAGE_VERTEX_BIT", VK_SHADER_STAGE_VERTEX_BIT},
     {"VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT", VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT},
     {"VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT", VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT},
@@ -2007,7 +2004,7 @@ template <> inline VkShaderStageFlagBits get_enum_val<VkShaderStageFlagBits>(fky
     return get_enum_val(n, vk_shader_stage_flag_bits_from_str);
 }
 
-inline std::unordered_map<std::string, VkDescriptorType> vk_descriptor_type_from_str = {
+static std::unordered_map<std::string, VkDescriptorType> vk_descriptor_type_from_str = {
     {"VK_DESCRIPTOR_TYPE_SAMPLER", VK_DESCRIPTOR_TYPE_SAMPLER}, 
     {"VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER", VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, 
     {"VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE", VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE}, 
@@ -2071,7 +2068,19 @@ inline auto load_image(auto cp, std::string path) {
     return img;
 }
 
+static std::vector<
+    std::pair<
+        std::function<bool(fkyaml::node& node)>,
+        std::function<co::task<vku::ref_t<vku::object_t>> (ref_state_t *,
+                const std::string&, fkyaml::node&)>
+    >
+> build_psudo_object_cbks;
+
 co::task_t build_pseudo_object(ref_state_t *rs, const std::string& name, fkyaml::node& node) {
+    for (auto &[match, cbk] : build_psudo_object_cbks)
+        if (match(node))
+            co_return co_await cbk(rs, name, node);
+
     if (node.is_integer()) {
         auto obj = integer_t::create(node.as_int());
         mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
@@ -2178,6 +2187,29 @@ co::task_t build_pseudo_object(ref_state_t *rs, const std::string& name, fkyaml:
     co_return -1;
 }
 
+static std::vector<std::pair<std::string, double>> vkc_constant_sizes_from_string = {
+    {"SIZEOF_INT16", sizeof(int16_t)},
+    {"SIZEOF_INT32", sizeof(int32_t)},
+    {"SIZEOF_INT64", sizeof(int64_t)},
+    {"SIZEOF_UINT16", sizeof(uint16_t)},
+    {"SIZEOF_UINT32", sizeof(int32_t)},
+    {"SIZEOF_UINT64", sizeof(int64_t)},
+    {"SIZEOF_FLOAT", sizeof(float)},
+    {"SIZEOF_DOUBLE", sizeof(double)},
+    {"SIZEOF_VEC_2F", sizeof(float)*2},
+    {"SIZEOF_VEC_3F", sizeof(float)*3},
+    {"SIZEOF_VEC_4F", sizeof(float)*4},
+    {"SIZEOF_VEC_2D", sizeof(double)*2},
+    {"SIZEOF_VEC_3D", sizeof(double)*3},
+    {"SIZEOF_VEC_4D", sizeof(double)*4},
+    {"SIZEOF_MAT_2x2F", sizeof(float)*2*2},
+    {"SIZEOF_MAT_3x3F", sizeof(float)*3*3},
+    {"SIZEOF_MAT_4x4F", sizeof(float)*4*4},
+    {"SIZEOF_MAT_2x2D", sizeof(double)*2*2},
+    {"SIZEOF_MAT_3x3D", sizeof(double)*3*3},
+    {"SIZEOF_MAT_4x4D", sizeof(double)*4*4},
+};
+
 /*! This either follows a reference to an integer or it returns the direct value if available */
 co::task<int64_t> resolve_int(ref_state_t *rs, fkyaml::node& node) {
     if (node.has_tag_name() && node.get_tag_name() == "!ref")
@@ -2185,26 +2217,13 @@ co::task<int64_t> resolve_int(ref_state_t *rs, fkyaml::node& node) {
     if (node.is_string()) {
         /* Try to resolve an expression resulting in an integer: */
         std::string expr_str = node.as_str();
-        std::vector<std::pair<const char *, double>> constants = {
-            {"SIZEOF_FLOAT", sizeof(float)},
-            {"SIZEOF_DOUBLE", sizeof(double)},
-            {"SIZEOF_VEC_2F", sizeof(float)*2},
-            {"SIZEOF_VEC_3F", sizeof(float)*3},
-            {"SIZEOF_VEC_4F", sizeof(float)*4},
-            {"SIZEOF_VEC_2D", sizeof(double)*2},
-            {"SIZEOF_VEC_3D", sizeof(double)*3},
-            {"SIZEOF_VEC_4D", sizeof(double)*4},
-            {"SIZEOF_MAT_2x2F", sizeof(float)*2*2},
-            {"SIZEOF_MAT_3x3F", sizeof(float)*3*3},
-            {"SIZEOF_MAT_4x4F", sizeof(float)*4*4},
-            {"SIZEOF_MAT_2x2D", sizeof(double)*2*2},
-            {"SIZEOF_MAT_3x3D", sizeof(double)*3*3},
-            {"SIZEOF_MAT_4x4D", sizeof(double)*4*4},
-        };
+
+        /* TODO: Try to resolve user-defined vars */
+        
         std::vector<texpr::te_variable> vars;
-        for (auto &ct : constants)
+        for (auto &ct : vkc_constant_sizes_from_string)
             vars.push_back(texpr::te_variable{
-                .name = ct.first,
+                .name = ct.first.c_str(),
                 .address = (void *)&ct.second,
                 .type = texpr::TE_VARIABLE,
                 .context = nullptr,
@@ -2242,7 +2261,7 @@ co::task<std::string> resolve_str(ref_state_t *rs, fkyaml::node& node) {
 co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         const std::string& name, fkyaml::node& node);
 
-inline int64_t anonymous_increment = 0;
+static int64_t anonymous_increment = 0;
 inline std::string new_anon_name() {
     return "anonymous_" + std::to_string(anonymous_increment++);
 }
@@ -2276,6 +2295,14 @@ co::task<vku::ref_t<VkuT>> resolve_obj(ref_state_t *rs, fkyaml::node& node) {
             fkyaml::node::serialize(node))};
 }
 
+static std::vector<
+    std::pair<
+        std::function<bool(fkyaml::node& node)>,
+        std::function<co::task<vku::ref_t<vku::object_t>> (ref_state_t *,
+                const std::string&, fkyaml::node&)>
+    >
+> build_object_cbks;
+
 co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         const std::string& name, fkyaml::node& node)
 {
@@ -2283,6 +2310,9 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
         DBG("Error node: %s not a mapping", fkyaml::node::serialize(node).c_str());
         co_return nullptr;
     }
+    for (auto &[match, cbk] : build_object_cbks)
+        if (match(node))
+            co_return co_await cbk(rs, name, node);
     if (false);
     else if (node["m_type"] == "vkc::vertex_input_desc_t") {
         std::vector<VkVertexInputAttributeDescription> attrs;
@@ -2511,7 +2541,7 @@ co::task<vku::ref_t<vku::object_t>> build_object(ref_state_t *rs,
 
 
 co::task_t build_schema(ref_state_t *rs, fkyaml::node& root) {
-    ASSERT_BOOL_CO(root.is_mapping());
+    ASSERT_COFN(CHK_BOOL(root.is_mapping()));
 
     for (auto &[name, node] : root.as_map()) {
         if (!node.contains("m_type")) {
@@ -2557,62 +2587,6 @@ inline vkc_error_e parse_config(const char *path) {
 
     return VKC_ERROR_OK;
 }
-
-inline std::string lua_example_str = R"___(
-vku = require("vulkan_utils")
-
-print(debug.getregistry())
-
-
-t = {
-    m_type = "vkc::lua_var_t",
-    var1 = 1,
-    var2 = 2,
-    var3 = {
-        var4 = "str"
-    }
-}
-to = vku.create_object("tag_name", t)
-print(to)
-
-function on_loop_run()
-    vku.glfw_pool_events() -- needed for keys to be available
-    if vku.get_key(vku.window, vku.GLFW_KEY_ESCAPE) == vku.GLFW_PRESS then
-        vku.signal_close() -- this will close the loop
-    end
-
-    img_idx = vku.aquire_next_img(vku.swc, vku.img_sem)
-
-    -- do mvp update somehow?
-
-    vku.cbuff:begin(vku.VK_COMMAND_BUFFER_USAGE_NONE)
-    vku.cbuff:begin_rpass(vku.fbs, img_idx)
-    vku.cbuff:bind_vert_buffs(0, {{vku.vbuff, 0}})
-    vku.cbuff:bind_idx_buff(vku.ibuff, 0, vku.VK_INDEX_TYPE_UINT16)
-    vku.cbuff:bind_desc_set(vku.VK_PIPELINE_BIND_POINT_GRAPHICS, vku.pl, vku.desc_set)
-    vku.cbuff:draw_idx(vku.pl, 3)
-    vku.cbuff:end_rpass()
-    vku.cbuff:end_begin()
-
-    vku.submit_cmdbuff({{vku.img_sem, vku.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
-        vku.cbuff, vku.fence, {vku.draw_sem})
-    vku.present(vku.swc, {vku.draw_sem}, img_idx)
-
-    vku.wait_fences({vku.fence})
-    vku.reset_fences({vku.fence})
-end
-
-function on_window_resize(w, h)
-    vku.device_wait_handle(vku.dev)
-
-    vku.window.m_width = w
-    vku.window.m_height = h
-
-    -- this will recurse and rebuild all dependees on window
-    vku.window.rebuild()
-end
-)___";
-
 
 inline void* luaw_to_user_data(int index) { return (void*)(intptr_t)(index); }
 inline int luaw_from_user_data(void *val) { return (int)(intptr_t)(val); }
@@ -2669,6 +2643,16 @@ struct luaw_param_t{
         /* If this is resolved to a void it will error out, which is ok, because this case is either
         way an error */
         demangle_static_assert<false, Param>(" - Is not a valid parameter type");
+    }
+};
+
+/* This resolves userdata(void *) received from lua to an vku parameter */
+template <ssize_t index>
+struct luaw_param_t<void *, index> {
+    void *luaw_single_param(lua_State *L) {
+        if (lua_isnil(L, index))
+            return NULL;
+        return lua_touserdata(L, index);
     }
 };
 
@@ -2930,7 +2914,7 @@ template <typename VkuT, auto member_ptr, typename ...Params, size_t ...I>
 int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     int index = luaw_from_user_data(lua_touserdata(L, 1));
     if (index == 0) {
-        luaw_push_error(L, "Nil user object can't call member function!");
+        luaw_push_error(L, "Nil user object can't call member function! (check if : used)");
         lua_error(L);
     }
     auto &o = g_rs.objects[index];
@@ -3012,6 +2996,13 @@ struct is_vku_ref_t : std::false_type {};
 template <typename T>
 struct is_vku_ref_t<vku::ref_t<T>> : std::true_type {};
 
+// helper to detect if a type is vku::ref_t<...>
+template <typename T>
+concept is_vku_enum = requires(fkyaml::node n) {
+    get_enum_val<T>(n);
+};
+
+/* getter */
 template <typename VkuT, auto member_ptr>
 int luaw_member_object_wrapper(lua_State *L) {
     try {
@@ -3048,6 +3039,10 @@ int luaw_member_object_wrapper(lua_State *L) {
                 lua_pushstring(L, str.c_str());
                 lua_rawseti(L, -2, i++);
             }
+            return 1;
+        }
+        else if constexpr (is_vku_enum<member_type>) {
+            lua_pushnumber(L, (int)member);
             return 1;
         }
         else if constexpr (is_vku_ref_t<member_type>::value) {
@@ -3140,6 +3135,11 @@ int luaw_member_setter_object_wrapper(lua_State *L) {
         member = to_asign;
         return 0;
     }
+    else if constexpr (is_vku_enum<member_type>) {
+        uint64_t val = lua_tointeger(L, -1);
+        member = (member_type)val;
+        return 0;
+    }
     else if constexpr (is_vku_ref_t<member_type>::value) {
         int index = luaw_from_user_data(lua_touserdata(L, -1)); /* an int, ok on unwind */
         if (index == 0) {
@@ -3154,17 +3154,6 @@ int luaw_member_setter_object_wrapper(lua_State *L) {
         return 0;
     }
 }
-
-enum luaw_member_e {
-    LUAW_MEMBER_FUNCTION,
-    LUAW_MEMBER_OBJECT,
-};
-struct luaw_member_t {
-    lua_CFunction fn;
-    luaw_member_e member_type;
-};
-inline std::unordered_map<std::string, luaw_member_t> lua_class_members[VKU_TYPE_CNT.value()];
-inline std::unordered_map<std::string, lua_CFunction> lua_class_member_setters[VKU_TYPE_CNT.value()];
 
 template <typename VkuT, auto member_ptr, typename ...Params>
 void luaw_register_member_function(const char *function_name) {
@@ -3185,17 +3174,17 @@ void luaw_register_member_object(const char *member_name) {
             &luaw_member_setter_object_wrapper<VkuT, member_ptr>;
 }
 
-#define VKC_REG_MEMB(obj_type, memb)    \
-luaw_register_member_object<            \
-/* self        */   obj_type,           \
-/* member      */   &obj_type::memb>    \
+#define VKC_REG_MEMB(obj_type, memb)            \
+vulkan_composer::luaw_register_member_object<   \
+/* self        */   obj_type,                   \
+/* member      */   &obj_type::memb>            \
 /* member name */   (#memb)
 
-#define VKC_REG_FN(obj_type, fn, ...)   \
-luaw_register_member_function<          \
-/* self     */  obj_type,               \
-/* function */  &obj_type::fn,          \
-/* params   */  ##__VA_ARGS__>          \
+#define VKC_REG_FN(obj_type, fn, ...)           \
+vulkan_composer::luaw_register_member_function< \
+/* self     */  obj_type,                       \
+/* function */  &obj_type::fn,                  \
+/* params   */  ##__VA_ARGS__>                  \
 /* fn name  */  (#fn)
 
 inline void glfw_pool_events() {
@@ -3387,7 +3376,7 @@ inline int internal_create_object(lua_State *L) {
         if (!ref_state.objects[id].obj) {
             DBG("Null user object?");
         }
-        DBG("Registering object: %s", ref_state.objects[id].name.c_str());
+        DBG("Registering object: %s with id: %d", ref_state.objects[id].name.c_str(), id);
         /* this makes vulkan_utils.key = object_id and sets it's metadata */
         lua_pushlightuserdata(L, luaw_to_user_data(id));
         luaL_setmetatable(L, "__vku_metatable");
@@ -3408,7 +3397,23 @@ inline uint32_t internal_device_wait_handle(vku::ref_t<vku::device_t> dev) {
     return vkDeviceWaitIdle(dev->vk_dev);
 }
 
-inline const luaL_Reg vku_tab_funcs[] = {
+inline int copy_from_cpu_to_gpu(vku::ref_t<vku::buffer_t> dst, void *src,
+        size_t len, size_t off)
+{
+    (void)dst, void(src), void(len), void(off);
+    DBG("TODO: transfer cpu->gpu");
+    return 0;
+}
+
+inline int copy_from_gpu_to_cpu(void *dst, vku::ref_t<vku::buffer_t> src,
+        size_t len, size_t off)
+{
+    (void)dst, void(src), void(len), void(off);
+    DBG("TODO: transfer gpu->cpu");
+    return 0;
+}
+
+static std::vector<luaL_Reg> vku_tab_funcs = {
     {"glfw_pool_events",    luaw_function_wrapper<glfw_pool_events>},
     {"get_key",             luaw_function_wrapper<glfw_get_key,
             vku::ref_t<vku::window_t>, uint32_t>},
@@ -3430,10 +3435,23 @@ inline const luaL_Reg vku_tab_funcs[] = {
     {"device_wait_handle",  luaw_function_wrapper<internal_device_wait_handle,
             vku::ref_t<vku::device_t>>},
     {"create_object", internal_create_object},
-    {NULL, NULL}
+    {"copy_from_cpu_to_gpu",luaw_function_wrapper<copy_from_cpu_to_gpu,
+            vku::ref_t<vku::buffer_t>, void *, size_t, size_t>},
+    {"copy_from_gpu_to_cpu",luaw_function_wrapper<copy_from_gpu_to_cpu,
+            void *, vku::ref_t<vku::buffer_t>, size_t, size_t>},
 };
 
 inline void luaw_set_glfw_fields(lua_State *L);
+
+void register_flag_mapping(lua_State *L, auto &mapping) {
+    for (auto& [k, v] : mapping) {
+        lua_pushinteger(L, (uint32_t)v);
+        lua_setfield(L, -2, k.c_str());
+    }
+};
+
+static std::vector<std::function<void(lua_State *L)>> cbk_register_mapping;
+static std::vector<std::function<void(void)>> cbk_register_members;
 
 inline int luaopen_vku(lua_State *L) {
     int top = lua_gettop(L);
@@ -3443,14 +3461,26 @@ inline int luaopen_vku(lua_State *L) {
         member objects and functions to lua. */
         luaL_newmetatable(L, "__vku_metatable");
 
+        lua_pushcfunction(L, [](lua_State *L) {
+            int id = luaw_from_user_data(lua_touserdata(L, -1)); /* an int, ok on unwind */
+            auto &o = g_rs.objects[id]; /* a reference, ok on unwind? (if err) */
+            if (!o.obj) {
+                luaw_push_error(L, std::format("invalid object id: {}", id));
+                lua_error(L);
+            }
+            lua_pushstring(L, o.obj->to_string().c_str());
+            return 1;
+        });
+        lua_setfield(L, -2, "__tostring");
+
         /* params: 1.usrptr, 2.key -> returns: 1.value */
         lua_pushcfunction(L, [](lua_State *L) {
-            DBG("__index: %d", lua_gettop(L));
+            // DBG("__index: %d", lua_gettop(L));
             int id = luaw_from_user_data(lua_touserdata(L, -2)); /* an int, ok on unwind */
             const char *member_name = lua_tostring(L, -1); /* an const char *, ok on unwind */
 
-            DBG("usr_id: %d", id);
-            DBG("member_name: %s", member_name);
+            // DBG("usr_id: %d", id);
+            // DBG("member_name: %s", member_name);
 
             auto &o = g_rs.objects[id]; /* a reference, ok on unwind? (if err) */
             if (!o.obj) {
@@ -3458,7 +3488,7 @@ inline int luaopen_vku(lua_State *L) {
                 lua_error(L);
             }
             vku::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
-            if (class_id < 0 || class_id >= VKU_TYPE_CNT.value()) {
+            if (class_id < 0 || class_id >= VKU_TYPE_CNT) {
                 luaw_push_error(L, std::format("invalid class id: {}", vku::to_string(class_id)));
                 lua_error(L);
             }
@@ -3503,7 +3533,7 @@ inline int luaopen_vku(lua_State *L) {
                 lua_error(L);
             }
             vku::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
-            if (class_id < 0 || class_id >= VKU_TYPE_CNT.value()) {
+            if (class_id < 0 || class_id >= VKU_TYPE_CNT) {
                 luaw_push_error(L, std::format("invalid class id: {}", vku::to_string(class_id)));
                 lua_error(L);
             }
@@ -3529,6 +3559,7 @@ inline int luaopen_vku(lua_State *L) {
                 luaw_push_error(L, std::format("invalid object id: {}", id));
                 lua_error(L);
             }
+            DBG("tostr: %s", o.obj->to_string().c_str());
             vku::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
             if (class_id != VKC_TYPE_LUA_FUNCTION) {
                 luaw_push_error(L, std::format("invalid class id: {} is not VKC_TYPE_LUA_FUNCTION",
@@ -3602,6 +3633,11 @@ inline int luaopen_vku(lua_State *L) {
         VKC_REG_FN(vkc::cpu_buffer_t, data);
         VKC_REG_FN(vkc::cpu_buffer_t, size);
 
+        /* all others:
+        ----------------------------------------------------------------------------------------- */
+        for (auto &cbk : cbk_register_members)
+            cbk();
+
         /* Done objects
         ----------------------------------------------------------------------------------------- */
 
@@ -3617,7 +3653,10 @@ inline int luaopen_vku(lua_State *L) {
     {
         /* Registers the vulkan_utils library and some standalone functions from vku(vulkan utils)
         or vkc(vulkan composer) */
-        luaL_newlib(L, vku_tab_funcs);
+        vku_tab_funcs.push_back({NULL, NULL});
+        luaL_checkversion(L);
+        lua_createtable(L, 0, vku_tab_funcs.size() - 1);
+        luaL_setfuncs(L, vku_tab_funcs.data(), 0);
 
         /* Registers this lua table for later use */
         g_lua_table = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -3631,19 +3670,12 @@ inline int luaopen_vku(lua_State *L) {
             if (!g_rs.objects[id].obj) {
                 DBG("Null user object?");
             }
-            DBG("Registering object: %s", k.c_str());
+            DBG("Registering object: %s with id: %d", k.c_str(), id);
             /* this makes vulkan_utils.key = object_id and sets it's metadata */
             lua_pushlightuserdata(L, luaw_to_user_data(id));
             luaL_setmetatable(L, "__vku_metatable");
             lua_setfield(L, -2, k.c_str());
         }
-
-        auto register_flag_mapping = [](lua_State *L, auto &mapping) {
-            for (auto& [k, v] : mapping) {
-                lua_pushinteger(L, (uint32_t)v);
-                lua_setfield(L, -2, k.c_str());
-            }
-        };
 
         /* Registers vulkan enums in the lua library */
         register_flag_mapping(L, vk_format_from_str);
@@ -3660,6 +3692,10 @@ inline int luaopen_vku(lua_State *L) {
         register_flag_mapping(L, vk_sharing_mode_from_str);
         register_flag_mapping(L, vk_buffer_usage_flag_bits_from_str);
         register_flag_mapping(L, shader_stage_from_string);
+        register_flag_mapping(L, vkc_constant_sizes_from_string);
+
+        for (auto &cbk : cbk_register_mapping)
+            cbk(L);
     }
 
     DBG("top: %d gettop: %d", top, lua_gettop(L));
@@ -3668,8 +3704,6 @@ inline int luaopen_vku(lua_State *L) {
     return 1;
 }
 
-#undef VKC_REG_MEMB
-#undef VKC_REG_FN
 
 inline lua_State *lua_state;
 inline vkc_error_e luaw_init() {
@@ -3693,7 +3727,12 @@ inline vkc_error_e luaw_init() {
     // luaL_requiref(L, LUA_IOLIBNAME, luaopen_io, 1); lua_pop(L, 1);
     // luaL_requiref(L, LUA_OSLIBNAME, luaopen_os, 1); lua_pop(L, 1);
 
-    if (luaL_loadstring(lua_state, lua_example_str.c_str()) != LUA_OK) {
+    if (!has(g_rs.objects_map, "lua_script")) {
+        DBG("Config didn't provide a starter script to execute");
+        return VKC_ERROR_GENERIC;
+    }
+    auto start_script = g_rs.objects[g_rs.objects_map["lua_script"]].obj.to_related<lua_script_t>();
+    if (luaL_loadstring(lua_state, start_script->content.c_str()) != LUA_OK) {
         DBG("LUA Load Failed: \n%s", lua_tostring(lua_state, -1));
         lua_close(lua_state);
         return VKC_ERROR_FAILED_LUA_LOAD;

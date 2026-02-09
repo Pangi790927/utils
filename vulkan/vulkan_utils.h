@@ -47,7 +47,7 @@
 
 #define VULKAN_UTILS_REGISTER_TYPE(type) \
         constexpr vulkan_utils::object_type_e type{\
-        vo::compile_unique_id<vulkan_utils::vulkan_tag_t>(), #type}
+        virt_object::compile_unique_id<vulkan_utils::vulkan_tag_t>(), #type}
 
 /* TODO: Check if throw may be better transformed in a return. */
 #define VK_ASSERT(fn_call)                                                                         \
@@ -59,8 +59,6 @@ do {                                                                            
     }                                                                                              \
 } while (false);
 
-
-
 enum vku_shader_stage_e {
     VKU_SPIRV_VERTEX,
     VKU_SPIRV_FRAGMENT,
@@ -70,9 +68,7 @@ enum vku_shader_stage_e {
     VKU_SPIRV_TESS_EVAL,
 };
 
-
 namespace vulkan_utils {
-
 
 struct vulkan_tag_t {};
 
