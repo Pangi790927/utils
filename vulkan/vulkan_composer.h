@@ -1022,15 +1022,10 @@ vulkan_composer would stay better in a CPP file) */
 #include "tinyexpr.h"
 #include "minilua.h"
 #include "demangle.h"
-#include "co_utils.h"
-
-#include <coroutine>
-#include <filesystem>
 
 /* TODO: this also needs to stay in an implementation file */
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
-
 
 /* TODO: Thsi is almost done now, I must think what I want to further expose, and some tweaks:
     - I want to be able to add objects from the outside, so those need to be:
@@ -1064,23 +1059,20 @@ namespace vulkan_composer {
 
 namespace vo = virt_object;
 namespace vku = vulkan_utils;
+namespace vc = virt_composer;
 namespace vkc = vulkan_composer;
 
-VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_SPIRV);
-VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_STRING);
-VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_FLOAT);
-VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_CPU_BUFFER);
-VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_INTEGER);
-VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_LUA_SCRIPT);
-VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_LUA_VARIABLE);
-VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_LUA_FUNCTION);
-VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_VERTEX_INPUT_DESC);
-VULKAN_UTILS_REGISTER_TYPE(VKC_TYPE_BINDING_DESC);
+VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_SPIRV);
+VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_STRING);
+VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_FLOAT);
+VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_INTEGER);
+VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_CPU_BUFFER);
+VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_LUA_SCRIPT);
+VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_LUA_VARIABLE);
+VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_LUA_FUNCTION);
+VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_VERTEX_INPUT_DESC);
+VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_BINDING_DESC);
 
-/*! OBS: This is static not inline because we want to make sure this won't conflict with another's
- * translation unit variables */
-/* Max number of named references That are concomitent */
-static constexpr const int MAX_NUMBER_OF_OBJECTS = 16384;
 
 /* Does this really have any irl usage? */
 struct lua_var_t : public vku::object_t {
@@ -1101,8 +1093,8 @@ struct lua_var_t : public vku::object_t {
 
 
 private:
-    virtual VkResult _init() override { return VK_SUCCESS; }
-    virtual VkResult _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t _init() override { return VK_SUCCESS; }
+    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 };
 
 /* Does this really have any irl usage? */
@@ -1133,8 +1125,8 @@ struct lua_function_t : public vku::object_t {
 
 
 private:
-    virtual VkResult _init() override { return VK_SUCCESS; }
-    virtual VkResult _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t _init() override { return VK_SUCCESS; }
+    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 };
 
 struct lua_script_t : public vku::object_t {
@@ -1154,8 +1146,8 @@ struct lua_script_t : public vku::object_t {
     }
 
 private:
-    virtual VkResult _init() override { return VK_SUCCESS; }
-    virtual VkResult _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t _init() override { return VK_SUCCESS; }
+    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 };
 
 
@@ -1176,8 +1168,8 @@ struct integer_t : public vku::object_t {
     }
 
 private:
-    virtual VkResult _init() override { return VK_SUCCESS; }
-    virtual VkResult _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t _init() override { return VK_SUCCESS; }
+    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 };
 
 struct float_t : public vku::object_t {
@@ -1197,8 +1189,8 @@ struct float_t : public vku::object_t {
     }
 
 private:
-    virtual VkResult _init() override { return VK_SUCCESS; }
-    virtual VkResult _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t _init() override { return VK_SUCCESS; }
+    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 };
 
 /* This does the following: creates a buffer in cpu-memory space that can be used to copy data to
@@ -1221,8 +1213,8 @@ struct cpu_buffer_t : public vku::object_t {
     }
 
 private:
-    virtual VkResult _init() override { return VK_SUCCESS; }
-    virtual VkResult _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t _init() override { return VK_SUCCESS; }
+    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 
     std::vector<uint8_t> _data;
 };
@@ -1245,8 +1237,8 @@ struct string_t : public vku::object_t {
     }
 
 private:
-    virtual VkResult _init() override { return VK_SUCCESS; }
-    virtual VkResult _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t _init() override { return VK_SUCCESS; }
+    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 };
 
 struct spirv_t : public vku::object_t {
@@ -1268,8 +1260,8 @@ struct spirv_t : public vku::object_t {
     }
 
 private:
-    virtual VkResult _init() override { return VK_SUCCESS; }
-    virtual VkResult _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t _init() override { return VK_SUCCESS; }
+    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 };
 
 struct vertex_input_desc_t : public vku::object_t {
@@ -1297,8 +1289,8 @@ struct vertex_input_desc_t : public vku::object_t {
     }
 
 private:
-    virtual VkResult _init() override { return VK_SUCCESS; }
-    virtual VkResult _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t _init() override { return VK_SUCCESS; }
+    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 };
 
 struct binding_t : public vku::object_t {
@@ -1322,8 +1314,8 @@ struct binding_t : public vku::object_t {
     }
 
 private:
-    virtual VkResult _init() override { return VK_SUCCESS; }
-    virtual VkResult _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t _init() override { return VK_SUCCESS; }
+    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 };
 
 /*! IMPLEMENTATION
@@ -1332,7 +1324,6 @@ private:
  ***************************************************************************************************
  */
 
-static std::string app_path = std::filesystem::canonical("./");
 
 enum luaw_member_e {
     LUAW_MEMBER_FUNCTION,
