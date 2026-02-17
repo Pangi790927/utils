@@ -25,28 +25,27 @@ template <> inline cs_freq_e get_enum_val<cs_freq_e>(fkyaml::node &n) {
 
 namespace compu_scope {
 
-namespace vku = vulkan_utils;
-namespace vkc = vulkan_composer;
+namespace vc = virt_composer;
 namespace cs = compu_scope;
 
-VULKAN_UTILS_REGISTER_TYPE(CS_TYPE_COMPU_SCOPE);
+VIRT_COMPOSER_REGISTER_TYPE(CS_TYPE_COMPU_SCOPE);
 
 inline int init();
 inline std::string to_string(cs_freq_e freq);
 
-struct compu_scope_t : public vku::object_t {
+struct compu_scope_t : public vc::object_t {
     cs_freq_e m_freq;
     /* TODO: add all the required options here */
 
-    static vku::object_type_e type_id_static() { return CS_TYPE_COMPU_SCOPE; }
-    static vku::ref_t<compu_scope_t> create(cs_freq_e freq /* TODO: all the required fields */) {
-        auto ret = vku::ref_t<compu_scope_t>::create_obj_ref(
+    static vc::object_type_e type_id_static() { return CS_TYPE_COMPU_SCOPE; }
+    static vc::ref_t<compu_scope_t> create(cs_freq_e freq /* TODO: all the required fields */) {
+        auto ret = vc::ref_t<compu_scope_t>::create_obj_ref(
                 std::make_unique<compu_scope_t>(), {});
         ret->m_freq = freq;
         return ret;
     }
 
-    virtual vku::object_type_e type_id() const override { return CS_TYPE_COMPU_SCOPE; }
+    virtual vc::object_type_e type_id() const override { return CS_TYPE_COMPU_SCOPE; }
 
     int start();
     int stop();
@@ -82,12 +81,12 @@ inline int init() {
             return node["m_type"] == "cs::compu_scope_t";
         },
         [](vkc::ref_state_t *rs, const std::string& name, fkyaml::node& node)
-        -> co::task<vku::ref_t<vku::object_t>>
+        -> co::task<vc::ref_t<vc::object_t>>
         {
             auto m_freq = vkc::get_enum_val<cs_freq_e>(node["m_freq"]);
             auto obj = compu_scope_t::create(m_freq);
-            mark_dependency_solved(rs, name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(rs, name, obj.to_related<vc::object_t>());
+            co_return obj.to_related<vc::object_t>();
         }
     });
     return 0;

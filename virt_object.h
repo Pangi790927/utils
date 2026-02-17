@@ -1,6 +1,13 @@
 #ifndef VIRT_OBJECT_H
 #define VIRT_OBJECT_H
 
+#include <functional>
+#include <algorithm>
+#include <format>
+
+#include "demangle.h"
+#include "cpp_backtrace.h"
+
 namespace virt_object {
 
 /*!
@@ -164,7 +171,7 @@ struct object_t {
 
 private:
     virtual R::ret_t _init() = 0;
-    virtual R::ret_t _uninit() { return VK_SUCCESS; };
+    virtual R::ret_t _uninit() { return 0; };
 };
 
 /*!

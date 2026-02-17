@@ -121,12 +121,13 @@ inline std::string windows_get_last_error_as_string() {
 
 #endif /* end windows */
 
-
-#define ASSERT_FN(fn_call)\
+#define ASSERT_RET(err_ret, fn_call)\
 if (intptr_t(fn_call) < 0) {\
     DBGE("FAILED: " #fn_call);\
-    return -1;\
+    return (err_ret);\
 }
+
+#define ASSERT_FN(fn_call) ASSERT_RET(-1, fn_call)
 
 #define CHK_MMAP(x) ((x) == MAP_FAILED ? -1 : 0)
 #define CHK_BOOL(x) ((x) ? 0 : -1)

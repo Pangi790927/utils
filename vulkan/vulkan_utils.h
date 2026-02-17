@@ -50,8 +50,8 @@
 do {                                                                                               \
     VkResult vk_err = VkResult(fn_call);                                                           \
     if (vk_err != VK_SUCCESS) {                                                                    \
-        DBG("Failed vk assert: [%s: %d]", vk_err_str(vk_err), vk_err);                             \
-        throw vulkan_utils::err_t(vk_err);                                                         \
+        DBG("Failed vk assert: [%s: %d]", vk_err_cstr(vk_err), vk_err);                            \
+        throw vulkan_utils::except_t(vk_err_str(vk_err));                                          \
     }                                                                                              \
 } while (false);
 
@@ -68,6 +68,7 @@ namespace vulkan_utils {
 
 namespace vo = virt_object;
 namespace vc = virt_composer;
+namespace vku = vulkan_utils;
 
 /* This is a common type enumeration for all the types that can be derived from vku_object_t */
 using object_type_e = vc::object_type_e;
@@ -111,7 +112,6 @@ VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_BINDING_DESCRIPTOR_SET);
     - Add the option to use multiple include dirs for shader compilation
  */
 
-struct err_t;
 struct gpu_family_ids_t;
 struct spirv_t;
 
@@ -211,36 +211,10 @@ inline std::string to_string(VkShaderStageFlagBits flags);
 ================================================================================================= */
 
 /* Those are needed here just for bellow objects */
-inline const char *vk_err_str(VkResult res);
+inline const char *vk_err_cstr(vc::ret_t res);
+inline std::string vk_err_str(vc::ret_t res);
 inline std::string glfw_err();
 
-struct err_t : public std::exception {
-    VkResult vk_err{};
-    std::string err_str;
-
-    err_t(VkResult vk_err)
-    : vk_err(vk_err)
-    {
-        err_str = std::format(
-                "\n------BACKTRACE------\n"
-                "{}"
-                "EXCEPTION: VKU_ERROR: {}[{}]"
-                "\n---------------------",
-                cpp_backtrace(),
-                vk_err_str(vk_err), (size_t)vk_err);
-    }
-
-    err_t(const std::string& str) {
-        err_str = std::format(
-                "\n------BACKTRACE------\n"
-                "{}"
-                "EXCEPTION: {}"
-                "\n---------------------",
-                cpp_backtrace(),
-                str);
-    }
-    const char *what() const noexcept override { return err_str.c_str(); };
-};
 
 struct gpu_family_ids_t {
     union {
@@ -824,6 +798,12 @@ private:
 /* Internal:
 ================================================================================================= */
 
+struct except_t : vc::except_t {
+    VkResult vk_err = VK_ERROR_UNKNOWN;
+    except_t(const std::string &str) : vc::except_t(str) {}
+    except_t(VkResult vk_err) : vc::except_t(vk_err_str(vk_err)), vk_err(vk_err) {}
+};
+
 struct swapchain_details_t {
     VkSurfaceCapabilitiesKHR        capab;
     std::vector<VkSurfaceFormatKHR> formats;
@@ -1053,7 +1033,7 @@ inline vc::ret_t instance_t::_init() {
 
     if (!glfw_exts) {
         DBG("Failed to get required extensions for glfw: %s", glfw_err().c_str());
-        throw err_t(VK_ERROR_UNKNOWN);
+        throw vku::except_t(VK_ERROR_UNKNOWN);
     }
     std::vector<const char*> exts_c(glfw_exts, glfw_exts + glfw_ext_count);
     for (auto &e : this->m_extensions)
@@ -1075,7 +1055,7 @@ inline vc::ret_t instance_t::_init() {
                 found = true;
         if (!found) {
             DBG("Required extension %s is not supported", req_e);
-            throw err_t(VK_ERROR_UNKNOWN);
+            throw vku::except_t(VK_ERROR_UNKNOWN);
         }
     }
 
@@ -1100,7 +1080,7 @@ inline vc::ret_t instance_t::_init() {
                 found = true;
         if (!found) {
             DBG("Required extension %s is not supported", req_l);
-            throw err_t(VK_ERROR_UNKNOWN);
+            throw vku::except_t(VK_ERROR_UNKNOWN);
         }
     }
 
@@ -1237,7 +1217,7 @@ inline vc::ret_t device_t::_init() {
 
     if (dev_cnt == 0) {
         DBG("Failed to find a GPU with Vulkan support!")
-        throw err_t(VK_ERROR_UNKNOWN);
+        throw vku::except_t(VK_ERROR_UNKNOWN);
     }
 
     std::vector<VkPhysicalDevice> devices(dev_cnt);
@@ -1257,7 +1237,7 @@ inline vc::ret_t device_t::_init() {
     }
     if (max_score < 0) {
         DBG("Failed to get a suitable physical device");
-        throw err_t(VK_ERROR_UNKNOWN);
+        throw vku::except_t(VK_ERROR_UNKNOWN);
     }
 
     m_que_fams = find_queue_families(vk_phy_dev, m_surface->vk_surface);
@@ -1456,7 +1436,7 @@ inline vc::ret_t shader_t::_init() {
         std::vector<char> buffer(size);
         if (!file.read(buffer.data(), size)) {
             DBG("Failed to read shader data");
-            throw err_t(VK_ERROR_UNKNOWN);
+            throw vku::except_t(VK_ERROR_UNKNOWN);
         }
         VkShaderModuleCreateInfo shader_info {
             .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -1921,7 +1901,7 @@ inline vc::ret_t compute_pipeline_t::_init() {
     DBGVV("Allocated pipeline layout: %p", vk_layout);
 
     if (get_shader_type(m_shader->m_type) != VK_SHADER_STAGE_COMPUTE_BIT) {
-        throw err_t("compute_pipeline needs a compute shader");
+        throw vku::except_t("compute_pipeline needs a compute shader");
     }
 
     VkPipelineShaderStageCreateInfo shader_info {
@@ -2347,7 +2327,7 @@ inline std::string buffer_t::to_string() const {
 inline void *buffer_t::map_data(VkDeviceSize offset, VkDeviceSize size) {
     if (m_map_ptr) {
         DBG("Memory is already mapped!");
-        throw err_t(VK_ERROR_UNKNOWN);
+        throw vku::except_t(VK_ERROR_UNKNOWN);
     }
     VK_ASSERT(vkMapMemory(m_device->vk_dev, vk_mem, offset, size, 0, &m_map_ptr));
     return m_map_ptr;
@@ -2356,7 +2336,7 @@ inline void *buffer_t::map_data(VkDeviceSize offset, VkDeviceSize size) {
 inline void buffer_t::unmap_data() {
     if (!m_map_ptr) {
         DBG("Memory is not mapped, can't unmap");
-        throw err_t(VK_ERROR_UNKNOWN);
+        throw vku::except_t(VK_ERROR_UNKNOWN);
     }
     vkUnmapMemory(m_device->vk_dev, vk_mem);
     m_map_ptr = nullptr;
@@ -2508,7 +2488,7 @@ inline void image_t::transition_layout(ref_t<cmdpool_t> cp,
         dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     }
     else {
-        throw err_t(sformat("unsupported layout transition for image! %d -> %d",
+        throw vku::except_t(sformat("unsupported layout transition for image! %d -> %d",
                 old_layout, new_layout));
     }
 
@@ -2532,7 +2512,7 @@ inline void image_t::set_data(ref_t<cmdpool_t> cp, void *data, uint32_t sz,
     uint32_t img_sz = m_width * m_height * 4;
 
     if (img_sz != sz)
-        throw err_t(sformat("data size(%d) does not match with image size(%d)", sz, img_sz));
+        throw vku::except_t(sformat("data size(%d) does not match with image size(%d)", sz, img_sz));
 
     auto buff = buffer_t::create(
         cp->m_device,
@@ -3012,7 +2992,7 @@ inline void wait_fences(std::vector<ref_t<fence_t>> fences) {
 
     if (!fences.size()) {
         DBG("No fences to wait for");
-        throw err_t(VK_ERROR_UNKNOWN);
+        throw vku::except_t(VK_ERROR_UNKNOWN);
     }
     vk_fences.reserve(fences.size());
     for (auto f : fences)
@@ -3027,7 +3007,7 @@ inline void reset_fences(std::vector<ref_t<fence_t>> fences) {
 
     if (!fences.size()) {
         DBG("No fences to wait for");
-        throw err_t(VK_ERROR_UNKNOWN);
+        throw vku::except_t(VK_ERROR_UNKNOWN);
     }
     vk_fences.reserve(fences.size());
     for (auto f : fences)
@@ -3818,7 +3798,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code) {
         case VKU_SPIRV_COMPUTE:   stage = GLSLANG_STAGE_COMPUTE;        break;
         default:
             DBG("Unknown shader stage type: %d", (uint32_t)stage);
-            throw err_t(VK_ERROR_UNKNOWN);
+            throw vku::except_t(VK_ERROR_UNKNOWN);
     }
 
     const glslang_input_t input = {
@@ -3845,7 +3825,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code) {
         DBG("debug_log: %s", glslang_shader_get_info_debug_log(shader));
         DBG("source_code: %s", input.code);
         glslang_shader_delete(shader);
-        throw err_t("GLSL preprocessing failed");
+        throw vku::except_t("GLSL preprocessing failed");
     }
 
     if (!glslang_shader_parse(shader, &input)) {
@@ -3854,7 +3834,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code) {
         DBG("%s", glslang_shader_get_info_debug_log(shader));
         DBG("%s", glslang_shader_get_preprocessed_code(shader));
         glslang_shader_delete(shader);
-        throw err_t("GLSL parsing failed");
+        throw vku::except_t("GLSL parsing failed");
     }
 
     glslang_program_t* program = glslang_program_create();
@@ -3865,7 +3845,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code) {
         DBG("%s", glslang_program_get_info_debug_log(program));
         glslang_program_delete(program);
         glslang_shader_delete(shader);
-        throw err_t("GLSL linking failed");
+        throw vku::except_t("GLSL linking failed");
     }
 
     glslang_program_SPIRV_generate(program, stage);
@@ -3889,7 +3869,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code) {
 
 inline void spirv_init() {
     if (!glslang_initialize_process()) {
-        throw err_t("Failed glslang_initialize_process");
+        throw vku::except_t("Failed glslang_initialize_process");
     }
 
     spirv_resources.max_lights = 32;
@@ -4015,7 +3995,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code) {
         case VKU_SPIRV_COMPUTE:   esh_stage = EShLangCompute;        break;
         default:
             DBG("Unknown shader stage type: %d", (uint32_t)stage);
-            throw err_t(VK_ERROR_UNKNOWN);
+            throw vku::except_t(VK_ERROR_UNKNOWN);
     }
     glslang::TShader shader(esh_stage);
     glslang::TProgram program;
@@ -4028,14 +4008,14 @@ inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code) {
     if (!shader.parse(&spirv_resources, 100, false, messages)) {
         DBG("Parse Failed(Log): [%s]", shader.getInfoLog());
         DBG("Parse Failed(Dbg): [%s]", shader.getInfoDebugLog());
-        throw err_t(VK_ERROR_UNKNOWN);
+        throw vku::except_t(VK_ERROR_UNKNOWN);
     }
 
     program.addShader(&shader);
     if (!program.link(messages)) {
         DBG("Link Failed(Log): [%s]", shader.getInfoLog());
         DBG("Link Failed(Dbg): [%s]", shader.getInfoDebugLog());
-        throw err_t(VK_ERROR_UNKNOWN);
+        throw vku::except_t(VK_ERROR_UNKNOWN);
     }
 
     spirv_t ret;
@@ -4170,10 +4150,14 @@ inline uint32_t find_memory_type(ref_t<device_t> dev,
     }
 
     DBG("Couldn't find suitable memory type");
-    throw err_t(VK_ERROR_UNKNOWN);
+    throw vku::except_t(VK_ERROR_UNKNOWN);
 }
 
-inline const char *vk_err_str(VkResult res) {
+inline std::string vk_err_str(vc::ret_t vk_err) {
+    return std::format("{}[{}]", vk_err_cstr(vk_err), (size_t)vk_err);
+}
+
+inline const char *vk_err_cstr(vc::ret_t res) {
     switch(res) {
         case VK_SUCCESS:
             return "VK_SUCCESS";

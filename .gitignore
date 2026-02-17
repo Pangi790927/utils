@@ -5,3 +5,8 @@
 *.log
 *.so
 *.exe
+
+# Colib is a symlink that must be configured to point to the real path, use:
+# linux:   ln -s ../../co-lib/colib.h colib.h
+# windows: New-Item -ItemType SymbolicLink -Path colib.h -Target "..\..\co-lib\colib.h"
+colib.*
