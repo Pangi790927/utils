@@ -9,10 +9,11 @@ namespace vku = vulkan_utils;
 namespace vc = virt_composer;
 
 vc::ref_t<vku::image_t> load_image(vc::ref_t<vku::cmdpool_t> cp, std::string path) {
+    DBG_SCOPE();
     int w, h, chans;
+    DBG("Loading rgba image: %s ", path.c_str());
     stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &chans, STBI_rgb_alpha);
 
-    /* TODO: some more logs around here */
     VkDeviceSize imag_sz = w*h*4;
     if (!pixels) {
         throw vku::except_t("Failed to load image");

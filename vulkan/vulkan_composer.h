@@ -1,19 +1,6 @@
 #ifndef VULKAN_COMPOSER_H
 #define VULKAN_COMPOSER_H
 
-/*! TODO:
- * 
- * - It is not at all clear what functions can be used in here
- * - This should be further split:
- *      1. The drawing part should be one, ie, those vku::ref_t thigs
- *      2. The lua part
- *      3. The config reading part (not the gpu defines, only the parsing logic)
- * - The functions that can be used should be clearly marked at the start of the code.
- * - There should be less global objects (none that do not define things) and the state should be
- * remembered in a state object. This object should be able to follow stages of completness.
- * (function definitions)
- */
-
 /*!
  * Core Objects and Functions:
  * ===========================
@@ -1228,7 +1215,7 @@ inline std::string get_file_string_content(const std::string& file_path_relative
                        (std::istreambuf_iterator<char>()));
 }
 
-inline bool build_pseudo_object_match(fkyaml::node& node) {
+inline bool build_pseudo_object_match(const std::string&, fkyaml::node& node) {
     if (node.is_mapping() && node.contains("m_shader_type")) {
         return true;
     }
@@ -1315,6 +1302,7 @@ inline uint32_t glfw_get_key(vku::ref_t<vku::window_t> window, uint32_t key) {
 }
 
 inline void internal_signal_close() {
+    /* TODO: do I really care about this? */
     /* TODO: set loop closed */
     DBG("TODO: set loop closed");
 }
@@ -1351,32 +1339,63 @@ inline void luaw_set_glfw_fields(vc::virt_state_t *vs);
 
 inline int register_meta(vc::virt_state_t *vs) {
     DBG_SCOPE();
-
     std::vector<luaL_Reg> vku_tab_funcs = {
-        {"glfw_pool_events",    vc::luaw_function_wrapper<glfw_pool_events>},
-        {"get_key",             vc::luaw_function_wrapper<glfw_get_key,
-                vc::ref_t<vku::window_t>, uint32_t>},
-        {"signal_close",        vc::luaw_function_wrapper<internal_signal_close>},
-        {"aquire_next_img",     vc::luaw_function_wrapper<internal_aquire_next_img,
-                vc::ref_t<vku::swapchain_t>, vc::ref_t<vku::sem_t>>},
-        {"submit_cmdbuff",      vc::luaw_function_wrapper<vku::submit_cmdbuff,
-                std::vector<std::pair<vc::ref_t<vku::sem_t>, vc::bm_t<VkPipelineStageFlagBits>>>,
-                vc::ref_t<vku::cmdbuff_t>, vc::ref_t<vku::fence_t>,
-                std::vector<vc::ref_t<vku::sem_t>>>},
-        {"present",             vc::luaw_function_wrapper<vku::present,
-                vc::ref_t<vku::swapchain_t>,
-                std::vector<vc::ref_t<vku::sem_t>>,
-                uint32_t>},
-        {"wait_fences",         vc::luaw_function_wrapper<vku::wait_fences,
-                std::vector<vc::ref_t<vku::fence_t>>>},
-        {"reset_fences",        vc::luaw_function_wrapper<vku::reset_fences,
-                std::vector<vc::ref_t<vku::fence_t>>>},
-        {"device_wait_handle",  vc::luaw_function_wrapper<internal_device_wait_handle,
-                vc::ref_t<vku::device_t>>},
-        {"copy_from_cpu_to_gpu",vc::luaw_function_wrapper<copy_from_cpu_to_gpu,
-                vc::ref_t<vku::buffer_t>, void *, size_t, size_t>},
-        {"copy_from_gpu_to_cpu",vc::luaw_function_wrapper<copy_from_gpu_to_cpu,
-                void *, vc::ref_t<vku::buffer_t>, size_t, size_t>},
+        {"glfw_pool_events", vc::luaw_function_wrapper<
+                /* FN:    */ glfw_pool_events
+        >},
+        {"get_key", vc::luaw_function_wrapper<
+                /* FN:    */ glfw_get_key,
+                /* PARAMS:*/ vc::ref_t<vku::window_t>,
+                             uint32_t
+        >},
+        {"signal_close", vc::luaw_function_wrapper<
+                /* FN:    */ internal_signal_close
+        >},
+        {"aquire_next_img", vc::luaw_function_wrapper<
+                /* FN:    */ internal_aquire_next_img,
+                /* PARAMS:*/ vc::ref_t<vku::swapchain_t>,
+                             vc::ref_t<vku::sem_t>
+        >},
+        {"submit_cmdbuff", vc::luaw_function_wrapper<
+                /* FN:    */ vku::submit_cmdbuff,
+                /* PARAMS:*/ std::vector<std::pair<vc::ref_t<vku::sem_t>,
+                             vc::bm_t<VkPipelineStageFlagBits>>>,
+                             vc::ref_t<vku::cmdbuff_t>,
+                             vc::ref_t<vku::fence_t>,
+                             std::vector<vc::ref_t<vku::sem_t>>
+        >},
+        {"present", vc::luaw_function_wrapper<
+                /* FN:    */ vku::present,
+                /* PARAMS:*/ vc::ref_t<vku::swapchain_t>,
+                             std::vector<vc::ref_t<vku::sem_t>>,
+                             uint32_t
+        >},
+        {"wait_fences", vc::luaw_function_wrapper<
+                /* FN:    */ vku::wait_fences,
+                /* PARAMS:*/ std::vector<vc::ref_t<vku::fence_t>>
+        >},
+        {"reset_fences", vc::luaw_function_wrapper<
+                /* FN:    */ vku::reset_fences,
+                /* PARAMS:*/ std::vector<vc::ref_t<vku::fence_t>>
+        >},
+        {"device_wait_handle", vc::luaw_function_wrapper<
+                /* FN:    */ internal_device_wait_handle,
+                /* PARAMS:*/ vc::ref_t<vku::device_t>
+        >},
+        {"copy_from_cpu_to_gpu", vc::luaw_function_wrapper<
+                /* FN:    */ copy_from_cpu_to_gpu,
+                /* PARAMS:*/ vc::ref_t<vku::buffer_t>,
+                             void *,
+                             size_t,
+                             size_t
+        >},
+        {"copy_from_gpu_to_cpu", vc::luaw_function_wrapper<
+                /* FN:    */ copy_from_gpu_to_cpu,
+                /* PARAMS:*/ void *,
+                             vc::ref_t<vku::buffer_t>,
+                             size_t,
+                             size_t
+        >},
     };
     ASSERT_FN(add_lua_tab_funcs(vs, vku_tab_funcs));
 
@@ -1441,6 +1460,8 @@ inline int register_meta(vc::virt_state_t *vs) {
     vc::add_lua_flag_mapping(vs, vc::vk_buffer_usage_flag_bits_from_str);
     vc::add_lua_flag_mapping(vs, vc::shader_stage_from_string);
     luaw_set_glfw_fields(vs);
+
+    ASSERT_FN(add_auto_builder_callback(vs, build_pseudo_object_match, build_pseudo_object_cbk));
 
     auto ret = add_named_builder_callback(vs,
         "vkc::vertex_input_desc_t",
