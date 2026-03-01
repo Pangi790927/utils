@@ -1,5 +1,6 @@
 
 #include <filesystem>
+#include <fstream>
 
 #define LUA_IMPL
 
@@ -17,15 +18,13 @@ namespace vc = virt_composer;
 
 /* Max number of named references objects */
 static constexpr const int MAX_NUMBER_OF_OBJECTS = 16384;
-// enum luaw_member_e {
-//     LUAW_MEMBER_FUNCTION,
-//     LUAW_MEMBER_OBJECT,
-// };
 
-// struct luaw_member_t {
-//     lua_CFunction fn;
-//     luaw_member_e member_type;
-// };
+
+/*! Holds information of a member, either a member funtion or a member object */
+struct luaw_member_t {
+    lua_CFunction fn;
+    luaw_member_e member_type;
+};
 
 /*! This holds the objects reference such that lua can use them */
 struct object_ref_t {
@@ -71,7 +70,7 @@ struct parser_state_t {
 
     parser_state_t(int table_size) : objects(table_size) {
         for (int i = table_size-1; i >= 1; i--)
-            ps.free_objects.push_back(i);
+            free_objects.push_back(i);
     }
 
     /* TODO: move this function from here, it doesn't belong here it is usefull only when
@@ -80,8 +79,8 @@ struct parser_state_t {
     /* TODO: this is stupid slow, must be made faster (create a clear interface of adding and
     removing objects and make get_new and append return the internal held update list) */
     std::vector<int> get_new(const parser_state_t &oth) {
-        std::set<int> free_objects_this(ps.free_objects.begin(), ps.free_objects.end());
-        std::set<int> free_objects_other(oth.ps.free_objects.begin(), oth.ps.free_objects.end());
+        std::set<int> free_objects_this(free_objects.begin(), free_objects.end());
+        std::set<int> free_objects_other(oth.free_objects.begin(), oth.free_objects.end());
 
         std::vector<int> new_other;
         std::set_difference(
@@ -105,8 +104,8 @@ struct parser_state_t {
 
     /* TODO: as for above: move it and make it faster */
     void append(const parser_state_t &oth) {
-        std::set<int> free_objects_this(ps.free_objects.begin(), ps.free_objects.end());
-        std::set<int> free_objects_other(oth.ps.free_objects.begin(), oth.ps.free_objects.end());
+        std::set<int> free_objects_this(free_objects.begin(), free_objects.end());
+        std::set<int> free_objects_other(oth.free_objects.begin(), oth.free_objects.end());
 
         std::vector<int> new_other;
         std::set_difference(
@@ -123,10 +122,10 @@ struct parser_state_t {
         );
 
         for (int idx : new_other) {
-            this->ps.objects[idx] = oth.ps.objects[idx];
-            this->ps.objects_map[oth.ps.objects[idx].name] = idx;
+            this->objects[idx] = oth.objects[idx];
+            this->objects_map[oth.objects[idx].name] = idx;
         }
-        this->ps.free_objects = std::vector<int>(free_objects_other.begin(), free_objects_other.end());
+        this->free_objects = std::vector<int>(free_objects_other.begin(), free_objects_other.end());
     }
 };
 
@@ -139,10 +138,6 @@ struct virt_state_t {
      * something like 'vc = require("virt_composer")' to use the objects/functions from inside Lua
      */
     int lua_table_idx;
-
-    /*! This is the index inside LUA_REGISTRYINDEX of the virtual state associated to the lua_State
-     */
-    int lua_vs_index;
 
     /*! Used to name anonymous objects for inside this state instance. */
     int64_t anonymous_increment = 0;
@@ -222,7 +217,16 @@ struct virt_state_t {
         {"SIZEOF_MAT_4x4D", sizeof(double)*4*4},
     };
 
-    std::vector<std::vector<luaL_Reg>> tab_funcs;
+    /*! Holds free functions (TODO:) */
+    std::vector<luaL_Reg> tab_funcs;
+
+    /*! This holds member functions and member objects getters */
+    std::vector<std::unordered_map<std::string, vc::luaw_member_t>> lua_class_members =
+            std::vector<std::unordered_map<std::string, vc::luaw_member_t>> {VIRT_TYPE_CNT};
+
+    /*! This holds member objects setters */
+    std::vector<std::unordered_map<std::string, lua_CFunction>> lua_class_member_setters =
+            std::vector<std::unordered_map<std::string, lua_CFunction>> {VIRT_TYPE_CNT};
 
     ~virt_state_t() {
         if (L) {
@@ -236,15 +240,9 @@ struct virt_state_t {
 static std::string app_path = std::filesystem::canonical("./");
 
 
-template <typename T, typename K>
-constexpr auto has(T&& data_struct, K&& key) {
-    return std::forward<T>(data_struct).find(std::forward<K>(key))
-            != std::forward<T>(data_struct).end();
-}
-
-static int internal_create_object(lua_State *L);
 static lua_State *luaw_init(vc::virt_state_t *vs);
-static int luaopen_vku(lua_State *L);
+static int internal_create_object(lua_State *L);
+static int luaopen_vc(lua_State *L);
  
 except_t::except_t(const std::string& str) {
     err_str = std::format(
@@ -258,6 +256,10 @@ except_t::except_t(const std::string& str) {
 
 
 std::shared_ptr<virt_state_t> create_state() {
+    /* You are not supposed to create state globaly, if you did that and it breaks, then that's on
+    you */
+    ASSERT_RET(nullptr, CHK_BOOL(VIRT_TYPES_INITIALIZED));
+
     auto vs = std::make_shared<virt_state_t>();
 
     ASSERT_RET(nullptr, CHK_PTR(vs->L = luaw_init(vs.get())));
@@ -305,18 +307,21 @@ err_e add_auto_builder_callback(vc::virt_state_t *vs,
         std::function<bool(const std::string&, fkyaml::node& node)> analyser,
         std::function<co::task_t(vc::virt_state_t *, const std::string&, fkyaml::node&)> builder)
 {
-    vs->object_cbks_t.push_back({analyser, builder});
+    vs->build_psudo_object_cbks.push_back({analyser, builder});
     return VC_ERROR_OK;
 }
 
-err_e add_lua_tab_funcs(virt_state_t *vs, const std::vector<luaL_Reg>& vku_tab_funcs) {
+err_e add_lua_tab_funcs(virt_state_t *vs, const std::vector<luaL_Reg>& vc_tab_funcs) {
+    /* TODO: */
     return VC_ERROR_OK;
 }
 
-err_e add_lua_flag_mapping(virt_state_t *vs, const std::map<lua_Integer, std::string> &mapping) {
+err_e add_lua_flag_mapping(virt_state_t *vs,
+        const std::vector<std::pair<lua_Integer, std::string>> &mapping)
+{
     auto L = vs->L;
     lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_table_idx);
-    for (auto& [k, v] : mapping) {
+    for (auto& [v, k] : mapping) {
         lua_pushinteger(L, v);
         lua_setfield(L, -2, k.c_str());
     }
@@ -341,8 +346,8 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
     vs->ps.objects_map[depend_name] = new_id;
     depend->cbks = std::make_shared<vo::object_cbks_t<vc::virt_traits_t>>();
     depend->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
-    vs->objects[new_id].obj = depend;
-    vs->objects[new_id].name = depend_name;
+    vs->ps.objects[new_id].obj = depend;
+    vs->ps.objects[new_id].name = depend_name;
 
     /* Second, awake all the ones waiting for the respective dependency */
     if (vc::has(vs->ps.wanted_objects, depend_name)) {
@@ -352,7 +357,7 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
     }
 }
 
-static std::pair<double, int> resolve_string_as_expression(std::string expr_str,
+static double resolve_string_as_expression(std::string expr_str,
         vc::virt_state_t *vs)
 {
     /* TODO: Try to resolve user-defined vars as well (may be bit hard to do, as I think I need to
@@ -368,7 +373,7 @@ static std::pair<double, int> resolve_string_as_expression(std::string expr_str,
         });
 
     int err = 0;
-    texpr::te_expr *expr = texpr::te_compile(expr_str.c_str(), vars.data(), vars.size(), &err);
+    texpr::te_expr *expr = texpr::te_compile(expr_str.c_str(), vars.data(), vars.size(), &err, nullptr);
 
     if (!expr)
         throw vc::except_t{std::format("Failed to parse expr: [{}] error: {}", expr_str, err)};
@@ -384,7 +389,7 @@ co::task<int64_t> resolve_int(vc::virt_state_t *vs, fkyaml::node& node) {
         co_return (co_await vc::depend_resolver_t<integer_t>(vs, node.as_str()))->value;
     if (node.is_string()) {
         /* Try to resolve an expression resulting in an integer: */
-        return std::round(resolve_string_as_expression(node.as_str(), vs));
+        co_return std::round(resolve_string_as_expression(node.as_str(), vs));
     }
     else
         co_return node.as_int();
@@ -396,7 +401,7 @@ co::task<double> resolve_float(vc::virt_state_t *vs, fkyaml::node& node) {
         co_return (co_await vc::depend_resolver_t<float_t>(vs, node.as_str()))->value;
     if (node.is_string()) {
         /* Try to resolve an expression resulting in an double: */
-        return resolve_string_as_expression(node.as_str(), vs);
+        co_return resolve_string_as_expression(node.as_str(), vs);
     }
     else
         co_return node.as_float();
@@ -409,6 +414,11 @@ co::task<std::string> resolve_str(vc::virt_state_t *vs, fkyaml::node& node) {
     co_return node.as_str();
 }
 
+/* TODO: So, this must be dependent on ps not vs, and also a lot of functions that call lua scripts
+must be changed to directly accept an ps instead of a vs. Or maybe not, all we need in fact is a
+way to create a snapshot and in case of error, to retreive the old status of the objects.
+    OF Course this invites UB if destructors/constructors are called. Maybe we need just to live
+with it? */
 co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
         const std::string& name, fkyaml::node& node)
 {
@@ -416,12 +426,26 @@ co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
         DBG("Error node: %s not a mapping", fkyaml::node::serialize(node).c_str());
         co_return nullptr;
     }
+
+    if (node["m_type"] == "vc::lua_function_t") {
+        /* lua_function has the same tag_name as the function name */
+        auto src = co_await resolve_str(vs, node["m_source"]);
+        auto obj = vc::lua_function_t::create(name, src);
+        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
+        co_return obj.to_related<vc::object_t>();
+    }
+    /* TODO: also add here lua_script_t, integer_t, float_t, string_t */
+
     for (auto &[match, cbk] : vs->build_object_cbks)
         if (match == node["m_type"].as_str())
             co_return co_await cbk(vs, name, node);
 
     DBG("Object m_type is not known: %s", node["m_type"].as_str().c_str());
     throw vc::except_t{std::format("Invalid object type: {}", node["m_type"].as_str())};
+}
+
+static bool starts_with(const std::string& a, const std::string& b) {
+    return a.size() >= b.size() && a.compare(0, b.size(), b) == 0;
 }
 
 static std::string get_file_string_content(const std::string& file_path_relative) {
@@ -447,7 +471,7 @@ static std::string get_file_string_content(const std::string& file_path_relative
 co::task_t build_pseudo_object(vc::virt_state_t *vs, const std::string& name, fkyaml::node& node) {
     for (auto &[match, cbk] : vs->build_psudo_object_cbks)
         if (match(name, node)) {
-            int ret = co_await cbk(vs, name, node)
+            int ret = co_await cbk(vs, name, node);
             ASSERT_ECOFN(ret);
             co_return 0;
         }
@@ -455,6 +479,12 @@ co::task_t build_pseudo_object(vc::virt_state_t *vs, const std::string& name, fk
     /* builtin integer resolution */
     if (node.is_integer()) {
         auto obj = integer_t::create(node.as_int());
+        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
+        co_return 0;
+    }
+
+    if (node.is_float_number()) {
+        auto obj = float_t::create(node.as_float());
         mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
         co_return 0;
     }
@@ -480,7 +510,7 @@ co::task_t build_pseudo_object(vc::virt_state_t *vs, const std::string& name, fk
 
         if (node.contains("m_source")) {
             auto obj = lua_script_t::create(node["m_source"].as_str());
-            mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
+            mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
             co_return 0;
         }
 
@@ -488,7 +518,7 @@ co::task_t build_pseudo_object(vc::virt_state_t *vs, const std::string& name, fk
             std::string source = get_file_string_content(node["m_source_path"].as_str());
 
             auto obj = lua_script_t::create(source);
-            mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
+            mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
             co_return 0;
         }
     }
@@ -506,10 +536,10 @@ static co::task_t build_schema(vc::virt_state_t *vs, fkyaml::node& root) {
 
     for (auto &[name, node] : root.as_map()) {
         if (!node.contains("m_type")) {
-            co_await co::sched(vkc::build_pseudo_object(vs, name.as_str(), node));
+            co_await co::sched(build_pseudo_object(vs, name.as_str(), node));
         }
         else {
-            co_await co::sched(vkc::build_object(vs, name.as_str(), node));
+            co_await co::sched(build_object(vs, name.as_str(), node));
         }
     }
 
@@ -517,6 +547,7 @@ static co::task_t build_schema(vc::virt_state_t *vs, fkyaml::node& root) {
 }
 
 err_e parse_config(vc::virt_state_t *vs, const char *path) {
+    DBG_SCOPE();
     std::ifstream file(path);
 
     try {
@@ -546,10 +577,10 @@ err_e parse_config(vc::virt_state_t *vs, const char *path) {
         return VC_ERROR_GENERIC;
     }
 
-    return VC_ERROR_NONE;
+    return VC_ERROR_OK;
 }
 
-static int luaopen_vku(lua_State *L) {
+static int luaopen_vc(lua_State *L) {
     int top = lua_gettop(L);
     auto vs = luaw_get_virt_state(L);
 
@@ -558,9 +589,9 @@ static int luaopen_vku(lua_State *L) {
     OBS: SEE The other todo */
 
     {
-        /* This metatable describes a generic vkc/vku object inside lua. Practically, it expososes
+        /* This metatable describes a generic vc object inside lua. Practically, it expososes
         member objects and functions to lua. */
-        luaL_newmetatable(L, "__vku_metatable");
+        luaL_newmetatable(L, "__vc_metatable");
 
         lua_pushcfunction(L, [](lua_State *L) {
             int id = luaw_from_user_data(lua_touserdata(L, -1)); /* an int, ok on unwind */
@@ -588,19 +619,19 @@ static int luaopen_vku(lua_State *L) {
             if (!o.obj) {
                 luaw_push_error(L, std::format("invalid object id: {}", id));
             }
-            vku::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
-            if (class_id < 0 || class_id >= VIRT_TYPE_CNT) {
-                luaw_push_error(L, std::format("invalid class id: {}", vku::to_string(class_id)));
+            vc::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
+            if (class_id < 0 || class_id >= (int)VIRT_TYPE_CNT) {
+                luaw_push_error(L, std::format("invalid class id: {}", vc::to_string(class_id)));
             }
-            if (!has(lua_class_members[class_id], member_name)) {
+            if (!has(vs->lua_class_members[class_id], member_name)) {
                 if (strcmp(member_name, "rebuild") == 0) try {
                     o.obj.rebuild();
                     return 0;
                 } catch (...) { return luaw_catch_exception(L); }
                 luaw_push_error(L, std::format("class id {} doesn't have member: {}",
-                        vku::to_string(class_id), member_name));
+                        vc::to_string(class_id), member_name));
             }
-            auto &member = lua_class_members[class_id][member_name];
+            auto &member = vs->lua_class_members[class_id][member_name];
             if (member.member_type == LUAW_MEMBER_FUNCTION) {
                 lua_pushcfunction(L, member.fn);
                 return 1;
@@ -629,15 +660,15 @@ static int luaopen_vku(lua_State *L) {
             if (!o.obj) {
                 luaw_push_error(L, std::format("invalid object id: {}", id));
             }
-            vku::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
-            if (class_id < 0 || class_id >= VIRT_TYPE_CNT) {
-                luaw_push_error(L, std::format("invalid class id: {}", vku::to_string(class_id)));
+            vc::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
+            if (class_id < 0 || class_id >= (int)VIRT_TYPE_CNT) {
+                luaw_push_error(L, std::format("invalid class id: {}", vc::to_string(class_id)));
             }
-            if (!has(lua_class_member_setters[class_id], member_name)) {
+            if (!has(vs->lua_class_member_setters[class_id], member_name)) {
                 luaw_push_error(L, std::format("class id {} doesn't have member: {}",
-                        vku::to_string(class_id), member_name));
+                        vc::to_string(class_id), member_name));
             }
-            auto &member = lua_class_member_setters[class_id][member_name];
+            auto &member = vs->lua_class_member_setters[class_id][member_name];
             return member(L);
         });
         lua_setfield(L, -2, "__newindex");
@@ -655,10 +686,10 @@ static int luaopen_vku(lua_State *L) {
                 luaw_push_error(L, std::format("invalid object id: {}", id));
             }
             DBG("tostr: %s", o.obj->to_string().c_str());
-            vku::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
-            if (class_id != VKC_TYPE_LUA_FUNCTION) {
-                luaw_push_error(L, std::format("invalid class id: {} is not VKC_TYPE_LUA_FUNCTION",
-                        vku::to_string(class_id)));
+            vc::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
+            if (class_id != VC_TYPE_LUA_FUNCTION) {
+                luaw_push_error(L, std::format("invalid class id: {} is not VC_TYPE_LUA_FUNCTION",
+                        vc::to_string(class_id)));
             }
             return o.obj.to_related<lua_function_t>()->call(L);
         });
@@ -688,54 +719,6 @@ static int luaopen_vku(lua_State *L) {
         });
         lua_setfield(L, -2, "__gc");
 
-        /* vku::window_t
-        ----------------------------------------------------------------------------------------- */
-
-        VKC_REG_MEMB(vku::window_t, m_name);
-        VKC_REG_MEMB(vku::window_t, m_width);
-        VKC_REG_MEMB(vku::window_t, m_height);
-
-        /* vku::instance_t
-        ----------------------------------------------------------------------------------------- */
-
-        VKC_REG_MEMB(vku::instance_t, m_app_name);
-        VKC_REG_MEMB(vku::instance_t, m_engine_name);
-        VKC_REG_MEMB(vku::instance_t, m_extensions);
-        VKC_REG_MEMB(vku::instance_t, m_layers);
-
-        /* vku::cmdbuff_t
-        ----------------------------------------------------------------------------------------- */
-
-        VKC_REG_FN(vku::cmdbuff_t, begin, bm_t<VkCommandBufferUsageFlagBits>);
-        VKC_REG_FN(vku::cmdbuff_t, begin_rpass, vku::ref_t<vku::framebuffs_t>, uint32_t);
-        VKC_REG_FN(vku::cmdbuff_t, bind_vert_buffs,
-                uint32_t, std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>>);
-        VKC_REG_FN(vku::cmdbuff_t, bind_desc_set,
-                bm_t<VkPipelineBindPoint>, vku::ref_t<vku::pipeline_t>, vku::ref_t<vku::desc_set_t>);
-        VKC_REG_FN(vku::cmdbuff_t, bind_idx_buff,
-                vku::ref_t<vku::buffer_t>, uint64_t, bm_t<VkIndexType>);
-        VKC_REG_FN(vku::cmdbuff_t, draw, vku::ref_t<vku::pipeline_t>, uint64_t);
-        VKC_REG_FN(vku::cmdbuff_t, draw_idx, vku::ref_t<vku::pipeline_t>, uint64_t);
-        VKC_REG_FN(vku::cmdbuff_t, end_rpass);
-        VKC_REG_FN(vku::cmdbuff_t, end);
-        luaw_register_member_function<vku::cmdbuff_t, &vku::cmdbuff_t::end>("end_begin");
-        VKC_REG_FN(vku::cmdbuff_t, reset);
-        VKC_REG_FN(vku::cmdbuff_t, bind_compute, vku::ref_t<vku::compute_pipeline_t>);
-        VKC_REG_FN(vku::cmdbuff_t, dispatch_compute, uint32_t, uint32_t, uint32_t);
-
-        /* vkc::cpu_buffer_t
-        ----------------------------------------------------------------------------------------- */
-        VKC_REG_FN(vkc::cpu_buffer_t, data);
-        VKC_REG_FN(vkc::cpu_buffer_t, size);
-
-        /* all others:
-        ----------------------------------------------------------------------------------------- */
-        for (auto &cbk : cbk_register_members)
-            cbk();
-
-        /* Done objects
-        ----------------------------------------------------------------------------------------- */
-
         lua_pushstring(L, "locked");
         lua_setfield(L, -2, "__metatable");
 
@@ -746,19 +729,17 @@ static int luaopen_vku(lua_State *L) {
     ASSERT_FN(CHK_BOOL(top == lua_gettop(L))); /* sanity check */
 
     {
+        /* TODO: recheck the old registration functions */
         /* Registers the vulkan_utils library and some standalone functions from vku(vulkan utils)
         or vkc(vulkan composer) */
-        vku_tab_funcs.push_back({NULL, NULL});
+        vs->tab_funcs.push_back({NULL, NULL});
         luaL_checkversion(L);
-        lua_createtable(L, 0, vku_tab_funcs.size() - 1);
-        luaL_setfuncs(L, vku_tab_funcs.data(), 0);
+        lua_createtable(L, 0, vs->tab_funcs.size() - 1);
+        luaL_setfuncs(L, vs->tab_funcs.data(), 0);
 
         /* Registers this lua table for later use */
         vs->lua_table_idx = luaL_ref(L, LUA_REGISTRYINDEX);
         lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_table_idx);
-
-        /* Registers glfw enum in this library */
-        luaw_set_glfw_fields(L); /* This adds all glfw enums tokens */
 
         /* Registers objects loaded from the yaml confing as objects in the library */
         auto vs = luaw_get_virt_state(L);
@@ -772,26 +753,6 @@ static int luaopen_vku(lua_State *L) {
             luaL_setmetatable(L, "__vku_metatable");
             lua_setfield(L, -2, k.c_str());
         }
-
-        /* Registers vulkan enums in the lua library */
-        register_flag_mapping(L, vk_format_from_str);
-        register_flag_mapping(L, vk_vertex_input_rate_from_str);
-        register_flag_mapping(L, vk_shader_stage_flag_bits_from_str);
-        register_flag_mapping(L, vk_descriptor_type_from_str);
-        register_flag_mapping(L, vk_pipeline_stage_flag_bits_from_str);
-        register_flag_mapping(L, vk_index_type_from_str);
-        register_flag_mapping(L, vk_pipeline_bind_point_from_str);
-        register_flag_mapping(L, vk_command_buffer_usage_flag_bits_from_str);
-        register_flag_mapping(L, vk_image_aspect_flag_bits_from_str);
-        register_flag_mapping(L, vk_primitive_topology_from_str);
-        register_flag_mapping(L, vk_memory_property_flag_bits_from_str);
-        register_flag_mapping(L, vk_sharing_mode_from_str);
-        register_flag_mapping(L, vk_buffer_usage_flag_bits_from_str);
-        register_flag_mapping(L, shader_stage_from_string);
-        register_flag_mapping(L, vkc_constant_sizes_from_string);
-
-        for (auto &cbk : cbk_register_mapping)
-            cbk(L);
     }
 
     DBG("top: %d gettop: %d", top, lua_gettop(L));
@@ -811,7 +772,7 @@ static lua_State *luaw_init(vc::virt_state_t *vs) {
     lua_pushlightuserdata(L, vs);
     lua_settable(L, LUA_REGISTRYINDEX);
 
-    luaL_requiref(L, "vulkan_utils", luaopen_vku, 1);      lua_pop(L, 1);
+    luaL_requiref(L, "virt_composer", luaopen_vc, 1);      lua_pop(L, 1);
     luaL_requiref(L, LUA_GNAME, luaopen_base, 1);          lua_pop(L, 1);
     luaL_requiref(L, LUA_LOADLIBNAME, luaopen_package, 1); lua_pop(L, 1);
     luaL_requiref(L, LUA_COLIBNAME, luaopen_coroutine, 1); lua_pop(L, 1);
@@ -825,22 +786,6 @@ static lua_State *luaw_init(vc::virt_state_t *vs) {
     /* We don't want lua to access our system, so we intentionally don't include those */
     // luaL_requiref(L, LUA_IOLIBNAME, luaopen_io, 1); lua_pop(L, 1);
     // luaL_requiref(L, LUA_OSLIBNAME, luaopen_os, 1); lua_pop(L, 1);
-
-    // if (!has(vs->objects_map, "lua_script")) {
-    //     DBG("Config didn't provide a starter script to execute");
-    //     return nullptr;
-    // }
-    // auto start_script = vs->objects[vs->objects_map["lua_script"]].obj.to_related<lua_script_t>();
-    // if (luaL_loadstring(L, start_script->content.c_str()) != LUA_OK) {
-    //     DBG("LUA Load Failed: \n%s", lua_tostring(L, -1));
-    //     lua_close(L);
-    //     return nullptr;
-    // }
-    // if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-    //     DBG("LUA Exec Failed: \n%s", lua_tostring(L, -1));
-    //     lua_close(L);
-    //     return nullptr;
-    // }
  
     return L;
 }
@@ -875,20 +820,80 @@ int luaw_catch_exception(lua_State *L) {
 }
 
 vc::virt_state_t *luaw_get_virt_state(lua_State *L) {
-    lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_vs_idx);
+    /* TODO: set/get lua_vs from a named entry inside the registry index */
+    lua_pushstring(L, "virt_state");
+    lua_gettable(L, LUA_REGISTRYINDEX);
     auto ptr = (vc::virt_state_t *)lua_touserdata(L, -1);
     lua_pop(L, 1);
     return ptr;
 }
 
-vc::ref_t<vc::object_t> luaw_get_object_at_index(vc::virt_state_t *vs, ssize_t index) {
-    if (index <= 0 && index >= vs->ps.objects.size()) {
-        return nullptr; /* 0 is also invalid from our point of view */
-    }
-    return vs->ps.objects[obj_index].obj;
+lua_State *luaw_get_lua_state(vc::virt_state_t *vs) {
+    return vs->L;
 }
 
+vc::ref_t<vc::object_t> luaw_get_object_at_index(vc::virt_state_t *vs, ssize_t index) {
+    if (index <= 0 && index >= (ssize_t)vs->ps.objects.size()) {
+        return nullptr; /* 0 is also invalid from our point of view */
+    }
+    return vs->ps.objects[index].obj;
+}
+
+void set_lua_class_member(virt_state_t *vs, object_type_e type, const char *member_name,
+        lua_CFunction fn, luaw_member_e member_type)
+{
+    DBG("set_lua_class_member: %s type: %s[%d] memb_type: %s vs[%p] fn[%p]",
+            member_name, type.name(), type.value(),
+            member_type == LUAW_MEMBER_FUNCTION ? "'function'" : "'object'", vs, fn);
+    vs->lua_class_members[type][member_name] = luaw_member_t{
+        .fn = fn,
+        .member_type = member_type
+    };
+}
+
+void set_class_member_setter(virt_state_t *vs, object_type_e type, const char *member_name,
+        lua_CFunction fn)
+{
+    DBG("set_class_member_setter: %s type: %s[%d] vs[%p] fn[%p]",
+            member_name, type.name(), type.value(), vs, fn);
+    vs->lua_class_member_setters[type][member_name] = fn;
+}
+
+int push_vc_object(lua_State *L, ref_t<object_t> object) {
+    auto vs = luaw_get_virt_state(L);
+    if (!object->cbks) {
+        DBG("internal_error: How did this object get known to virt_composer ?!");
+        return -1;
+    }
+    if (!object->cbks->usr_ptr) {
+        /* So this object was no longer known by the lua side, we must resurect it */
+
+        /* We first get it a new id */
+        int new_id = vs->ps.free_objects.back();
+        vs->ps.free_objects.pop_back();
+
+        /* make it reference it's own id */
+        object->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
+
+        /* add it's lua-name-mapping and it's lua-id-mapping */
+        std::string name = new_anon_name(vs);
+        vs->ps.objects_map[name] = new_id;
+        vs->ps.objects[new_id].obj = object;
+        vs->ps.objects[new_id].name = name;
+    }
+    int obj_id = (intptr_t)object->cbks->usr_ptr.get();
+    if (obj_id >= (int)vs->ps.objects.size() || obj_id < 0) {
+        DBG("internal_error: Integrity check failed");
+        return -1;
+    }
+    lua_pushlightuserdata(L, luaw_to_user_data(obj_id));
+    luaL_setmetatable(L, "__vc_metatable");
+    return 0;
+}
+
+
 void luaw_push_error(lua_State *L, const std::string& err_str) {
+    DBG("Throwing error: %s", err_str.c_str());
     lua_Debug ar;
     std::string context;
     int i = 2;
@@ -925,7 +930,7 @@ void luaw_push_error(lua_State *L, const std::string& err_str) {
 
 /* Lua is interesting... It seems that I can use next(#t) or next(nil) to check if the table is an
 array or a dictionary + lua_rawlen to check for both. yadayada, I need to write it in code */
-fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
+static fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
     index = lua_absindex(L, index);
     if (lua_isboolean(L, index)) {
         fkyaml::node ret(fkyaml::node_type::BOOLEAN);
@@ -1030,7 +1035,7 @@ fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
     return fkyaml::node{};
 }
 
-inline int internal_create_object(lua_State *L) {
+static int internal_create_object(lua_State *L) {
     const char *name = lua_tostring(L, 1);
     if (!name) {
         luaw_push_error(L, "Error at index 1: first parameter must be a string, the tag of the "
@@ -1044,16 +1049,16 @@ inline int internal_create_object(lua_State *L) {
     remain alive are those that where backed up by g_rs and if we don't error out, at the end we
     append the differences to g_rs. */
     auto vs = luaw_get_virt_state(L);
-    vc::virt_state_t ref_state = *vs;
+    vc::virt_state_t tmp_vs = *vs;
 
     DBG("create_object: %s", fkyaml::node::serialize(object_description).c_str());
     auto pool = co::create_pool();
 
     if (!object_description.contains("m_type")) {
-        pool->sched(vkc::build_pseudo_object(&ref_state, name, object_description));
+        pool->sched(vc::build_pseudo_object(&tmp_vs, name, object_description));
     }
     else {
-        pool->sched(build_object(&ref_state, name, object_description));
+        pool->sched(build_object(&tmp_vs, name, object_description));
     }
 
     if (pool->run() != co::RUN_OK) {
@@ -1061,9 +1066,9 @@ inline int internal_create_object(lua_State *L) {
         lua_error(L);
     }
 
-    if (ref_state.wanted_objects.size()) {
+    if (tmp_vs.ps.wanted_objects.size()) {
         std::string unknown_objects = "[";
-        for (auto &[k, v]: ref_state.wanted_objects) {
+        for (auto &[k, v]: tmp_vs.ps.wanted_objects) {
             unknown_objects += std::format("{}, ", k);
         }
         unknown_objects += "]";
@@ -1071,12 +1076,12 @@ inline int internal_create_object(lua_State *L) {
         lua_error(L);
     }
 
-    if (!has(ref_state.objects_map, name)) {
+    if (!has(tmp_vs.ps.objects_map, name)) {
         luaw_push_error(L, "internal_error: Object is not found after creation");
         lua_error(L);
     }
 
-    auto new_idx = vs->get_new(ref_state);
+    auto new_idx = vs->ps.get_new(tmp_vs.ps);
 
     DBG("Getting lua table...");
 
@@ -1084,21 +1089,23 @@ inline int internal_create_object(lua_State *L) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_table_idx);
 
     for (int id : new_idx) {
-        if (!ref_state.objects[id].obj) {
+        if (!tmp_vs.ps.objects[id].obj) {
             DBG("Null user object?");
         }
-        DBG("Registering object: %s with id: %d", ref_state.objects[id].name.c_str(), id);
+        DBG("Registering object: %s with id: %d", tmp_vs.ps.objects[id].name.c_str(), id);
         /* this makes vulkan_utils.key = object_id and sets it's metadata */
         lua_pushlightuserdata(L, luaw_to_user_data(id));
         luaL_setmetatable(L, "__vku_metatable");
-        lua_setfield(L, -2, ref_state.objects[id].name.c_str());
+        lua_setfield(L, -2, tmp_vs.ps.objects[id].name.c_str());
     }
 
     lua_getfield(L, -1, name);
     lua_remove(L, -2); /* pops vulkan_utils table */
 
     /* actualize the global state */
-    vs->append(ref_state);
+    vs->ps.append(tmp_vs.ps);
+
+    /*TODO: make sure old vs and new vs have the same data at the end of the day */
 
     /* Eventual errors are catched outside of this function */
     return 1;
@@ -1285,62 +1292,6 @@ inline int internal_create_object(lua_State *L) {
 //             &luaw_member_setter_object_wrapper<VkuT, member_ptr>;
 // }
 
-// #define VKC_REG_MEMB(obj_type, memb)            \
-// vulkan_composer::luaw_register_member_object<   \
-// /* self        */   obj_type,                   \
-// /* member      */   &obj_type::memb>            \
-// /* member name */   (#memb)
-
-// #define VKC_REG_FN(obj_type, fn, ...)           \
-// vulkan_composer::luaw_register_member_function< \
-// /* self     */  obj_type,                       \
-// /* function */  &obj_type::fn,                  \
-// /* params   */  ##__VA_ARGS__>                  \
-// /* fn name  */  (#fn)
-
-// inline void glfw_pool_events() {
-//     glfwPollEvents();
-// }
-
-// inline uint32_t glfw_get_key(vku::ref_t<vku::window_t> window, uint32_t key) {
-//     if (!window)
-//         throw vc::except_t("Window parameter can't be null");
-//     return glfwGetKey(window->get_window(), key);
-// }
-
-// inline void internal_signal_close() {
-//     /* TODO: set loop closed */
-//     DBG("TODO: set loop closed");
-// }
-
-// inline uint32_t internal_aquire_next_img(
-//         vku::ref_t<vku::swapchain_t> swc, vku::ref_t<vku::sem_t> sem)
-// {
-//     uint32_t ret;
-//     vku::aquire_next_img(swc, sem, &ret);
-//     return ret;
-// }
-
-// inline uint32_t internal_device_wait_handle(vku::ref_t<vku::device_t> dev) {
-//     return vkDeviceWaitIdle(dev->vk_dev);
-// }
-
-// inline int copy_from_cpu_to_gpu(vku::ref_t<vku::buffer_t> dst, void *src,
-//         size_t len, size_t off)
-// {
-//     (void)dst, void(src), void(len), void(off);
-//     DBG("TODO: transfer cpu->gpu");
-//     return 0;
-// }
-
-// inline int copy_from_gpu_to_cpu(void *dst, vku::ref_t<vku::buffer_t> src,
-//         size_t len, size_t off)
-// {
-//     (void)dst, void(src), void(len), void(off);
-//     DBG("TODO: transfer gpu->cpu");
-//     return 0;
-// }
-
 // static std::vector<luaL_Reg> vku_tab_funcs = {
 //     {"glfw_pool_events",    luaw_function_wrapper<glfw_pool_events>},
 //     {"get_key",             luaw_function_wrapper<glfw_get_key,
@@ -1435,6 +1386,110 @@ inline int internal_create_object(lua_State *L) {
 //     callback(); // This would be the place where we call Lua and it calls us back
 //     DBG("After the callback");
 //     co_return 0;
+// }
+
+// #define LUA_IMPL
+// #include "debug.h"
+// #include "minilua.h"
+
+// int ns_index = -1;
+
+// int exec_string(lua_State *L, const char *str) {
+//     int ret = luaL_loadstring(L, str);
+//     if (ret != LUA_OK) {
+//         DBG("LUA Load Failed: \n%s", lua_tostring(L, -1));
+//         return -1;
+//     }
+
+//     if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+//         DBG("LUA Exec Failed: \n%s", lua_tostring(L, -1));
+//         return -1;
+//     }
+
+//     return 0;
+// }
+
+// static int luaopen_ns(lua_State *L) {
+//     {
+//         luaL_newmetatable(L, "__vc_ns_metatable");
+
+//         /* params: 1.namespace table, 2.key -> returns: 1.value */
+//         lua_pushcfunction(L, [](lua_State *L) {
+//             DBG("__index: %d", lua_gettop(L));
+//             const char *member_name = lua_tostring(L, -1);
+//             DBG("member_name: %s", member_name);
+
+//             if (exec_string(L, R"____(
+//                     ns.obj1234 = "ns.obj1234"
+//                     ns.obj1235 = "ns.obj1235"
+//                     ns.obj1236 = "ns.obj1236"
+//                     ns.obj1238 = "ns.obj1238"
+//                     ns.obj1239 = "ns.obj1239"
+//                     )____") < 0)
+//             {
+//                 lua_pushstring(L, "Error In string exec!");
+//                 lua_error(L);
+//             }
+
+//             auto val = std::string("resolved_member_name=") + member_name;
+//             lua_pushstring(L, val.c_str());
+//             return 1;
+//         });
+//         lua_setfield(L, -2, "__index");
+
+//         lua_pushstring(L, "locked");
+//         lua_setfield(L, -2, "__metatable");
+
+//         lua_pop(L, 1); /* pop luaL_newmetatable */
+//     }
+
+//     {
+//         luaL_checkversion(L);
+//         lua_createtable(L, 0, -1);
+//         luaL_setmetatable(L, "__vc_ns_metatable");
+//         ns_index = luaL_ref(L, LUA_REGISTRYINDEX);
+//         lua_rawgeti(L, LUA_REGISTRYINDEX, ns_index);
+//         return 1;
+//     }
+// }
+
+// int main(int argc, char const *argv[])
+// {
+//     lua_State *L = luaL_newstate();
+//     if (L == NULL) {
+//         DBG("Failed to init lua");
+//         return -1;
+//     }
+
+//     luaL_requiref(L, "namespace", luaopen_ns, 1);      lua_pop(L, 1);
+//     luaL_requiref(L, LUA_GNAME, luaopen_base, 1);          lua_pop(L, 1);
+//     luaL_requiref(L, LUA_LOADLIBNAME, luaopen_package, 1); lua_pop(L, 1);
+//     luaL_requiref(L, LUA_COLIBNAME, luaopen_coroutine, 1); lua_pop(L, 1);
+//     luaL_requiref(L, LUA_TABLIBNAME, luaopen_table, 1);    lua_pop(L, 1);
+//     luaL_requiref(L, LUA_STRLIBNAME, luaopen_string, 1);   lua_pop(L, 1);
+//     luaL_requiref(L, LUA_MATHLIBNAME, luaopen_math, 1);    lua_pop(L, 1);
+//     luaL_requiref(L, LUA_UTF8LIBNAME, luaopen_utf8, 1);    lua_pop(L, 1);
+//     luaL_requiref(L, LUA_DBLIBNAME, luaopen_debug, 1);     lua_pop(L, 1);
+
+//     ASSERT_FN(exec_string(L, R"____(
+// ns = require("namespace")
+
+// function f()
+//     print("From f()")
+// end
+
+// f()
+// print("From script")
+
+// print(ns.obj1234)
+// print(ns.obj1235)
+// print(ns.obj1236)
+// print(ns.obj1237)
+// print(ns.obj1238)
+// print(ns.obj1239)
+
+// )____"));
+//     return 0;
 // }
 
 } /* namespace virt_composer */

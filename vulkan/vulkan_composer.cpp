@@ -3,7 +3,12 @@
 #include "vulkan_composer.h"
 #include <stb_image.h>
 
-virt_composer::ref_t<vulkan_utils::image_t> load_image(auto cp, std::string path) {
+namespace vulkan_composer {
+
+namespace vku = vulkan_utils;
+namespace vc = virt_composer;
+
+vc::ref_t<vku::image_t> load_image(vc::ref_t<vku::cmdpool_t> cp, std::string path) {
     int w, h, chans;
     stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &chans, STBI_rgb_alpha);
 
@@ -19,4 +24,6 @@ virt_composer::ref_t<vulkan_utils::image_t> load_image(auto cp, std::string path
     stbi_image_free(pixels);
 
     return img;
+}
+
 }

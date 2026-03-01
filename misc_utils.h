@@ -150,21 +150,21 @@ struct compile_counter {
 template<typename UniqueTag, auto Id = int{}, typename = decltype([]{})>
 consteval auto compile_max_id() {
     if constexpr (not compile_counter<UniqueTag, Id>::exists_non_generating(Id))
-        return Id;
+        return UniqueTag::off + Id;
     else
         return compile_max_id<UniqueTag, Id + 1>();
 }
 template<typename UniqueTag, auto Id = int{}, typename = decltype([]{})>
 consteval auto compile_unique_id() {
     if constexpr (not compile_counter<UniqueTag, Id>::exists(Id))
-        return Id;
+        return UniqueTag::off + Id;
     else
         return compile_unique_id<UniqueTag, Id + 1>();
 }
 #pragma GCC diagnostic pop
 
 /* Example for the above example, you can use whatever type as a tag.  */
-struct compile_counter_example_tag_t;
+struct compile_counter_example_tag_t { static constexpr int off = 0; };
 static_assert(compile_unique_id<compile_counter_example_tag_t>() == 0);
 static_assert(compile_unique_id<compile_counter_example_tag_t>() == 1);
 static_assert(compile_unique_id<compile_counter_example_tag_t>() == 2);

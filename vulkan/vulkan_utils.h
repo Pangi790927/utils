@@ -179,13 +179,6 @@ inline void copy_buff(
 
 /* To string for own enums: */
 inline std::string to_string(vku_shader_stage_e stage);
-inline std::string to_string(object_type_e type);
-
-/* To string for own objects: */
-template <typename T>
-inline std::string to_string(ref_t<T> ref);
-template <typename T>
-inline std::string to_string(const object_t& ref);
 inline std::string to_string(const vertex_input_desc_t& input_desc);
 
 /* To string for external types */
@@ -3119,20 +3112,6 @@ inline std::string to_string(vku_shader_stage_e stage) {
         case VKU_SPIRV_TESS_EVAL: return "VKU_SPIRV_TESS_EVAL";
     }
     return "VKU_UNKNOWN_SHADER_STAGE";
-}
-
-inline std::string to_string(object_type_e type) {
-    return type.name();
-}
-
-template <typename T>
-inline std::string to_string(ref_t<T> ref) {
-    return "ref: " + ref->to_string();
-}
-
-template <typename T>
-inline std::string to_string(const object_t& ref) {
-    return ref.to_string();
 }
 
 inline std::string to_string(const vertex_input_desc_t& m_input_desc) {

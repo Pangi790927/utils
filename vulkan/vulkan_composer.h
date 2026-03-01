@@ -791,41 +791,10 @@
  *     - sampler: Reference to an img_sampl_t object to bind.
  *
  * 
- * vkc::vertex_input_desc_t
- * ------------------------
- *
- * Description: Represents a Vulkan vertex input description, including the binding 
- * and attribute layouts. Wraps a vku::vertex_input_desc_t structure containing the 
- * binding description (stride, input rate) and attribute descriptions (format, 
- * location, offset, etc.).
- *
- * Member functions:
- * - to_string(): Returns a formatted string showing the binding, stride, input rate, 
- *   and attribute descriptions.
- *
- * TODO: more clear: Init: create(vid)
- *   - Parameters:
- *     - vid: A vku::vertex_input_desc_t object describing the vertex input layout.
- *
- * Notes:
- * - Serves as a reusable object to describe vertex buffer layout for pipeline creation.
+
  * 
  * 
- * vkc::binding_t
- * --------------
- *
- * Description: Represents a generic descriptor set binding in Vulkan. 
- * This object wraps a VkDescriptorSetLayoutBinding structure, which defines 
- * the binding index, descriptor type, number of descriptors, and shader stage flags.
- *
- * Init: create(bd)
- *   - Parameters:
- *     - bd: A VkDescriptorSetLayoutBinding structure describing the binding.
- *
- * Notes:
- * - Serves as a base or standalone representation for descriptor set bindings.
- * - Can be used to initialize more specific binding types such as buffer or 
- *   sampler bindings.
+
  * 
  * 
  * vkc::desc_pool_t
@@ -889,122 +858,6 @@
  *   binding_desc_set_t::binding_desc_t and call update() on the desc_set_t. Alternatively,
  *   calling update() on the binding_desc_set_t itself also works, as desc_set_t depends
  *   on it and will propagate the changes automatically.
- * 
- *
- * vkc::lua_function_t
- * -------------------
- *
- * Description: Represents a C++ function exposed to Lua. Can be called from Lua scripts 
- * using a Lua state, allowing integration of native C++ callbacks into Lua code.
- *
- * Members:
- * - m_name: Name of the function as seen in Lua.
- * - m_source: Source or context of the function (e.g., shared object path or C++ module).
- *
- * Member functions:
- * - call(L): Executes the C++ callback using a given Lua state.
- *
- * Init: create(name, source)
- *   - Parameters:
- *     - name: Name of the function in Lua.
- *     - source: Source or context of the function.
- * 
- * 
- * vkc::lua_script_t
- * -----------------
- *
- * Description: Holds a Lua script as a string. Can be loaded or executed from C++ 
- * code using a Lua state, enabling scripting functionality.
- *
- * Members:
- * - content: The text of the Lua script.
- *
- * Init: create(content)
- *   - Parameters:
- *     - content: The Lua script source code as a string.
- * 
- * 
- * vkc::integer_t
- * --------------
- *
- * Description: Wraps a 64-bit integer for bookkeeping or parameter storage within the 
- * Vulkan wrapper framework. Useful for tracking values in a reference-managed system.
- *
- * Members:
- * - value: The stored 64-bit integer.
- *
- * Init: create(value)
- *   - Parameters:
- *     - value: Initial integer value.
- * 
- * 
- * vkc::float_t
- * ------------
- *
- * Description: Wraps a double-precision floating-point value for bookkeeping or 
- * parameter storage within the Vulkan wrapper framework. Useful for tracking values 
- * in a reference-managed system.
- *
- * Members:
- * - value: The stored double-precision floating-point number.
- *
- * Member functions:
- * (none specific; access value directly)
- *
- * Init: create(value)
- *   - Parameters:
- *     - value: Initial floating-point value.
- * 
- * 
- * vkc::string_t
- * -------------
- *
- * Description: Wraps a standard string for bookkeeping or parameter storage within 
- * the Vulkan wrapper framework. Useful for managing text values in a reference-managed 
- * system.
- *
- * Members:
- * - value: The stored string.
- *
- * Init: create(value)
- *   - Parameters:
- *     - value: Initial string content.
- * 
- * 
- * vkc::cpu_buffer_t
- * -----------------
- *
- * Description: Represents a CPU-side memory buffer. Can be used for passing data between Lua
- * scripts and C++ callbacks, or for staging data to  and from Vulkan buffers. Essentially,
- * this object wraps a byte array.
- *
- * Member functions:
- * - data(): Returns a pointer to the buffer data.
- * - size(): Returns the size of the buffer.
- *
- * Init: create(sz)
- *   - Parameters:
- *     - sz: Initial size of the buffer in bytes
- *
- *
- * vkc::spirv_t
- * ------------
- * 
- * Description: Wraps a SPIR-V shader module representation. Stores the SPIR-V bytecode 
- * along with metadata (type, stage, etc.) and allows it to be passed around in the Vulkan 
- * framework or used for shader module creation.
- *
- * Members:
- * - spirv: The SPIR-V representation, including type and bytecode content.
- *
- * Member functions:
- * - to_string(): Returns a formatted string showing the SPIR-V type and a hex dump of the content.
- *
- * TODO: fix: Init: create(spirv)
- *   - Parameters:
- *     - spirv: The SPIR-V object containing bytecode and type information.
- * 
- * 
  */
 
 /*! @file This file will be used to auto-initialize Vulkan. This file will describe the structure
@@ -1021,10 +874,6 @@ vulkan_composer would stay better in a CPP file) */
 #include "minilua.h"
 #include "demangle.h"
 #include "co_utils.h"
-
-/* TODO: this also needs to stay in an implementation file */
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
 
 #include <filesystem>
 
@@ -1056,6 +905,68 @@ enum vkc_error_e : int32_t {
     VKC_ERROR_FAILED_LUA_EXEC = -8,
 };
 
+namespace virt_composer {
+
+extern inline std::unordered_map<std::string, VkBufferUsageFlagBits>
+        vk_buffer_usage_flag_bits_from_str;
+
+extern inline std::unordered_map<std::string, VkSharingMode>
+        vk_sharing_mode_from_str;
+
+extern inline std::unordered_map<std::string, VkMemoryPropertyFlagBits>
+        vk_memory_property_flag_bits_from_str;
+
+extern inline std::unordered_map<std::string, VkPrimitiveTopology>
+        vk_primitive_topology_from_str;
+
+extern inline std::unordered_map<std::string, VkImageAspectFlagBits>
+        vk_image_aspect_flag_bits_from_str;
+
+extern inline std::unordered_map<std::string, VkCommandBufferUsageFlagBits>
+        vk_command_buffer_usage_flag_bits_from_str;
+
+extern inline std::unordered_map<std::string, VkPipelineBindPoint>
+        vk_pipeline_bind_point_from_str;
+
+extern inline std::unordered_map<std::string, VkIndexType>
+        vk_index_type_from_str;
+
+extern inline std::unordered_map<std::string, VkPipelineStageFlagBits>
+        vk_pipeline_stage_flag_bits_from_str;
+
+extern inline std::unordered_map<std::string, VkFormat>
+        vk_format_from_str;
+
+extern inline std::unordered_map<std::string, VkVertexInputRate>
+        vk_vertex_input_rate_from_str;
+
+extern inline std::unordered_map<std::string, VkShaderStageFlagBits>
+        vk_shader_stage_flag_bits_from_str;
+
+extern inline std::unordered_map<std::string, VkDescriptorType>
+        vk_descriptor_type_from_str;
+
+extern inline std::unordered_map<std::string, vku_shader_stage_e>
+        shader_stage_from_string;
+
+template <> inline VkBufferUsageFlagBits get_enum_val<VkBufferUsageFlagBits>(fkyaml::node &n);
+template <> inline VkSharingMode get_enum_val<VkSharingMode>(fkyaml::node &n);
+template <> inline VkMemoryPropertyFlagBits get_enum_val<VkMemoryPropertyFlagBits>(fkyaml::node &n);
+template <> inline VkPrimitiveTopology get_enum_val<VkPrimitiveTopology>(fkyaml::node &n);
+template <> inline VkImageAspectFlagBits get_enum_val<VkImageAspectFlagBits>(fkyaml::node &n);
+template <> inline VkCommandBufferUsageFlagBits get_enum_val<VkCommandBufferUsageFlagBits>(
+        fkyaml::node &n);
+template <> inline VkPipelineBindPoint get_enum_val<VkPipelineBindPoint>(fkyaml::node &n);
+template <> inline VkIndexType get_enum_val<VkIndexType>(fkyaml::node &n);
+template <> inline VkPipelineStageFlagBits get_enum_val<VkPipelineStageFlagBits>(fkyaml::node &n);
+template <> inline VkFormat get_enum_val<VkFormat>(fkyaml::node &n);
+template <> inline VkVertexInputRate get_enum_val<VkVertexInputRate>(fkyaml::node &n);
+template <> inline VkShaderStageFlagBits get_enum_val<VkShaderStageFlagBits>(fkyaml::node &n);
+template <> inline VkDescriptorType get_enum_val<VkDescriptorType>(fkyaml::node &n);
+template <> inline vku_shader_stage_e get_enum_val<vku_shader_stage_e>(fkyaml::node &n);
+
+} /* virt_composer */
+
 namespace vulkan_composer {
 
 namespace vo = virt_object;
@@ -1064,33 +975,13 @@ namespace vc = virt_composer;
 namespace vkc = vulkan_composer;
 
 VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_SPIRV);
-VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_STRING);
-VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_FLOAT);
-VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_INTEGER);
 VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_CPU_BUFFER);
-VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_LUA_SCRIPT);
 VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_LUA_VARIABLE);
-VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_LUA_FUNCTION);
 VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_VERTEX_INPUT_DESC);
 VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_BINDING_DESC);
 
 inline std::string app_path = std::filesystem::canonical("./");
-
-// enum luaw_member_e {
-//     LUAW_MEMBER_FUNCTION,
-//     LUAW_MEMBER_OBJECT,
-// };
-
-// struct luaw_member_t {
-//     lua_CFunction fn;
-//     luaw_member_e member_type;
-// };
-
-// extern int VIRT_TYPE_CNT;
-// extern std::unordered_map<std::string, luaw_member_t> *lua_class_members;
-// extern std::unordered_map<std::string, lua_CFunction> *lua_class_member_setters;
-
-vc::ref_t<vku::image_t> load_image(auto cp, std::string path);
+vc::ref_t<vku::image_t> load_image(vc::ref_t<vku::cmdpool_t> cp, std::string path);
 
 /* Does this really have any irl usage? */
 struct lua_var_t : public vku::object_t {
@@ -1115,104 +1006,24 @@ private:
     virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 };
 
-/* Does this really have any irl usage? */
-struct lua_function_t : public vku::object_t {
-    std::string m_name;
-    std::string m_source;
-
-    static vku::object_type_e type_id_static() { return VKC_TYPE_LUA_FUNCTION; }
-    static vku::ref_t<lua_function_t> create(std::string name, std::string source) {
-        auto ret = vku::ref_t<lua_function_t>::create_obj_ref(
-                std::make_unique<lua_function_t>(), {});
-        ret->m_name = name;
-        ret->m_source = source;
-        return ret;
-    }
-
-    virtual vku::object_type_e type_id() const override { return VKC_TYPE_LUA_FUNCTION; }
-
-    int call(lua_State *L) {
-        DBG("Calling %s from %s", m_name.c_str(), m_source.c_str());
-        (void)L;
-        return 0;
-    }
-
-    inline std::string to_string() const override {
-        return std::format("vkc::lua_var[{}]: m_name={} m_source={}", (void*)this, m_name, m_source);
-    }
-
-
-private:
-    virtual vc::ret_t _init() override { return VK_SUCCESS; }
-    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
-};
-
-struct lua_script_t : public vku::object_t {
-    std::string content;
-
-    static vku::object_type_e type_id_static() { return VKC_TYPE_LUA_SCRIPT; }
-    static vku::ref_t<lua_script_t> create(std::string content) {
-        auto ret = vku::ref_t<lua_script_t>::create_obj_ref(std::make_unique<lua_script_t>(), {});
-        ret->content = content;
-        return ret;
-    }
-
-    virtual vku::object_type_e type_id() const override { return VKC_TYPE_LUA_SCRIPT; }
-
-    inline std::string to_string() const override {
-        return std::format("vkc::lua_script[{}]: m_content=\n{}", (void*)this, content);
-    }
-
-private:
-    virtual vc::ret_t _init() override { return VK_SUCCESS; }
-    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
-};
-
-
-struct integer_t : public vku::object_t {
-    int64_t value = 0;
-
-    static vku::object_type_e type_id_static() { return VKC_TYPE_INTEGER; }
-    static vku::ref_t<integer_t> create(int64_t value) {
-        auto ret = vku::ref_t<integer_t>::create_obj_ref(std::make_unique<integer_t>(), {});
-        ret->value = value;
-        return ret;
-    }
-
-    virtual vku::object_type_e type_id() const override { return VKC_TYPE_INTEGER; }
-
-    inline std::string to_string() const override {
-        return std::format("vkc::integer[{}]: value={} ", (void*)this, value);
-    }
-
-private:
-    virtual vc::ret_t _init() override { return VK_SUCCESS; }
-    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
-};
-
-struct float_t : public vku::object_t {
-    double value = 0;
-
-    static vku::object_type_e type_id_static() { return VKC_TYPE_FLOAT; }
-    static vku::ref_t<float_t> create(double value) {
-        auto ret = vku::ref_t<float_t>::create_obj_ref(std::make_unique<float_t>(), {});
-        ret->value = value;
-        return ret;
-    }
-
-    virtual vku::object_type_e type_id() const override { return VKC_TYPE_FLOAT; }
-
-    inline std::string to_string() const override {
-        return std::format("vkc::float[{}]: value={} ", (void*)this, value);
-    }
-
-private:
-    virtual vc::ret_t _init() override { return VK_SUCCESS; }
-    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
-};
-
-/* This does the following: creates a buffer in cpu-memory space that can be used to copy data to
-from it */
+/*!
+ * 
+ * vkc::cpu_buffer_t
+ * -----------------
+ *
+ * Description: Represents a CPU-side memory buffer. Can be used for passing data between Lua
+ * scripts and C++ callbacks, or for staging data to  and from Vulkan buffers. Essentially,
+ * this object wraps a byte array.
+ *
+ * Member functions:
+ * - data(): Returns a pointer to the buffer data.
+ * - size(): Returns the size of the buffer.
+ *
+ * Init: create(sz)
+ *   - Parameters:
+ *     - sz: Initial size of the buffer in bytes
+ * 
+ */
 struct cpu_buffer_t : public vku::object_t {
     static vku::object_type_e type_id_static() { return VKC_TYPE_CPU_BUFFER; }
     static vku::ref_t<cpu_buffer_t> create(size_t sz) {
@@ -1237,28 +1048,26 @@ private:
     std::vector<uint8_t> _data;
 };
 
-
-struct string_t : public vku::object_t {
-    std::string value;
-
-    static vku::object_type_e type_id_static() { return VKC_TYPE_STRING; }
-    static vku::ref_t<string_t> create(const std::string& value) {
-        auto ret = vku::ref_t<string_t>::create_obj_ref(std::make_unique<string_t>(), {});
-        ret->value = value;
-        return ret;
-    }
-
-    virtual vku::object_type_e type_id() const override { return VKC_TYPE_STRING; }
-
-    inline std::string to_string() const override {
-        return std::format("vkc::string[{}]: value={} ", (void*)this, value);
-    }
-
-private:
-    virtual vc::ret_t _init() override { return VK_SUCCESS; }
-    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
-};
-
+/*!
+ * 
+ * vkc::spirv_t
+ * ------------
+ * 
+ * Description: Wraps a SPIR-V shader module representation. Stores the SPIR-V bytecode 
+ * along with metadata (type, stage, etc.) and allows it to be passed around in the Vulkan 
+ * framework or used for shader module creation.
+ *
+ * Members:
+ * - spirv: The SPIR-V representation, including type and bytecode content.
+ *
+ * Member functions:
+ * - to_string(): Returns a formatted string showing the SPIR-V type and a hex dump of the content.
+ *
+ * TODO: fix: Init: create(spirv)
+ *   - Parameters:
+ *     - spirv: The SPIR-V object containing bytecode and type information.
+ * 
+ */
 struct spirv_t : public vku::object_t {
     vku::spirv_t spirv;
 
@@ -1282,6 +1091,28 @@ private:
     virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 };
 
+/*!
+ * 
+ * vkc::vertex_input_desc_t
+ * ------------------------
+ *
+ * Description: Represents a Vulkan vertex input description, including the binding 
+ * and attribute layouts. Wraps a vku::vertex_input_desc_t structure containing the 
+ * binding description (stride, input rate) and attribute descriptions (format, 
+ * location, offset, etc.).
+ *
+ * Member functions:
+ * - to_string(): Returns a formatted string showing the binding, stride, input rate, 
+ *   and attribute descriptions.
+ *
+ * TODO: more clear: Init: create(vid)
+ *   - Parameters:
+ *     - vid: A vku::vertex_input_desc_t object describing the vertex input layout.
+ *
+ * Notes:
+ * - Serves as a reusable object to describe vertex buffer layout for pipeline creation.
+ * 
+ */
 struct vertex_input_desc_t : public vku::object_t {
     vku::vertex_input_desc_t vid;
 
@@ -1311,6 +1142,25 @@ private:
     virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
 };
 
+/*!
+ * 
+ * vkc::binding_t
+ * --------------
+ *
+ * Description: Represents a generic descriptor set binding in Vulkan. 
+ * This object wraps a VkDescriptorSetLayoutBinding structure, which defines 
+ * the binding index, descriptor type, number of descriptors, and shader stage flags.
+ *
+ * Init: create(bd)
+ *   - Parameters:
+ *     - bd: A VkDescriptorSetLayoutBinding structure describing the binding.
+ *
+ * Notes:
+ * - Serves as a base or standalone representation for descriptor set bindings.
+ * - Can be used to initialize more specific binding types such as buffer or 
+ *   sampler bindings.
+ * 
+ */
 struct binding_t : public vku::object_t {
     VkDescriptorSetLayoutBinding bd;
 
@@ -1342,7 +1192,9 @@ private:
  ***************************************************************************************************
  */
 
-
+inline bool starts_with(const std::string& a, const std::string& b) {
+    return a.size() >= b.size() && a.compare(0, b.size(), b) == 0;
+}
 
 template <typename T, typename K>
 constexpr auto has(T&& data_struct, K&& key) {
@@ -1350,538 +1202,8 @@ constexpr auto has(T&& data_struct, K&& key) {
             != std::forward<T>(data_struct).end();
 }
 
-inline bool starts_with(const std::string& a, const std::string& b) {
-    return a.size() >= b.size() && a.compare(0, b.size(), b) == 0;
-}
-
-static std::unordered_map<std::string, vku_shader_stage_e> shader_stage_from_string = {
-    {"VKU_SPIRV_VERTEX",    VKU_SPIRV_VERTEX},
-    {"VKU_SPIRV_FRAGMENT",  VKU_SPIRV_FRAGMENT},
-    {"VKU_SPIRV_COMPUTE",   VKU_SPIRV_COMPUTE},
-    {"VKU_SPIRV_GEOMETRY",  VKU_SPIRV_GEOMETRY},
-    {"VKU_SPIRV_TESS_CTRL", VKU_SPIRV_TESS_CTRL},
-    {"VKU_SPIRV_TESS_EVAL", VKU_SPIRV_TESS_EVAL},
-};
-
-template <typename T>
-inline T get_enum_val(fkyaml::node &node, const std::unordered_map<std::string, T>& enum_vals) {
-    if (node.is_string()) {
-        if (!has(enum_vals, node.as_str()))
-            throw vc::except_t(std::format("Unknown enum({}) value: {}",
-                    demangle<T>(), node.as_str()));
-        return enum_vals.find(node.as_str())->second;
-    }
-    if (node.is_sequence()) {
-        uint32_t ret = 0;
-        for (auto &val : node.as_seq())
-            ret |= (uint32_t)get_enum_val(val, enum_vals);
-        return (T)ret;
-    }
-    throw vc::except_t{std::format("Node({}), can't be converted to an enum of type ({})",
-            fkyaml::node::serialize(node), demangle<T>())};
-}
-
-template <typename T>
-inline T get_enum_val(fkyaml::node &n) {
-    throw vc::except_t{std::format("Type {} not implemented", demangle<T>())};
-}
-
-static std::unordered_map<std::string, VkBufferUsageFlagBits> vk_buffer_usage_flag_bits_from_str = {
-    {"VK_BUFFER_USAGE_NONE", (VkBufferUsageFlagBits)0},
-    {"VK_BUFFER_USAGE_TRANSFER_SRC_BIT",
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT},
-    {"VK_BUFFER_USAGE_TRANSFER_DST_BIT",
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT},
-    {"VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT",
-            VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT},
-    {"VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT",
-            VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT},
-    {"VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT",
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT},
-    {"VK_BUFFER_USAGE_STORAGE_BUFFER_BIT",
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT},
-    {"VK_BUFFER_USAGE_INDEX_BUFFER_BIT",
-            VK_BUFFER_USAGE_INDEX_BUFFER_BIT},
-    {"VK_BUFFER_USAGE_VERTEX_BUFFER_BIT",
-            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT},
-    {"VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT",
-            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT},
-    {"VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT",
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT},
-    // {"VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR",
-    //         VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR},
-    // {"VK_BUFFER_USAGE_VIDEO_DECODE_DST_BIT_KHR",
-    //         VK_BUFFER_USAGE_VIDEO_DECODE_DST_BIT_KHR},
-    {"VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT",
-            VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT},
-    {"VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT",
-            VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT},
-    {"VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT",
-            VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT},
-#ifdef VK_ENABLE_BETA_EXTENSIONS
-    {"VK_BUFFER_USAGE_EXECUTION_GRAPH_SCRATCH_BIT_AMDX",
-            VK_BUFFER_USAGE_EXECUTION_GRAPH_SCRATCH_BIT_AMDX},
-#endif
-    // {"VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR",
-    //         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR},
-    // {"VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR",
-    //         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR},
-    // {"VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR",
-    //         VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR},
-    // {"VK_BUFFER_USAGE_VIDEO_ENCODE_DST_BIT_KHR",
-    //         VK_BUFFER_USAGE_VIDEO_ENCODE_DST_BIT_KHR},
-    // {"VK_BUFFER_USAGE_VIDEO_ENCODE_SRC_BIT_KHR",
-    //         VK_BUFFER_USAGE_VIDEO_ENCODE_SRC_BIT_KHR},
-    // {"VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT",
-    //         VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT},
-    // {"VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT",
-    //         VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT},
-    // {"VK_BUFFER_USAGE_PUSH_DESCRIPTORS_DESCRIPTOR_BUFFER_BIT_EXT",
-    //         VK_BUFFER_USAGE_PUSH_DESCRIPTORS_DESCRIPTOR_BUFFER_BIT_EXT},
-    // {"VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT",
-    //         VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT},
-    // {"VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT",
-    //         VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT},
-    // {"VK_BUFFER_USAGE_TILE_MEMORY_BIT_QCOM",
-    //         VK_BUFFER_USAGE_TILE_MEMORY_BIT_QCOM},
-    {"VK_BUFFER_USAGE_RAY_TRACING_BIT_NV",
-            VK_BUFFER_USAGE_RAY_TRACING_BIT_NV},
-    {"VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_EXT",
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_EXT},
-    {"VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR",
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR},
-};
-
-template <> inline VkBufferUsageFlagBits get_enum_val<VkBufferUsageFlagBits>(fkyaml::node &n) {
-    return get_enum_val(n, vk_buffer_usage_flag_bits_from_str);
-}
-
-static std::unordered_map<std::string, VkSharingMode> vk_sharing_mode_from_str = {
-    {"VK_SHARING_MODE_EXCLUSIVE", VK_SHARING_MODE_EXCLUSIVE},
-    {"VK_SHARING_MODE_CONCURRENT", VK_SHARING_MODE_CONCURRENT},
-};
-
-template <> inline VkSharingMode get_enum_val<VkSharingMode>(fkyaml::node &n) {
-    return get_enum_val(n, vk_sharing_mode_from_str);
-}
-
-static std::unordered_map<std::string, VkMemoryPropertyFlagBits>
-        vk_memory_property_flag_bits_from_str =
-{
-    {"VK_MEMORY_PROPERTY_NONE", (VkMemoryPropertyFlagBits)0},
-    {"VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT", VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT},
-    {"VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT", VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT},
-    {"VK_MEMORY_PROPERTY_HOST_COHERENT_BIT", VK_MEMORY_PROPERTY_HOST_COHERENT_BIT},
-    {"VK_MEMORY_PROPERTY_HOST_CACHED_BIT", VK_MEMORY_PROPERTY_HOST_CACHED_BIT},
-    {"VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT", VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT},
-    {"VK_MEMORY_PROPERTY_PROTECTED_BIT", VK_MEMORY_PROPERTY_PROTECTED_BIT},
-    {"VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD", VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD},
-    {"VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD", VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD},
-    // {"VK_MEMORY_PROPERTY_RDMA_CAPABLE_BIT_NV", VK_MEMORY_PROPERTY_RDMA_CAPABLE_BIT_NV},
-};
-
-template <> inline VkMemoryPropertyFlagBits get_enum_val<VkMemoryPropertyFlagBits>(fkyaml::node &n) {
-    return get_enum_val(n, vk_memory_property_flag_bits_from_str);
-}
-
-static std::unordered_map<std::string, VkPrimitiveTopology> vk_primitive_topology_from_str = {
-    {"VK_PRIMITIVE_TOPOLOGY_POINT_LIST",
-            VK_PRIMITIVE_TOPOLOGY_POINT_LIST},
-    {"VK_PRIMITIVE_TOPOLOGY_LINE_LIST",
-            VK_PRIMITIVE_TOPOLOGY_LINE_LIST},
-    {"VK_PRIMITIVE_TOPOLOGY_LINE_STRIP",
-            VK_PRIMITIVE_TOPOLOGY_LINE_STRIP},
-    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST",
-            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST},
-    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP",
-            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP},
-    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN",
-            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN},
-    {"VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY",
-            VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY},
-    {"VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY",
-            VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY},
-    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY",
-            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY},
-    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY",
-            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY},
-    {"VK_PRIMITIVE_TOPOLOGY_PATCH_LIST",
-            VK_PRIMITIVE_TOPOLOGY_PATCH_LIST},
-};
-
-template <> inline VkPrimitiveTopology get_enum_val<VkPrimitiveTopology>(fkyaml::node &n) {
-    return get_enum_val(n, vk_primitive_topology_from_str);
-}
-
-static std::unordered_map<std::string, VkImageAspectFlagBits> vk_image_aspect_flag_bits_from_str = {
-    {"VK_IMAGE_ASPECT_NONE", (VkImageAspectFlagBits)0},
-    {"VK_IMAGE_ASPECT_COLOR_BIT", VK_IMAGE_ASPECT_COLOR_BIT},
-    {"VK_IMAGE_ASPECT_DEPTH_BIT", VK_IMAGE_ASPECT_DEPTH_BIT},
-    {"VK_IMAGE_ASPECT_STENCIL_BIT", VK_IMAGE_ASPECT_STENCIL_BIT},
-    {"VK_IMAGE_ASPECT_METADATA_BIT", VK_IMAGE_ASPECT_METADATA_BIT},
-    {"VK_IMAGE_ASPECT_PLANE_0_BIT", VK_IMAGE_ASPECT_PLANE_0_BIT},
-    {"VK_IMAGE_ASPECT_PLANE_1_BIT", VK_IMAGE_ASPECT_PLANE_1_BIT},
-    {"VK_IMAGE_ASPECT_PLANE_2_BIT", VK_IMAGE_ASPECT_PLANE_2_BIT},
-    {"VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT", VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT},
-    {"VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT", VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT},
-    {"VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT", VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT},
-    {"VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT", VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT},
-    {"VK_IMAGE_ASPECT_PLANE_0_BIT_KHR", VK_IMAGE_ASPECT_PLANE_0_BIT_KHR},
-    {"VK_IMAGE_ASPECT_PLANE_1_BIT_KHR", VK_IMAGE_ASPECT_PLANE_1_BIT_KHR},
-    {"VK_IMAGE_ASPECT_PLANE_2_BIT_KHR", VK_IMAGE_ASPECT_PLANE_2_BIT_KHR},
-};
-
-template <> inline VkImageAspectFlagBits get_enum_val<VkImageAspectFlagBits>(fkyaml::node &n) {
-    return get_enum_val(n, vk_image_aspect_flag_bits_from_str);
-}
-
-static std::unordered_map<std::string, VkCommandBufferUsageFlagBits>
-        vk_command_buffer_usage_flag_bits_from_str =
-{
-    {"VK_COMMAND_BUFFER_USAGE_NONE", (VkCommandBufferUsageFlagBits)0},
-    {"VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT",
-            VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT},
-    {"VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT",
-            VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT},
-    {"VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT",
-            VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT},
-};
-
-template <> inline VkCommandBufferUsageFlagBits get_enum_val<VkCommandBufferUsageFlagBits>(
-        fkyaml::node &n)
-{
-    return get_enum_val(n, vk_command_buffer_usage_flag_bits_from_str);
-}
-
-static std::unordered_map<std::string, VkPipelineBindPoint> vk_pipeline_bind_point_from_str = {
-    {"VK_PIPELINE_BIND_POINT_GRAPHICS",
-            VK_PIPELINE_BIND_POINT_GRAPHICS},
-    {"VK_PIPELINE_BIND_POINT_COMPUTE",
-            VK_PIPELINE_BIND_POINT_COMPUTE},
-    {"VK_PIPELINE_BIND_POINT_RAY_TRACING_NV",
-            VK_PIPELINE_BIND_POINT_RAY_TRACING_NV},
-};
-
-template <> inline VkPipelineBindPoint get_enum_val<VkPipelineBindPoint>(fkyaml::node &n) {
-    return get_enum_val(n, vk_pipeline_bind_point_from_str);
-}
-
-static std::unordered_map<std::string, VkIndexType> vk_index_type_from_str = {
-    {"VK_INDEX_TYPE_UINT16", VK_INDEX_TYPE_UINT16},
-    {"VK_INDEX_TYPE_UINT32", VK_INDEX_TYPE_UINT32},
-    {"VK_INDEX_TYPE_NONE_NV", VK_INDEX_TYPE_NONE_NV},
-    {"VK_INDEX_TYPE_UINT8_EXT", VK_INDEX_TYPE_UINT8_EXT},
-};
-
-template <> inline VkIndexType get_enum_val<VkIndexType>(fkyaml::node &n) {
-    return get_enum_val(n, vk_index_type_from_str);
-}
-
-static std::unordered_map<std::string, VkPipelineStageFlagBits>
-        vk_pipeline_stage_flag_bits_from_str =
-{
-    {"VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT",
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT},
-    {"VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT",
-            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT},
-    {"VK_PIPELINE_STAGE_VERTEX_INPUT_BIT",
-            VK_PIPELINE_STAGE_VERTEX_INPUT_BIT},
-    {"VK_PIPELINE_STAGE_VERTEX_SHADER_BIT",
-            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT},
-    {"VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT",
-            VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT},
-    {"VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT",
-            VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT},
-    {"VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT",
-            VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT},
-    {"VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT",
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT},
-    {"VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT",
-            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT},
-    {"VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT",
-            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT},
-    {"VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT",
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT},
-    {"VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT",
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT},
-    {"VK_PIPELINE_STAGE_TRANSFER_BIT",
-            VK_PIPELINE_STAGE_TRANSFER_BIT},
-    {"VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT",
-            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT},
-    {"VK_PIPELINE_STAGE_HOST_BIT",
-            VK_PIPELINE_STAGE_HOST_BIT},
-    {"VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT",
-            VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT},
-    {"VK_PIPELINE_STAGE_ALL_COMMANDS_BIT",
-            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT},
-    {"VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT",
-            VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT},
-    {"VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT",
-            VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT},
-    {"VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT",
-            VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT},
-    {"VK_PIPELINE_STAGE_SHADING_RATE_IMAGE_BIT_NV",
-            VK_PIPELINE_STAGE_SHADING_RATE_IMAGE_BIT_NV},
-    {"VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV",
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV},
-    {"VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_NV",
-            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_NV},
-    {"VK_PIPELINE_STAGE_TASK_SHADER_BIT_NV",
-            VK_PIPELINE_STAGE_TASK_SHADER_BIT_NV},
-    {"VK_PIPELINE_STAGE_MESH_SHADER_BIT_NV",
-            VK_PIPELINE_STAGE_MESH_SHADER_BIT_NV},
-};
-
-template <> inline VkPipelineStageFlagBits get_enum_val<VkPipelineStageFlagBits>(fkyaml::node &n) {
-    return get_enum_val(n, vk_pipeline_stage_flag_bits_from_str);
-}
-
-static std::unordered_map<std::string, VkFormat> vk_format_from_str = {
-    {"VK_FORMAT_UNDEFINED", VK_FORMAT_UNDEFINED},
-    {"VK_FORMAT_R4G4_UNORM_PACK8", VK_FORMAT_R4G4_UNORM_PACK8},
-    {"VK_FORMAT_R4G4B4A4_UNORM_PACK16", VK_FORMAT_R4G4B4A4_UNORM_PACK16},
-    {"VK_FORMAT_B4G4R4A4_UNORM_PACK16", VK_FORMAT_B4G4R4A4_UNORM_PACK16},
-    {"VK_FORMAT_R5G6B5_UNORM_PACK16", VK_FORMAT_R5G6B5_UNORM_PACK16},
-    {"VK_FORMAT_B5G6R5_UNORM_PACK16", VK_FORMAT_B5G6R5_UNORM_PACK16},
-    {"VK_FORMAT_R5G5B5A1_UNORM_PACK16", VK_FORMAT_R5G5B5A1_UNORM_PACK16},
-    {"VK_FORMAT_B5G5R5A1_UNORM_PACK16", VK_FORMAT_B5G5R5A1_UNORM_PACK16},
-    {"VK_FORMAT_A1R5G5B5_UNORM_PACK16", VK_FORMAT_A1R5G5B5_UNORM_PACK16},
-    {"VK_FORMAT_R8_UNORM", VK_FORMAT_R8_UNORM},
-    {"VK_FORMAT_R8_SNORM", VK_FORMAT_R8_SNORM},
-    {"VK_FORMAT_R8_USCALED", VK_FORMAT_R8_USCALED},
-    {"VK_FORMAT_R8_SSCALED", VK_FORMAT_R8_SSCALED},
-    {"VK_FORMAT_R8_UINT", VK_FORMAT_R8_UINT},
-    {"VK_FORMAT_R8_SINT", VK_FORMAT_R8_SINT},
-    {"VK_FORMAT_R8_SRGB", VK_FORMAT_R8_SRGB},
-    {"VK_FORMAT_R8G8_UNORM", VK_FORMAT_R8G8_UNORM},
-    {"VK_FORMAT_R8G8_SNORM", VK_FORMAT_R8G8_SNORM},
-    {"VK_FORMAT_R8G8_USCALED", VK_FORMAT_R8G8_USCALED},
-    {"VK_FORMAT_R8G8_SSCALED", VK_FORMAT_R8G8_SSCALED},
-    {"VK_FORMAT_R8G8_UINT", VK_FORMAT_R8G8_UINT},
-    {"VK_FORMAT_R8G8_SINT", VK_FORMAT_R8G8_SINT},
-    {"VK_FORMAT_R8G8_SRGB", VK_FORMAT_R8G8_SRGB},
-    {"VK_FORMAT_R8G8B8_UNORM", VK_FORMAT_R8G8B8_UNORM},
-    {"VK_FORMAT_R8G8B8_SNORM", VK_FORMAT_R8G8B8_SNORM},
-    {"VK_FORMAT_R8G8B8_USCALED", VK_FORMAT_R8G8B8_USCALED},
-    {"VK_FORMAT_R8G8B8_SSCALED", VK_FORMAT_R8G8B8_SSCALED},
-    {"VK_FORMAT_R8G8B8_UINT", VK_FORMAT_R8G8B8_UINT},
-    {"VK_FORMAT_R8G8B8_SINT", VK_FORMAT_R8G8B8_SINT},
-    {"VK_FORMAT_R8G8B8_SRGB", VK_FORMAT_R8G8B8_SRGB},
-    {"VK_FORMAT_B8G8R8_UNORM", VK_FORMAT_B8G8R8_UNORM},
-    {"VK_FORMAT_B8G8R8_SNORM", VK_FORMAT_B8G8R8_SNORM},
-    {"VK_FORMAT_B8G8R8_USCALED", VK_FORMAT_B8G8R8_USCALED},
-    {"VK_FORMAT_B8G8R8_SSCALED", VK_FORMAT_B8G8R8_SSCALED},
-    {"VK_FORMAT_B8G8R8_UINT", VK_FORMAT_B8G8R8_UINT},
-    {"VK_FORMAT_B8G8R8_SINT", VK_FORMAT_B8G8R8_SINT},
-    {"VK_FORMAT_B8G8R8_SRGB", VK_FORMAT_B8G8R8_SRGB},
-    {"VK_FORMAT_R8G8B8A8_UNORM", VK_FORMAT_R8G8B8A8_UNORM},
-    {"VK_FORMAT_R8G8B8A8_SNORM", VK_FORMAT_R8G8B8A8_SNORM},
-    {"VK_FORMAT_R8G8B8A8_USCALED", VK_FORMAT_R8G8B8A8_USCALED},
-    {"VK_FORMAT_R8G8B8A8_SSCALED", VK_FORMAT_R8G8B8A8_SSCALED},
-    {"VK_FORMAT_R8G8B8A8_UINT", VK_FORMAT_R8G8B8A8_UINT},
-    {"VK_FORMAT_R8G8B8A8_SINT", VK_FORMAT_R8G8B8A8_SINT},
-    {"VK_FORMAT_R8G8B8A8_SRGB", VK_FORMAT_R8G8B8A8_SRGB},
-    {"VK_FORMAT_B8G8R8A8_UNORM", VK_FORMAT_B8G8R8A8_UNORM},
-    {"VK_FORMAT_B8G8R8A8_SNORM", VK_FORMAT_B8G8R8A8_SNORM},
-    {"VK_FORMAT_B8G8R8A8_USCALED", VK_FORMAT_B8G8R8A8_USCALED},
-    {"VK_FORMAT_B8G8R8A8_SSCALED", VK_FORMAT_B8G8R8A8_SSCALED},
-    {"VK_FORMAT_B8G8R8A8_UINT", VK_FORMAT_B8G8R8A8_UINT},
-    {"VK_FORMAT_B8G8R8A8_SINT", VK_FORMAT_B8G8R8A8_SINT},
-    {"VK_FORMAT_B8G8R8A8_SRGB", VK_FORMAT_B8G8R8A8_SRGB},
-    {"VK_FORMAT_A8B8G8R8_UNORM_PACK32", VK_FORMAT_A8B8G8R8_UNORM_PACK32},
-    {"VK_FORMAT_A8B8G8R8_SNORM_PACK32", VK_FORMAT_A8B8G8R8_SNORM_PACK32},
-    {"VK_FORMAT_A8B8G8R8_USCALED_PACK32", VK_FORMAT_A8B8G8R8_USCALED_PACK32},
-    {"VK_FORMAT_A8B8G8R8_SSCALED_PACK32", VK_FORMAT_A8B8G8R8_SSCALED_PACK32},
-    {"VK_FORMAT_A8B8G8R8_UINT_PACK32", VK_FORMAT_A8B8G8R8_UINT_PACK32},
-    {"VK_FORMAT_A8B8G8R8_SINT_PACK32", VK_FORMAT_A8B8G8R8_SINT_PACK32},
-    {"VK_FORMAT_A8B8G8R8_SRGB_PACK32", VK_FORMAT_A8B8G8R8_SRGB_PACK32},
-    {"VK_FORMAT_A2R10G10B10_UNORM_PACK32", VK_FORMAT_A2R10G10B10_UNORM_PACK32},
-    {"VK_FORMAT_A2R10G10B10_SNORM_PACK32", VK_FORMAT_A2R10G10B10_SNORM_PACK32},
-    {"VK_FORMAT_A2R10G10B10_USCALED_PACK32", VK_FORMAT_A2R10G10B10_USCALED_PACK32},
-    {"VK_FORMAT_A2R10G10B10_SSCALED_PACK32", VK_FORMAT_A2R10G10B10_SSCALED_PACK32},
-    {"VK_FORMAT_A2R10G10B10_UINT_PACK32", VK_FORMAT_A2R10G10B10_UINT_PACK32},
-    {"VK_FORMAT_A2R10G10B10_SINT_PACK32", VK_FORMAT_A2R10G10B10_SINT_PACK32},
-    {"VK_FORMAT_A2B10G10R10_UNORM_PACK32", VK_FORMAT_A2B10G10R10_UNORM_PACK32},
-    {"VK_FORMAT_A2B10G10R10_SNORM_PACK32", VK_FORMAT_A2B10G10R10_SNORM_PACK32},
-    {"VK_FORMAT_A2B10G10R10_USCALED_PACK32", VK_FORMAT_A2B10G10R10_USCALED_PACK32},
-    {"VK_FORMAT_A2B10G10R10_SSCALED_PACK32", VK_FORMAT_A2B10G10R10_SSCALED_PACK32},
-    {"VK_FORMAT_A2B10G10R10_UINT_PACK32", VK_FORMAT_A2B10G10R10_UINT_PACK32},
-    {"VK_FORMAT_A2B10G10R10_SINT_PACK32", VK_FORMAT_A2B10G10R10_SINT_PACK32},
-    {"VK_FORMAT_R16_UNORM", VK_FORMAT_R16_UNORM},
-    {"VK_FORMAT_R16_SNORM", VK_FORMAT_R16_SNORM},
-    {"VK_FORMAT_R16_USCALED", VK_FORMAT_R16_USCALED},
-    {"VK_FORMAT_R16_SSCALED", VK_FORMAT_R16_SSCALED},
-    {"VK_FORMAT_R16_UINT", VK_FORMAT_R16_UINT},
-    {"VK_FORMAT_R16_SINT", VK_FORMAT_R16_SINT},
-    {"VK_FORMAT_R16_SFLOAT", VK_FORMAT_R16_SFLOAT},
-    {"VK_FORMAT_R16G16_UNORM", VK_FORMAT_R16G16_UNORM},
-    {"VK_FORMAT_R16G16_SNORM", VK_FORMAT_R16G16_SNORM},
-    {"VK_FORMAT_R16G16_USCALED", VK_FORMAT_R16G16_USCALED},
-    {"VK_FORMAT_R16G16_SSCALED", VK_FORMAT_R16G16_SSCALED},
-    {"VK_FORMAT_R16G16_UINT", VK_FORMAT_R16G16_UINT},
-    {"VK_FORMAT_R16G16_SINT", VK_FORMAT_R16G16_SINT},
-    {"VK_FORMAT_R16G16_SFLOAT", VK_FORMAT_R16G16_SFLOAT},
-    {"VK_FORMAT_R16G16B16_UNORM", VK_FORMAT_R16G16B16_UNORM},
-    {"VK_FORMAT_R16G16B16_SNORM", VK_FORMAT_R16G16B16_SNORM},
-    {"VK_FORMAT_R16G16B16_USCALED", VK_FORMAT_R16G16B16_USCALED},
-    {"VK_FORMAT_R16G16B16_SSCALED", VK_FORMAT_R16G16B16_SSCALED},
-    {"VK_FORMAT_R16G16B16_UINT", VK_FORMAT_R16G16B16_UINT},
-    {"VK_FORMAT_R16G16B16_SINT", VK_FORMAT_R16G16B16_SINT},
-    {"VK_FORMAT_R16G16B16_SFLOAT", VK_FORMAT_R16G16B16_SFLOAT},
-    {"VK_FORMAT_R16G16B16A16_UNORM", VK_FORMAT_R16G16B16A16_UNORM},
-    {"VK_FORMAT_R16G16B16A16_SNORM", VK_FORMAT_R16G16B16A16_SNORM},
-    {"VK_FORMAT_R16G16B16A16_USCALED", VK_FORMAT_R16G16B16A16_USCALED},
-    {"VK_FORMAT_R16G16B16A16_SSCALED", VK_FORMAT_R16G16B16A16_SSCALED},
-    {"VK_FORMAT_R16G16B16A16_UINT", VK_FORMAT_R16G16B16A16_UINT},
-    {"VK_FORMAT_R16G16B16A16_SINT", VK_FORMAT_R16G16B16A16_SINT},
-    {"VK_FORMAT_R16G16B16A16_SFLOAT", VK_FORMAT_R16G16B16A16_SFLOAT},
-    {"VK_FORMAT_R32_UINT", VK_FORMAT_R32_UINT},
-    {"VK_FORMAT_R32_SINT", VK_FORMAT_R32_SINT},
-    {"VK_FORMAT_R32_SFLOAT", VK_FORMAT_R32_SFLOAT},
-    {"VK_FORMAT_R32G32_UINT", VK_FORMAT_R32G32_UINT},
-    {"VK_FORMAT_R32G32_SINT", VK_FORMAT_R32G32_SINT},
-    {"VK_FORMAT_R32G32_SFLOAT", VK_FORMAT_R32G32_SFLOAT},
-    {"VK_FORMAT_R32G32B32_UINT", VK_FORMAT_R32G32B32_UINT},
-    {"VK_FORMAT_R32G32B32_SINT", VK_FORMAT_R32G32B32_SINT},
-    {"VK_FORMAT_R32G32B32_SFLOAT", VK_FORMAT_R32G32B32_SFLOAT},
-    {"VK_FORMAT_R32G32B32A32_UINT", VK_FORMAT_R32G32B32A32_UINT},
-    {"VK_FORMAT_R32G32B32A32_SINT", VK_FORMAT_R32G32B32A32_SINT},
-    {"VK_FORMAT_R32G32B32A32_SFLOAT", VK_FORMAT_R32G32B32A32_SFLOAT},
-    {"VK_FORMAT_R64_UINT", VK_FORMAT_R64_UINT},
-    {"VK_FORMAT_R64_SINT", VK_FORMAT_R64_SINT},
-    {"VK_FORMAT_R64_SFLOAT", VK_FORMAT_R64_SFLOAT},
-    {"VK_FORMAT_R64G64_UINT", VK_FORMAT_R64G64_UINT},
-    {"VK_FORMAT_R64G64_SINT", VK_FORMAT_R64G64_SINT},
-    {"VK_FORMAT_R64G64_SFLOAT", VK_FORMAT_R64G64_SFLOAT},
-    {"VK_FORMAT_R64G64B64_UINT", VK_FORMAT_R64G64B64_UINT},
-    {"VK_FORMAT_R64G64B64_SINT", VK_FORMAT_R64G64B64_SINT},
-    {"VK_FORMAT_R64G64B64_SFLOAT", VK_FORMAT_R64G64B64_SFLOAT},
-    {"VK_FORMAT_R64G64B64A64_UINT", VK_FORMAT_R64G64B64A64_UINT},
-    {"VK_FORMAT_R64G64B64A64_SINT", VK_FORMAT_R64G64B64A64_SINT},
-    {"VK_FORMAT_R64G64B64A64_SFLOAT", VK_FORMAT_R64G64B64A64_SFLOAT},
-    {"VK_FORMAT_B10G11R11_UFLOAT_PACK32", VK_FORMAT_B10G11R11_UFLOAT_PACK32},
-    {"VK_FORMAT_E5B9G9R9_UFLOAT_PACK32", VK_FORMAT_E5B9G9R9_UFLOAT_PACK32},
-    {"VK_FORMAT_D16_UNORM", VK_FORMAT_D16_UNORM},
-    {"VK_FORMAT_X8_D24_UNORM_PACK32", VK_FORMAT_X8_D24_UNORM_PACK32},
-    {"VK_FORMAT_D32_SFLOAT", VK_FORMAT_D32_SFLOAT},
-    {"VK_FORMAT_S8_UINT", VK_FORMAT_S8_UINT},
-    {"VK_FORMAT_D16_UNORM_S8_UINT", VK_FORMAT_D16_UNORM_S8_UINT},
-    {"VK_FORMAT_D24_UNORM_S8_UINT", VK_FORMAT_D24_UNORM_S8_UINT},
-    {"VK_FORMAT_D32_SFLOAT_S8_UINT", VK_FORMAT_D32_SFLOAT_S8_UINT},
-    {"VK_FORMAT_BC1_RGB_UNORM_BLOCK", VK_FORMAT_BC1_RGB_UNORM_BLOCK},
-    {"VK_FORMAT_BC1_RGB_SRGB_BLOCK", VK_FORMAT_BC1_RGB_SRGB_BLOCK},
-    {"VK_FORMAT_BC1_RGBA_UNORM_BLOCK", VK_FORMAT_BC1_RGBA_UNORM_BLOCK},
-    {"VK_FORMAT_BC1_RGBA_SRGB_BLOCK", VK_FORMAT_BC1_RGBA_SRGB_BLOCK},
-    {"VK_FORMAT_BC2_UNORM_BLOCK", VK_FORMAT_BC2_UNORM_BLOCK},
-    {"VK_FORMAT_BC2_SRGB_BLOCK", VK_FORMAT_BC2_SRGB_BLOCK},
-    {"VK_FORMAT_BC3_UNORM_BLOCK", VK_FORMAT_BC3_UNORM_BLOCK},
-    {"VK_FORMAT_BC3_SRGB_BLOCK", VK_FORMAT_BC3_SRGB_BLOCK},
-    {"VK_FORMAT_BC4_UNORM_BLOCK", VK_FORMAT_BC4_UNORM_BLOCK},
-    {"VK_FORMAT_BC4_SNORM_BLOCK", VK_FORMAT_BC4_SNORM_BLOCK},
-    {"VK_FORMAT_BC5_UNORM_BLOCK", VK_FORMAT_BC5_UNORM_BLOCK},
-    {"VK_FORMAT_BC5_SNORM_BLOCK", VK_FORMAT_BC5_SNORM_BLOCK},
-    {"VK_FORMAT_BC6H_UFLOAT_BLOCK", VK_FORMAT_BC6H_UFLOAT_BLOCK},
-    {"VK_FORMAT_BC6H_SFLOAT_BLOCK", VK_FORMAT_BC6H_SFLOAT_BLOCK},
-    {"VK_FORMAT_BC7_UNORM_BLOCK", VK_FORMAT_BC7_UNORM_BLOCK},
-    {"VK_FORMAT_BC7_SRGB_BLOCK", VK_FORMAT_BC7_SRGB_BLOCK},
-    {"VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK", VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK},
-    {"VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK", VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK},
-    {"VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK", VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK},
-    {"VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK", VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK},
-    {"VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK", VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK},
-    {"VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK", VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK},
-    {"VK_FORMAT_EAC_R11_UNORM_BLOCK", VK_FORMAT_EAC_R11_UNORM_BLOCK},
-    {"VK_FORMAT_EAC_R11_SNORM_BLOCK", VK_FORMAT_EAC_R11_SNORM_BLOCK},
-    {"VK_FORMAT_EAC_R11G11_UNORM_BLOCK", VK_FORMAT_EAC_R11G11_UNORM_BLOCK},
-    {"VK_FORMAT_EAC_R11G11_SNORM_BLOCK", VK_FORMAT_EAC_R11G11_SNORM_BLOCK},
-    {"VK_FORMAT_ASTC_4x4_UNORM_BLOCK", VK_FORMAT_ASTC_4x4_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_4x4_SRGB_BLOCK", VK_FORMAT_ASTC_4x4_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_5x4_UNORM_BLOCK", VK_FORMAT_ASTC_5x4_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_5x4_SRGB_BLOCK", VK_FORMAT_ASTC_5x4_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_5x5_UNORM_BLOCK", VK_FORMAT_ASTC_5x5_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_5x5_SRGB_BLOCK", VK_FORMAT_ASTC_5x5_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_6x5_UNORM_BLOCK", VK_FORMAT_ASTC_6x5_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_6x5_SRGB_BLOCK", VK_FORMAT_ASTC_6x5_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_6x6_UNORM_BLOCK", VK_FORMAT_ASTC_6x6_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_6x6_SRGB_BLOCK", VK_FORMAT_ASTC_6x6_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_8x5_UNORM_BLOCK", VK_FORMAT_ASTC_8x5_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_8x5_SRGB_BLOCK", VK_FORMAT_ASTC_8x5_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_8x6_UNORM_BLOCK", VK_FORMAT_ASTC_8x6_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_8x6_SRGB_BLOCK", VK_FORMAT_ASTC_8x6_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_8x8_UNORM_BLOCK", VK_FORMAT_ASTC_8x8_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_8x8_SRGB_BLOCK", VK_FORMAT_ASTC_8x8_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_10x5_UNORM_BLOCK", VK_FORMAT_ASTC_10x5_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_10x5_SRGB_BLOCK", VK_FORMAT_ASTC_10x5_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_10x6_UNORM_BLOCK", VK_FORMAT_ASTC_10x6_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_10x6_SRGB_BLOCK", VK_FORMAT_ASTC_10x6_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_10x8_UNORM_BLOCK", VK_FORMAT_ASTC_10x8_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_10x8_SRGB_BLOCK", VK_FORMAT_ASTC_10x8_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_10x10_UNORM_BLOCK", VK_FORMAT_ASTC_10x10_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_10x10_SRGB_BLOCK", VK_FORMAT_ASTC_10x10_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_12x10_UNORM_BLOCK", VK_FORMAT_ASTC_12x10_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_12x10_SRGB_BLOCK", VK_FORMAT_ASTC_12x10_SRGB_BLOCK},
-    {"VK_FORMAT_ASTC_12x12_UNORM_BLOCK", VK_FORMAT_ASTC_12x12_UNORM_BLOCK},
-    {"VK_FORMAT_ASTC_12x12_SRGB_BLOCK", VK_FORMAT_ASTC_12x12_SRGB_BLOCK},
-};
-
-template <> inline VkFormat get_enum_val<VkFormat>(fkyaml::node &n) {
-    return get_enum_val(n, vk_format_from_str);
-}
-
-static std::unordered_map<std::string, VkVertexInputRate> vk_vertex_input_rate_from_str = {
-    {"VK_VERTEX_INPUT_RATE_VERTEX", VK_VERTEX_INPUT_RATE_VERTEX},
-    {"VK_VERTEX_INPUT_RATE_INSTANCE", VK_VERTEX_INPUT_RATE_INSTANCE},
-};
-
-template <> inline VkVertexInputRate get_enum_val<VkVertexInputRate>(fkyaml::node &n) {
-    return get_enum_val(n, vk_vertex_input_rate_from_str);
-}
-
-static std::unordered_map<std::string, VkShaderStageFlagBits> vk_shader_stage_flag_bits_from_str = {
-    {"VK_SHADER_STAGE_VERTEX_BIT", VK_SHADER_STAGE_VERTEX_BIT},
-    {"VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT", VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT},
-    {"VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT", VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT},
-    {"VK_SHADER_STAGE_GEOMETRY_BIT", VK_SHADER_STAGE_GEOMETRY_BIT},
-    {"VK_SHADER_STAGE_FRAGMENT_BIT", VK_SHADER_STAGE_FRAGMENT_BIT},
-    {"VK_SHADER_STAGE_COMPUTE_BIT", VK_SHADER_STAGE_COMPUTE_BIT},
-    {"VK_SHADER_STAGE_ALL_GRAPHICS", VK_SHADER_STAGE_ALL_GRAPHICS},
-    {"VK_SHADER_STAGE_ALL", VK_SHADER_STAGE_ALL},
-    {"VK_SHADER_STAGE_RAYGEN_BIT_NV", VK_SHADER_STAGE_RAYGEN_BIT_NV},
-    {"VK_SHADER_STAGE_ANY_HIT_BIT_NV", VK_SHADER_STAGE_ANY_HIT_BIT_NV},
-    {"VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV", VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV},
-    {"VK_SHADER_STAGE_MISS_BIT_NV", VK_SHADER_STAGE_MISS_BIT_NV},
-    {"VK_SHADER_STAGE_INTERSECTION_BIT_NV", VK_SHADER_STAGE_INTERSECTION_BIT_NV},
-    {"VK_SHADER_STAGE_CALLABLE_BIT_NV", VK_SHADER_STAGE_CALLABLE_BIT_NV},
-    {"VK_SHADER_STAGE_TASK_BIT_NV", VK_SHADER_STAGE_TASK_BIT_NV},
-    {"VK_SHADER_STAGE_MESH_BIT_NV", VK_SHADER_STAGE_MESH_BIT_NV},
-};
-
-template <> inline VkShaderStageFlagBits get_enum_val<VkShaderStageFlagBits>(fkyaml::node &n) {
-    return get_enum_val(n, vk_shader_stage_flag_bits_from_str);
-}
-
-static std::unordered_map<std::string, VkDescriptorType> vk_descriptor_type_from_str = {
-    {"VK_DESCRIPTOR_TYPE_SAMPLER", VK_DESCRIPTOR_TYPE_SAMPLER}, 
-    {"VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER", VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, 
-    {"VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE", VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE}, 
-    {"VK_DESCRIPTOR_TYPE_STORAGE_IMAGE", VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 
-    {"VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER", VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER}, 
-    {"VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER", VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER}, 
-    {"VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER", VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, 
-    {"VK_DESCRIPTOR_TYPE_STORAGE_BUFFER", VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 
-    {"VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC", VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC}, 
-    {"VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC", VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC}, 
-    {"VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT", VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT}, 
-    {"VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV", VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV},
-    {"VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT", VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT},
-};
-
-template <> inline VkDescriptorType get_enum_val<VkDescriptorType>(fkyaml::node &n) {
-    return get_enum_val(n, vk_descriptor_type_from_str);
-}
-
 inline auto get_from_map(auto &m, const std::string& str) {
-    if (!has(m, str))
+    if (!vkc::has(m, str))
         throw vc::except_t(std::format("Failed to get object: {} from: {}",
                 str, demangle<decltype(m), 2>()));
     return m[str];
@@ -1906,14 +1228,6 @@ inline std::string get_file_string_content(const std::string& file_path_relative
                        (std::istreambuf_iterator<char>()));
 }
 
-// static std::vector<
-//     std::pair<
-//         std::function<bool(fkyaml::node& node)>,
-//         std::function<co::task<vku::ref_t<vku::object_t>> (vc::virt_state_t *,
-//                 const std::string&, fkyaml::node&)>
-//     >
-// > build_psudo_object_cbks;
-
 inline bool build_pseudo_object_match(fkyaml::node& node) {
     if (node.is_mapping() && node.contains("m_shader_type")) {
         return true;
@@ -1929,7 +1243,7 @@ inline co::task_t build_pseudo_object_cbk(vc::virt_state_t *vs, const std::strin
 
         if (node.contains("m_source")) {
             spirv = vku::spirv_compile(
-                    get_from_map(shader_stage_from_string, node["m_shader_type"].as_str()),
+                    get_from_map(vc::shader_stage_from_string, node["m_shader_type"].as_str()),
                     node["m_source"].as_str().c_str());
         }
 
@@ -1940,7 +1254,7 @@ inline co::task_t build_pseudo_object_cbk(vc::virt_state_t *vs, const std::strin
                 co_return -1;
             }
             spirv = vku::spirv_compile(
-                    get_from_map(shader_stage_from_string, node["m_shader_type"].as_str()),
+                    get_from_map(vc::shader_stage_from_string, node["m_shader_type"].as_str()),
                     get_file_string_content(node["m_source_path"].as_str()).c_str());
         }
 
@@ -1951,7 +1265,7 @@ inline co::task_t build_pseudo_object_cbk(vc::virt_state_t *vs, const std::strin
                 co_return -1;
             }
 
-            spirv.type = get_from_map(shader_stage_from_string, node["m_shader_type"].as_str());
+            spirv.type = get_from_map(vc::shader_stage_from_string, node["m_shader_type"].as_str());
             std::string file_path = std::filesystem::canonical(node["m_spirv_path"].as_str());
 
             if (!starts_with(file_path, app_path)) {
@@ -1989,1375 +1303,6 @@ inline co::task_t build_pseudo_object_cbk(vc::virt_state_t *vs, const std::strin
     DBG("Failed to build anything from this object[%s], so the object is invalid", name.c_str());
     co_return -1;
 }
-
-// co::task_t build_pseudo_object(vc::virt_state_t *vs, const std::string& name, fkyaml::node& node) {
-//     if (node.is_mapping() && node.contains("m_shader_type")) {
-//         vku::spirv_t spirv;
-
-//         if (node.contains("m_source")) {
-//             spirv = vku::spirv_compile(
-//                     get_from_map(shader_stage_from_string, node["m_shader_type"].as_str()),
-//                     node["m_source"].as_str().c_str());
-//         }
-
-//         if (node.contains("m_source_path")) {
-//             if (spirv.content.size()) {
-//                 DBG("Trying to initialize spirv from 2 sources (only one of source, "
-//                         "source-path, or spirv-path allowed)");
-//                 co_return -1;
-//             }
-//             spirv = vku::spirv_compile(
-//                     get_from_map(shader_stage_from_string, node["m_shader_type"].as_str()),
-//                     get_file_string_content(node["m_source_path"].as_str()).c_str());
-//         }
-
-//         if (node.contains("m_spirv_path")) {
-//             if (spirv.content.size()) {
-//                 DBG("Trying to initialize spirv from 2 sources (only one of source, "
-//                         "source-path, or spirv-path allowed)");
-//                 co_return -1;
-//             }
-
-//             spirv.type = get_from_map(shader_stage_from_string, node["m_shader_type"].as_str());
-//             std::string file_path = std::filesystem::canonical(node["m_spirv_path"].as_str());
-
-//             if (!starts_with(file_path, app_path)) {
-//                 DBG("The path is restricted to the application main directory");
-//                 co_return 0;
-//             }
-
-//             std::ifstream file(file_path.c_str(), std::ios::binary | std::ios::ate);
-//             std::streamsize size = file.tellg();
-
-//             if (size % sizeof(uint32_t) != 0) {
-//                 DBG("File must be a shader, so it must have it's data multiple of %zu",
-//                         sizeof(uint32_t));
-//                 co_return 0;
-//             }
-
-//             file.seekg(0, std::ios::beg);
-//             spirv.content.resize(size / sizeof(uint32_t));
-//             if (!file.read((char *)spirv.content.data(), size)) {
-//                 DBG("Failed to read shader data");
-//                 co_return -1;
-//             }
-//         }
-        
-//         if (!spirv.content.size()) {
-//             DBG("Spirv shader can't be empty!")
-//             co_return -1;
-//         }
-
-//         auto obj = spirv_t::create(spirv);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-
-//         co_return 0;
-//     }
-
-//     if (name == "lua_script") {
-//         if (!(node.contains("m_source") || node.contains("source_path"))) {
-//             DBG("lua-script must be a node that has either source or source-path")
-//             co_return -1;
-//         }
-
-//         if (node.contains("m_source") && node.contains("m_source_path")) {
-//             DBG("lua-script can be either loaded from inline script or from a specified path, not"
-//                     "from both!");
-//             co_return -1;
-//         }
-
-//         if (node.contains("m_source")) {
-//             auto obj = lua_script_t::create(node["m_source"].as_str());
-//             mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//             co_return 0;
-//         }
-
-//         if (node.contains("m_source_path")) {
-//             std::string source = get_file_string_content(node["m_source_path"].as_str());
-
-//             auto obj = lua_script_t::create(source);
-//             mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//             co_return 0;
-//         }
-//     }
-
-//     DBG("Failed to build anything from this object[%s], so the object is invalid", name.c_str());
-//     co_return -1;
-// }
-
-// static std::vector<std::pair<std::string, double>> vkc_constant_sizes_from_string = {
-//     {"SIZEOF_INT16", sizeof(int16_t)},
-//     {"SIZEOF_INT32", sizeof(int32_t)},
-//     {"SIZEOF_INT64", sizeof(int64_t)},
-//     {"SIZEOF_UINT16", sizeof(uint16_t)},
-//     {"SIZEOF_UINT32", sizeof(int32_t)},
-//     {"SIZEOF_UINT64", sizeof(int64_t)},
-//     {"SIZEOF_FLOAT", sizeof(float)},
-//     {"SIZEOF_DOUBLE", sizeof(double)},
-//     {"SIZEOF_VEC_2F", sizeof(float)*2},
-//     {"SIZEOF_VEC_3F", sizeof(float)*3},
-//     {"SIZEOF_VEC_4F", sizeof(float)*4},
-//     {"SIZEOF_VEC_2D", sizeof(double)*2},
-//     {"SIZEOF_VEC_3D", sizeof(double)*3},
-//     {"SIZEOF_VEC_4D", sizeof(double)*4},
-//     {"SIZEOF_MAT_2x2F", sizeof(float)*2*2},
-//     {"SIZEOF_MAT_3x3F", sizeof(float)*3*3},
-//     {"SIZEOF_MAT_4x4F", sizeof(float)*4*4},
-//     {"SIZEOF_MAT_2x2D", sizeof(double)*2*2},
-//     {"SIZEOF_MAT_3x3D", sizeof(double)*3*3},
-//     {"SIZEOF_MAT_4x4D", sizeof(double)*4*4},
-// };
-
-// /*! This either follows a reference to an integer or it returns the direct value if available */
-// co::task<int64_t> resolve_int(vc::virt_state_t *vs, fkyaml::node& node) {
-//     if (node.has_tag_name() && node.get_tag_name() == "!ref")
-//         co_return (co_await vc::depend_resolver_t<integer_t>(vs, node.as_str()))->value;
-//     if (node.is_string()) {
-//         /* Try to resolve an expression resulting in an integer: */
-//         std::string expr_str = node.as_str();
-
-//         /* TODO: Try to resolve user-defined vars */
-        
-//         std::vector<texpr::te_variable> vars;
-//         for (auto &ct : vkc_constant_sizes_from_string)
-//             vars.push_back(texpr::te_variable{
-//                 .name = ct.first.c_str(),
-//                 .address = (void *)&ct.second,
-//                 .type = texpr::TE_VARIABLE,
-//                 .context = nullptr,
-//             });
-
-//         int err;
-//         texpr::te_expr *expr = texpr::te_compile(expr_str.c_str(), vars.data(), vars.size(), &err);
-
-//         if (expr) {
-//             double expr_result = texpr::te_eval(expr);
-//             texpr::te_free(expr);
-//             co_return std::round(expr_result);
-//         } else {
-//             DBG("Parse error at %d\n", err);
-//         }
-//     }
-//     else
-//         co_return node.as_int();
-// }
-
-// /*! This either follows a reference to an integer or it returns the direct value if available */
-// co::task<double> resolve_float(vc::virt_state_t *vs, fkyaml::node& node) {
-//     if (node.has_tag_name() && node.get_tag_name() == "!ref")
-//         co_return (co_await vc::depend_resolver_t<float_t>(vs, node.as_str()))->value;
-//     co_return node.as_float();
-// }
-
-// /*! This either follows a reference to a string or it returns the direct value if available */
-// co::task<std::string> resolve_str(vc::virt_state_t *vs, fkyaml::node& node) {
-//     if (node.has_tag_name() && node.get_tag_name() == "!ref")
-//         co_return (co_await vc::depend_resolver_t<string_t>(vs, node.as_str()))->value;
-//     co_return node.as_str();
-// }
-
-// co::task<vku::ref_t<vku::object_t>> build_object(vc::virt_state_t *vs,
-//         const std::string& name, fkyaml::node& node);
-
-// static int64_t anonymous_increment = 0;
-// inline std::string new_anon_name() {
-//     return "anonymous_" + std::to_string(anonymous_increment++);
-// }
-
-// template <typename VkuT>
-// co::task<vku::ref_t<VkuT>> resolve_obj(vc::virt_state_t *vs, fkyaml::node& node) {
-//     /* Check -- How objects work in the configuration file -- */
-
-//     if (node.has_tag_name() && node.get_tag_name() == "!ref") {
-//         /* This is simply a reference to an object m_field: !ref tag_name*/
-//         co_return co_await vc::depend_resolver_t<VkuT>(vs, node.as_str());
-//     }
-//     else if (node.is_mapping() && node.as_map().size() == 1
-//             && node.as_map().begin()->second.contains("m_type"))
-//     {
-//         /* This is in the form m_field: tag_name: m_type: "..." */
-//         std::string tag = node.as_map().begin()->first.as_str();
-//         auto ref = co_await vkc::build_object(vs, tag, node.as_map().begin()->second);
-//         co_return ref.template to_related<VkuT>();
-//     }
-//     else if (node.contains("m_type")) {
-//         /* This is in the form m_field: m_type: "...", ie, inlined object */
-//         std::string tag = node.contains("m_tag") ?
-//                 node["m_tag"].as_str() : new_anon_name();
-//         auto ref = co_await vkc::build_object(vs, tag, node);
-//         co_return ref.template to_related<VkuT>();
-//     }
-
-//     /* None of the above */
-//     throw vc::except_t{std::format("node:{} is invalid in this contex",
-//             fkyaml::node::serialize(node))};
-// }
-
-// static std::vector<
-//     std::pair<
-//         std::function<bool(fkyaml::node& node)>,
-//         std::function<co::task<vku::ref_t<vku::object_t>> (vc::virt_state_t *,
-//                 const std::string&, fkyaml::node&)>
-//     >
-// > build_object_cbks;
-
-
-inline bool build_object_match(fkyaml::node& node) {
-    if (false);
-    else if (node["m_type"] == "vkc::vertex_input_desc_t") return true;
-    else if (node["m_type"] == "vkc::binding_t")  return true;
-    else if (node["m_type"] == "vkc::cpu_buffer_t") return true;
-    else if (node["m_type"] == "vkc::lua_var_t") return true;
-    else if (node["m_type"] == "vkc::lua_function_t") return true;
-    else if (node["m_type"] == "vku::instance_t") return true;
-    else if (node["m_type"] == "vku::window_t") return true;
-    else if (node["m_type"] == "vku::surface_t") return true;
-    else if (node["m_type"] == "vku::device_t") return true;
-    else if (node["m_type"] == "vku::cmdpool_t") return true;
-    else if (node["m_type"] == "vku::image_t") return true;
-    else if (node["m_type"] == "vku::img_view_t") return true;
-    else if (node["m_type"] == "vku::img_sampl_t") return true;
-    else if (node["m_type"] == "vku::buffer_t") return true;
-    else if (node["m_type"] == "vku::binding_desc_set_t") return true;
-    else if (node["m_type"] == "vku::binding_desc_set_t::buff_binding_t") return true;
-    else if (node["m_type"] == "vku::binding_desc_set_t::sampl_binding_t") return true;
-    else if (node["m_type"] == "vku::shader_t") return true;
-    else if (node["m_type"] == "vku::swapchain_t") return true;
-    else if (node["m_type"] == "vku::renderpass_t") return true;
-    else if (node["m_type"] == "vku::pipeline_t") return true;
-    else if (node["m_type"] == "vku::framebuffs_t") return true;
-    else if (node["m_type"] == "vku::sem_t") return true;
-    else if (node["m_type"] == "vku::fence_t") return true;
-    else if (node["m_type"] == "vku::cmdbuff_t") return true;
-    else if (node["m_type"] == "vku::desc_pool_t") return true;
-    else if (node["m_type"] == "vku::desc_set_t") return true;
-
-    return false;
-}
-
-inline co::task<vc::ref_t<vc::object_t>> build_object_cbk(vc::virt_state_t *vs,
-        const std::string &node_name, fkyaml::node& node)
-{
-    if (false);
-    else if (node["m_type"] == "vkc::vertex_input_desc_t") {
-        std::vector<VkVertexInputAttributeDescription> attrs;
-        for (auto attr : node["m_attrs"].as_seq()) {
-            auto m_location = co_await resolve_int(vs, attr["m_location"]);
-            auto m_binding = co_await resolve_int(vs, attr["m_binding"]);
-            auto m_format = get_enum_val<VkFormat>(attr["m_format"]);
-            auto m_offset = co_await resolve_int(vs, attr["m_offset"]);
-            attrs.push_back(VkVertexInputAttributeDescription{
-                .location = (uint32_t)m_location,
-                .binding = (uint32_t)m_binding,
-                .format = m_format,
-                .offset = (uint32_t)m_offset
-            });
-        }
-        auto m_binding = co_await resolve_int(vs, node["m_binding"]);
-        auto m_stride = co_await resolve_int(vs, node["m_stride"]);
-        auto m_in_rate = get_enum_val<VkVertexInputRate>(node["m_in_rate"]);
-        auto obj = vertex_input_desc_t::create(vku::vertex_input_desc_t{
-            .bind_desc = {
-                .binding = (uint32_t)m_binding,
-                .stride = (uint32_t)m_stride,
-                .inputRate = m_in_rate,
-            },
-            .attr_desc = attrs,
-        });
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vkc::binding_t") {
-        auto m_binding = co_await resolve_int(vs, node["m_binding"]);
-        auto m_stage = get_enum_val<VkShaderStageFlagBits>(node["m_stage"]);
-        auto m_desc_type = get_enum_val<VkDescriptorType>(node["m_desc_type"]);
-        auto obj = binding_t::create(VkDescriptorSetLayoutBinding{
-            .binding = (uint32_t)m_binding,
-            .descriptorType = m_desc_type,
-            .descriptorCount = 1,
-            .stageFlags = m_stage,
-            .pImmutableSamplers = nullptr
-        });
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vkc::cpu_buffer_t") {
-        auto m_size = co_await resolve_int(vs, node["m_size"]);
-        auto obj = cpu_buffer_t::create(m_size);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vkc::lua_var_t") { /* TODO: not sure how is this type usefull */
-        /* lua_var has the same tag_name as the var name */
-        auto obj = lua_var_t::create(node_name);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vkc::lua_function_t") {
-        /* lua_function has the same tag_name as the function name */
-        auto src = co_await resolve_str(vs, node["m_source"]);
-        auto obj = lua_function_t::create(node_name, src);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::instance_t") {
-        auto obj = vku::instance_t::create();
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::window_t") {
-        auto w = co_await resolve_int(vs, node["m_width"]);
-        auto h = co_await resolve_int(vs, node["m_height"]);
-        auto window_name = co_await resolve_str(vs, node["m_name"]);
-        auto obj = vku::window_t::create(w, h, window_name);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::surface_t") {
-        auto window = co_await resolve_obj<vku::window_t>(vs, node["m_window"]);
-        auto instance = co_await resolve_obj<vku::instance_t>(vs, node["m_instance"]);
-        auto obj = vku::surface_t::create(window, instance);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::device_t") {
-        auto surf = co_await resolve_obj<vku::surface_t>(vs, node["m_surface"]);
-        auto obj = vku::device_t::create(surf);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::cmdpool_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-        auto obj = vku::cmdpool_t::create(dev);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::image_t") {
-        auto cp = co_await resolve_obj<vku::cmdpool_t>(vs, node["m_cmdpool"]);
-        auto path = co_await resolve_str(vs, node["m_path"]);
-        auto obj = load_image(cp, path);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::img_view_t") {
-        auto img = co_await resolve_obj<vku::image_t>(vs, node["m_image"]);
-        auto aspect_mask = get_enum_val<VkImageAspectFlagBits>(node["m_aspect_mask"]);
-        auto obj = vku::img_view_t::create(img, aspect_mask);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::img_sampl_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-        auto obj = vku::img_sampl_t::create(dev);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::buffer_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-        size_t sz = co_await resolve_int(vs, node["m_size"]);
-        auto usage_flags = get_enum_val<VkBufferUsageFlagBits>(node["m_usage_flags"]);
-        auto share_mode = get_enum_val<VkSharingMode>(node["m_sharing_mode"]);
-        auto memory_flags = get_enum_val<VkMemoryPropertyFlagBits>(node["m_memory_flags"]);
-        auto obj = vku::buffer_t::create(dev, sz, usage_flags, share_mode, memory_flags);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::binding_desc_set_t") {
-        std::vector<vku::ref_t<vku::binding_desc_set_t::binding_desc_t>> bindings;
-        for (auto& subnode : node["m_descriptors"])
-            bindings.push_back(
-                    co_await resolve_obj<vku::binding_desc_set_t::binding_desc_t>(vs, subnode));
-        auto obj = vku::binding_desc_set_t::create(bindings);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::binding_desc_set_t::buff_binding_t") {
-        auto buff = co_await resolve_obj<vku::buffer_t>(vs, node["m_buffer"]);
-        auto desc = co_await resolve_obj<vkc::binding_t>(vs, node["m_desc"]);
-        auto obj = vku::binding_desc_set_t::buff_binding_t::create(desc->bd, buff);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::binding_desc_set_t::sampl_binding_t") {
-        auto view = co_await resolve_obj<vku::img_view_t>(vs, node["m_view"]);
-        auto sampler = co_await resolve_obj<vku::img_sampl_t>(vs, node["m_sampler"]);
-        auto desc = co_await resolve_obj<vkc::binding_t>(vs, node["m_desc"]);
-        auto obj = vku::binding_desc_set_t::sampl_binding_t::create(desc->bd, view, sampler);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::shader_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-        auto spirv = co_await resolve_obj<spirv_t>(vs, node["m_spirv"]);
-        auto obj = vku::shader_t::create(dev, spirv->spirv);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::swapchain_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-        auto obj = vku::swapchain_t::create(dev);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::renderpass_t") {
-        auto swc = co_await resolve_obj<vku::swapchain_t>(vs, node["m_swapchain"]);
-        auto obj = vku::renderpass_t::create(swc);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::pipeline_t") {
-        auto w = co_await resolve_int(vs, node["m_width"]);
-        auto h = co_await resolve_int(vs, node["m_height"]);
-        auto rp = co_await resolve_obj<vku::renderpass_t>(vs, node["m_renderpass"]);
-        std::vector<vku::ref_t<vku::shader_t>> shaders;
-        for (auto& sh : node["m_shaders"])
-            shaders.push_back(co_await resolve_obj<vku::shader_t>(vs, sh));
-        auto topol = get_enum_val<VkPrimitiveTopology>(node["m_topology"]);
-        auto indesc = co_await resolve_obj<vkc::vertex_input_desc_t>(vs, node["m_input_desc"]);
-        auto binds = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
-        auto obj = vku::pipeline_t::create(w, h, rp, shaders, topol, indesc->vid, binds);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::framebuffs_t") {
-        auto rp = co_await resolve_obj<vku::renderpass_t>(vs, node["m_renderpass"]);
-        auto obj = vku::framebuffs_t::create(rp);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::sem_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-        auto obj = vku::sem_t::create(dev);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::fence_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-        auto obj = vku::fence_t::create(dev);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::cmdbuff_t") {
-        auto cp = co_await resolve_obj<vku::cmdpool_t>(vs, node["m_cmdpool"]);
-        auto obj = vku::cmdbuff_t::create(cp);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::desc_pool_t") {
-        auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-        auto binds = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
-        int cnt = co_await resolve_int(vs, node["m_cnt"]);
-        auto obj = vku::desc_pool_t::create(dev, binds, cnt);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-    else if (node["m_type"] == "vku::desc_set_t") {
-        auto descriptor_pool = co_await resolve_obj<vku::desc_pool_t>(vs, node["m_descriptor_pool"]);
-        auto pipeline = co_await resolve_obj<vku::pipeline_t>(vs, node["m_pipeline"]);
-        auto bindings = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
-        auto obj = vku::desc_set_t::create(descriptor_pool, pipeline, bindings);
-        mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-        co_return obj.to_related<vku::object_t>();
-    }
-
-    co_return nullptr; /* TODO: never reaches here */
-}
-
-// co::task<vku::ref_t<vku::object_t>> build_object(vc::virt_state_t *vs,
-//         const std::string& name, fkyaml::node& node)
-// {
-//     if (!node.is_mapping()) {
-//         DBG("Error node: %s not a mapping", fkyaml::node::serialize(node).c_str());
-//         co_return nullptr;
-//     }
-//     for (auto &[match, cbk] : build_object_cbks)
-//         if (match(node))
-//             co_return co_await cbk(vs, name, node);
-//     if (false);
-//     else if (node["m_type"] == "vkc::vertex_input_desc_t") {
-//         std::vector<VkVertexInputAttributeDescription> attrs;
-//         for (auto attr : node["m_attrs"].as_seq()) {
-//             auto m_location = co_await resolve_int(vs, attr["m_location"]);
-//             auto m_binding = co_await resolve_int(vs, attr["m_binding"]);
-//             auto m_format = get_enum_val<VkFormat>(attr["m_format"]);
-//             auto m_offset = co_await resolve_int(vs, attr["m_offset"]);
-//             attrs.push_back(VkVertexInputAttributeDescription{
-//                 .location = (uint32_t)m_location,
-//                 .binding = (uint32_t)m_binding,
-//                 .format = m_format,
-//                 .offset = (uint32_t)m_offset
-//             });
-//         }
-//         auto m_binding = co_await resolve_int(vs, node["m_binding"]);
-//         auto m_stride = co_await resolve_int(vs, node["m_stride"]);
-//         auto m_in_rate = get_enum_val<VkVertexInputRate>(node["m_in_rate"]);
-//         auto obj = vertex_input_desc_t::create(vku::vertex_input_desc_t{
-//             .bind_desc = {
-//                 .binding = (uint32_t)m_binding,
-//                 .stride = (uint32_t)m_stride,
-//                 .inputRate = m_in_rate,
-//             },
-//             .attr_desc = attrs,
-//         });
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vkc::binding_t") {
-//         auto m_binding = co_await resolve_int(vs, node["m_binding"]);
-//         auto m_stage = get_enum_val<VkShaderStageFlagBits>(node["m_stage"]);
-//         auto m_desc_type = get_enum_val<VkDescriptorType>(node["m_desc_type"]);
-//         auto obj = binding_t::create(VkDescriptorSetLayoutBinding{
-//             .binding = (uint32_t)m_binding,
-//             .descriptorType = m_desc_type,
-//             .descriptorCount = 1,
-//             .stageFlags = m_stage,
-//             .pImmutableSamplers = nullptr
-//         });
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vkc::cpu_buffer_t") {
-//         auto m_size = co_await resolve_int(vs, node["m_size"]);
-//         auto obj = cpu_buffer_t::create(m_size);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vkc::lua_var_t") { /* TODO: not sure how is this type usefull */
-//         /* lua_var has the same tag_name as the var name */
-//         auto obj = lua_var_t::create(name);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vkc::lua_function_t") {
-//         /* lua_function has the same tag_name as the function name */
-//         auto src = co_await resolve_str(vs, node["m_source"]);
-//         auto obj = lua_function_t::create(name, src);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::instance_t") {
-//         auto obj = vku::instance_t::create();
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::window_t") {
-//         auto w = co_await resolve_int(vs, node["m_width"]);
-//         auto h = co_await resolve_int(vs, node["m_height"]);
-//         auto window_name = co_await resolve_str(vs, node["m_name"]);
-//         auto obj = vku::window_t::create(w, h, window_name);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::surface_t") {
-//         auto window = co_await resolve_obj<vku::window_t>(vs, node["m_window"]);
-//         auto instance = co_await resolve_obj<vku::instance_t>(vs, node["m_instance"]);
-//         auto obj = vku::surface_t::create(window, instance);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::device_t") {
-//         auto surf = co_await resolve_obj<vku::surface_t>(vs, node["m_surface"]);
-//         auto obj = vku::device_t::create(surf);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::cmdpool_t") {
-//         auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-//         auto obj = vku::cmdpool_t::create(dev);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::image_t") {
-//         auto cp = co_await resolve_obj<vku::cmdpool_t>(vs, node["m_cmdpool"]);
-//         auto path = co_await resolve_str(vs, node["m_path"]);
-//         auto obj = load_image(cp, path);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::img_view_t") {
-//         auto img = co_await resolve_obj<vku::image_t>(vs, node["m_image"]);
-//         auto aspect_mask = get_enum_val<VkImageAspectFlagBits>(node["m_aspect_mask"]);
-//         auto obj = vku::img_view_t::create(img, aspect_mask);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::img_sampl_t") {
-//         auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-//         auto obj = vku::img_sampl_t::create(dev);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::buffer_t") {
-//         auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-//         size_t sz = co_await resolve_int(vs, node["m_size"]);
-//         auto usage_flags = get_enum_val<VkBufferUsageFlagBits>(node["m_usage_flags"]);
-//         auto share_mode = get_enum_val<VkSharingMode>(node["m_sharing_mode"]);
-//         auto memory_flags = get_enum_val<VkMemoryPropertyFlagBits>(node["m_memory_flags"]);
-//         auto obj = vku::buffer_t::create(dev, sz, usage_flags, share_mode, memory_flags);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::binding_desc_set_t") {
-//         std::vector<vku::ref_t<vku::binding_desc_set_t::binding_desc_t>> bindings;
-//         for (auto& subnode : node["m_descriptors"])
-//             bindings.push_back(
-//                     co_await resolve_obj<vku::binding_desc_set_t::binding_desc_t>(vs, subnode));
-//         auto obj = vku::binding_desc_set_t::create(bindings);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::binding_desc_set_t::buff_binding_t") {
-//         auto buff = co_await resolve_obj<vku::buffer_t>(vs, node["m_buffer"]);
-//         auto desc = co_await resolve_obj<vkc::binding_t>(vs, node["m_desc"]);
-//         auto obj = vku::binding_desc_set_t::buff_binding_t::create(desc->bd, buff);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::binding_desc_set_t::sampl_binding_t") {
-//         auto view = co_await resolve_obj<vku::img_view_t>(vs, node["m_view"]);
-//         auto sampler = co_await resolve_obj<vku::img_sampl_t>(vs, node["m_sampler"]);
-//         auto desc = co_await resolve_obj<vkc::binding_t>(vs, node["m_desc"]);
-//         auto obj = vku::binding_desc_set_t::sampl_binding_t::create(desc->bd, view, sampler);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::shader_t") {
-//         auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-//         auto spirv = co_await resolve_obj<spirv_t>(vs, node["m_spirv"]);
-//         auto obj = vku::shader_t::create(dev, spirv->spirv);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::swapchain_t") {
-//         auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-//         auto obj = vku::swapchain_t::create(dev);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::renderpass_t") {
-//         auto swc = co_await resolve_obj<vku::swapchain_t>(vs, node["m_swapchain"]);
-//         auto obj = vku::renderpass_t::create(swc);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::pipeline_t") {
-//         auto w = co_await resolve_int(vs, node["m_width"]);
-//         auto h = co_await resolve_int(vs, node["m_height"]);
-//         auto rp = co_await resolve_obj<vku::renderpass_t>(vs, node["m_renderpass"]);
-//         std::vector<vku::ref_t<vku::shader_t>> shaders;
-//         for (auto& sh : node["m_shaders"])
-//             shaders.push_back(co_await resolve_obj<vku::shader_t>(vs, sh));
-//         auto topol = get_enum_val<VkPrimitiveTopology>(node["m_topology"]);
-//         auto indesc = co_await resolve_obj<vkc::vertex_input_desc_t>(vs, node["m_input_desc"]);
-//         auto binds = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
-//         auto obj = vku::pipeline_t::create(w, h, rp, shaders, topol, indesc->vid, binds);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::framebuffs_t") {
-//         auto rp = co_await resolve_obj<vku::renderpass_t>(vs, node["m_renderpass"]);
-//         auto obj = vku::framebuffs_t::create(rp);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::sem_t") {
-//         auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-//         auto obj = vku::sem_t::create(dev);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::fence_t") {
-//         auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-//         auto obj = vku::fence_t::create(dev);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::cmdbuff_t") {
-//         auto cp = co_await resolve_obj<vku::cmdpool_t>(vs, node["m_cmdpool"]);
-//         auto obj = vku::cmdbuff_t::create(cp);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::desc_pool_t") {
-//         auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-//         auto binds = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
-//         int cnt = co_await resolve_int(vs, node["m_cnt"]);
-//         auto obj = vku::desc_pool_t::create(dev, binds, cnt);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-//     else if (node["m_type"] == "vku::desc_set_t") {
-//         auto descriptor_pool = co_await resolve_obj<vku::desc_pool_t>(vs, node["m_descriptor_pool"]);
-//         auto pipeline = co_await resolve_obj<vku::pipeline_t>(vs, node["m_pipeline"]);
-//         auto bindings = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
-//         auto obj = vku::desc_set_t::create(descriptor_pool, pipeline, bindings);
-//         mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
-//         co_return obj.to_related<vku::object_t>();
-//     }
-
-//     DBG("Object m_type is not known: %s", node["m_type"].as_str().c_str());
-//     throw vc::except_t{std::format("Invalid object type: {}", node["m_type"].as_str())};
-// }
-
-
-// co::task_t build_schema(vc::virt_state_t *vs, fkyaml::node& root) {
-//     ASSERT_COFN(CHK_BOOL(root.is_mapping()));
-
-//     for (auto &[name, node] : root.as_map()) {
-//         if (!node.contains("m_type")) {
-//             co_await co::sched(vkc::build_pseudo_object(vs, name.as_str(), node));
-//         }
-//         else {
-//             co_await co::sched(vkc::build_object(vs, name.as_str(), node));
-//         }
-//     }
-
-//     co_return 0;
-// }
-
-// inline vkc_error_e parse_config(vc::virt_state_t *vs, const char *path) {
-//     std::ifstream file(path);
-
-//     try {
-//         auto config = fkyaml::node::deserialize(file);
-
-//         auto pool = co::create_pool();
-//         pool->sched(build_schema(vs, config));
-
-//         if (pool->run() != co::RUN_OK) {
-//             DBG("Failed to create the schema");
-//             return VKC_ERROR_GENERIC;
-//         }
-
-//         if (vs->wanted_objects.size()) {
-//             for (auto &[k, v]: vs->wanted_objects) {
-//                 DBG("Unknown Object: %s", k.c_str());
-//             }
-//             return VKC_ERROR_PARSE_YAML;
-//         }
-//     }
-//     catch (fkyaml::exception &e) {
-//         DBG("fkyaml::exception: %s", e.what());
-//         return VKC_ERROR_PARSE_YAML;
-//     }
-//     catch (std::exception &e) {
-//         DBG("Exception: %s", e.what());
-//         return VKC_ERROR_GENERIC;
-//     }
-
-//     return VKC_ERROR_OK;
-// }
-
-// inline void* luaw_to_user_data(int index) { return (void*)(intptr_t)(index); }
-// inline int luaw_from_user_data(void *val) { return (int)(intptr_t)(val); }
-
-// inline vc::virt_state_t *luaw_get_virt_state(lua_State *L) {
-//     lua_pushstring(L, "virt_state");
-//     lua_gettable(L, LUA_REGISTRYINDEX);
-//     auto ptr = (vc::virt_state_t *)lua_touserdata(L, -1);
-//     lua_pop(L, 1);
-//     return ptr;
-// }
-
-// void luaw_push_error(lua_State *L, std::string err_str) {
-//     lua_Debug ar;
-//     std::string context;
-//     int i = 2;
-//     auto line_source = [](const char *src, int N) -> std::string {
-//         if (!src)
-//             return "<unknown>";
-//         std::istringstream stream(src);
-//         std::string line;
-//         int current = 1;
-
-//         while (std::getline(stream, line)) {
-//             if (current == N)
-//                 return line;
-//             current++;
-//         }
-//         return "<unknown>";
-//     };
-
-//     while (lua_getstack(L, i, &ar)) {
-//         lua_getinfo(L, "nSl", &ar);
-//         context = std::format("      at {:>20}:{:<4}, in '{}':\n",
-//                 ar.short_src, ar.currentline, line_source(ar.source, ar.currentline)) + context;
-//         i++;
-//     }
-//     if (lua_getstack(L, 1, &ar)) {
-//         lua_getinfo(L, "nSl", &ar);
-//         context += std::format("Error at {:>20}:{:<4}, in '{}':\n",
-//                 ar.short_src, ar.currentline, line_source(ar.source, ar.currentline));
-//     }
-//     context += err_str;
-//     lua_pushstring(L, context.c_str());
-// }
-
-/* This is here just to hold the diverse bitmaps */
-// template <typename T>
-// struct bm_t {
-//     using type = T;
-// };
-
-// template <typename Param, ssize_t index>
-// struct luaw_param_t{
-//     void luaw_single_param(lua_State *L) {
-//         /* What a parameter can be:
-//         1. vku::ref_t of some object
-//         2. a std::string
-//         3. an integer bitmap
-//         4. an integer */
-
-//         /* If this is resolved to a void it will error out, which is ok, because this case is either
-//         way an error */
-//         demangle_static_assert<false, Param>(" - Is not a valid parameter type");
-//     }
-// };
-
-// /* This resolves userdata(void *) received from lua to an vku parameter */
-// template <ssize_t index>
-// struct luaw_param_t<void *, index> {
-//     void *luaw_single_param(lua_State *L) {
-//         if (lua_isnil(L, index))
-//             return NULL;
-//         return lua_touserdata(L, index);
-//     }
-// };
-
-// /* This resolves userdata(vku::ref) received from lua to an vku parameter */
-// template <typename T, ssize_t index>
-// struct luaw_param_t<vku::ref_t<T>, index> {
-//     vku::ref_t<T> luaw_single_param(lua_State *L) {
-//         if (lua_isnil(L, index))
-//             return vku::ref_t<T>{}; /* if the user intended to pass a nill, we give it as a nullptr */
-//         int obj_index = luaw_from_user_data(lua_touserdata(L, index));
-//         if (obj_index == 0) {
-//             luaw_push_error(L, std::format("Invalid parameter at index {} of expected type {} but "
-//                     "got [{}] instead",
-//                     index, demangle<T>(), lua_typename(L, lua_type(L, index))));
-//             lua_error(L);
-//         }
-//         auto vs = luaw_get_virt_state(L);
-//         return vs->objects[obj_index].obj.to_related<T>();
-//     }
-// };
-
-// /* This resolves bitmasks received from lua to an vku parameter */
-// template <typename T, ssize_t index>
-// struct luaw_param_t<bm_t<T>, index> {
-//     T luaw_single_param(lua_State *L) {
-//         /* There are 2 options here (maybe later we will also add numbers, but not for now):
-//             1. This is a string that converts to the respective type bitmask
-//             2. An integer, this will be converted to T
-//             3. This is an enum value, either like 1. or 2. */
-//         auto from_string = [](lua_State *L, int idx) -> T {
-//             const char *val = lua_tostring(L, idx);
-//             if (!val) {
-//                 luaw_push_error(L, std::format(
-//                         "Invalid parameter at index {}, failed conversion to [vku-bitmask] "
-//                         "object is an invalid string: [{}]",
-//                         idx, lua_typename(L, lua_type(L, idx))));
-//                 lua_error(L);
-//             }
-//             fkyaml::node str_enum_val{val};
-//             return get_enum_val<T>(str_enum_val);
-//         };
-//         auto from_integer = [](lua_State *L, int idx) -> T {
-//             int valid = 0;
-//             uint32_t val = lua_tointegerx(L, idx, &valid);
-//             if (!valid) {
-//                 luaw_push_error(L, std::format(
-//                         "Invalid parameter at index {}, failed conversion to [vku-bitmask] "
-//                         "object is an invalid integer: [{}]",
-//                         idx, lua_typename(L, lua_type(L, idx))));
-//                 lua_error(L);
-//             }
-//             return (T)val;
-//         };
-//         if (lua_isinteger(L, index)) {
-//             return from_integer(L, (int)index);
-//         }
-//         else if (lua_isstring(L, index)) {
-//             return from_string(L, (int)index);
-//         } 
-//         else if (lua_istable(L, index)) {
-//             int len = lua_rawlen(L, index);
-//             T ret = (T)0;
-//             for (int i = 1; i <= len; i++) {
-//                 lua_rawgeti(L, index, i);
-//                 if (lua_isinteger(L, -1))
-//                     ret = (T)(ret | from_integer(L, -1));
-//                 else if (lua_isstring(L, -1))
-//                     ret = (T)(ret | from_string(L, -1));
-//                 else {
-//                     luaw_push_error(L, std::format(
-//                             "Invalid parameter at index {}, failed conversion to [vku-bitmask] "
-//                             "object is an invalid string or integer: [{}]",
-//                             index, lua_typename(L, lua_type(L, index))));
-//                     lua_error(L);
-//                 }
-//                 lua_pop(L, 1);
-//             }
-//             return ret;
-//         }
-//         else {
-//             luaw_push_error(L, std::format(
-//                     "Invalid parameter at index {}, failed conversion to [vku-bitmask] "
-//                     "object is neither table, integer or string: [{}]",
-//                     index, lua_typename(L, lua_type(L, index))));
-//             lua_error(L);
-//             return (T)0;
-//         }
-//     }
-// };
-
-// /* This resolves integers received from lua to an vku parameter */
-// template <std::integral Integer, ssize_t index>
-// struct luaw_param_t<Integer, index> {
-//     Integer luaw_single_param(lua_State *L) {
-//         int valid = 0;
-//         Integer ret = lua_tointegerx(L, index, &valid);
-//         if (!valid) {
-//             luaw_push_error(L,
-//                     std::format("Invalid parameter at index {}, failed conversion to integer from "
-//                     "[{}]",
-//                     index, lua_typename(L, lua_type(L, index))));
-//             lua_error(L);
-//         }
-//         return ret;
-//     }
-// };
-
-// /* This resolves floats received from lua to an vku parameter */
-// template <std::floating_point Float, ssize_t index>
-// struct luaw_param_t<Float, index> {
-//     Float luaw_single_param(lua_State *L) {
-//         int valid = 0;
-//         Float ret = lua_tonumberx(L, index, &valid);
-//         if (!valid) {
-//             luaw_push_error(L,
-//                     std::format("Invalid parameter at index {}, failed conversion to integer from "
-//                     "[{}]",
-//                     index, lua_typename(L, lua_type(L, index))));
-//             lua_error(L);
-//         }
-//         return ret;
-//     }
-// };
-
-// /* This resolves strings received from lua to an vku parameter */
-// template <ssize_t index>
-// struct luaw_param_t<char *, index> {
-//     char *luaw_single_param(lua_State *L) {
-//         char *ret = lua_tostring(L, index);
-//         if (!ret) {
-//             luaw_push_error(L,
-//                     std::format("Invalid parameter at index {}, failed conversion to string from "
-//                     "[{}]",
-//                     index, lua_typename(L, lua_type(L, index))));
-//             lua_error(L);
-//         }
-//         return ret;
-//     }
-// };
-
-// template <typename T>
-// struct de_bitmaptizize { using Type = T; }; 
-
-// template <typename T>
-// struct de_bitmaptizize<bm_t<T>> { using Type = T; };
-
-// template <typename ...Args>
-// struct de_bitmaptizize<std::tuple<Args...>> {
-//     using Type = std::tuple<typename de_bitmaptizize<Args>::Type...>;
-// };
-
-// template <typename T, typename U>
-// struct de_bitmaptizize<std::pair<T, U>> {
-//     using Type = std::pair<typename de_bitmaptizize<T>::Type, typename de_bitmaptizize<U>::Type>;
-// };
-
-// template <typename T>
-// struct de_bitmaptizize<std::vector<T>> {
-//     using Type = std::vector<typename de_bitmaptizize<T>::Type>;
-// };
-
-// template <typename ...Args, ssize_t index>
-// struct luaw_param_t<std::tuple<Args...>, index> {
-//     template <size_t ...I>
-//     auto _luaw_single_param_impl(lua_State *L, std::index_sequence<I...>) {
-//         typename de_bitmaptizize<std::tuple<Args...>>::Type ret;
-//         if (lua_isnil(L, index))
-//             return ret;
-//         if (!lua_istable(L, index)) {
-//             luaw_push_error(L, std::format("Invalid object of type: {} at index {}",
-//                     lua_typename(L, lua_type(L, index)), index));
-//             lua_error(L);
-//         }
-//         int abs_idx = lua_absindex(L, index);
-//         int len = lua_rawlen(L, index);
-//         for (int i = len; i >= 1; i--)
-//             lua_rawgeti(L, abs_idx, i);
-//         ret = typename de_bitmaptizize<std::tuple<Args...>>::Type{
-//                 luaw_param_t<Args, -ssize_t(I)-1>{}.luaw_single_param(L)...};
-//         lua_pop(L, len);
-//         return ret;
-//     }
-
-//     auto luaw_single_param(lua_State *L) {
-//         return _luaw_single_param_impl(L, std::index_sequence_for<Args...>{});
-//     }
-// };
-
-// template <typename Arg1, typename Arg2, ssize_t index>
-// struct luaw_param_t<std::pair<Arg1, Arg2>, index> {
-//     auto luaw_single_param(lua_State *L) {
-//         auto tuple = luaw_param_t<std::tuple<Arg1, Arg2>, index>{}
-//                 .luaw_single_param(L);
-//         typename de_bitmaptizize<std::pair<Arg1, Arg2>>::Type ret =
-//                 {std::get<0>(tuple), std::get<1>(tuple)};
-//         return ret;
-//     }
-// };
-
-// template <typename T, ssize_t index>
-// struct luaw_param_t<std::vector<T>, index> {
-//     auto luaw_single_param(lua_State *L) {
-//         typename de_bitmaptizize<std::vector<T>>::Type ret;
-//         if (lua_isnil(L, index))
-//             return ret;
-//         if (!lua_istable(L, index)) {
-//             luaw_push_error(L, std::format("Invalid object of type: {} at index {}",
-//                     lua_typename(L, lua_type(L, index)), index));
-//             lua_error(L);
-//         }
-//         int len = lua_rawlen(L, index);
-//         for (int i = 1; i <= len; i++) {
-//             lua_rawgeti(L, index, i);
-//             ret.push_back(luaw_param_t<T, -1>{}.luaw_single_param(L));
-//             lua_pop(L, 1);
-//         }
-//         return ret;
-//     }
-// };
-
-// template <typename T>
-// struct luaw_returner_t {
-//     void luaw_ret_push(lua_State *L, T&& t) {
-//         (void)t;
-//         demangle_static_assert<false, T>(" - Is not a valid return type");
-//     }
-// };
-
-// template <std::integral Integer>
-// struct luaw_returner_t<Integer> {
-//     void luaw_ret_push(lua_State *L, Integer&& x) {
-//         lua_pushinteger(L, x);
-//     }
-// };
-
-// template <>
-// struct luaw_returner_t<void *> {
-//     void luaw_ret_push(lua_State *L, void *rawptr) {
-//         lua_pushlightuserdata(L, rawptr);
-//     }
-// };
-
-// template <auto function, typename ...Params, size_t ...I>
-// int luaw_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
-//     using RetType = decltype(function(
-//             luaw_param_t<Params, I + 1>{}.luaw_single_param(L)...));
-
-//     if constexpr (std::is_void_v<RetType>) {
-//         function(luaw_param_t<Params, I + 1>{}.luaw_single_param(L)...);
-//         return 0;
-//     }
-//     else {
-//         luaw_returner_t<RetType>{}.luaw_ret_push(L, function(
-//                 luaw_param_t<Params, I + 1>{}.luaw_single_param(L)...));
-//         return 1;
-//     }    
-// }
-
-// template <typename VkuT, auto member_ptr, typename ...Params, size_t ...I>
-// int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
-//     int index = luaw_from_user_data(lua_touserdata(L, 1));
-//     if (index == 0) {
-//         luaw_push_error(L, "Nil user object can't call member function! (check if : used)");
-//         lua_error(L);
-//     }
-//     auto vs = luaw_get_virt_state(L);
-//     auto &o = vs->objects[index];
-//     if (!o.obj) {
-//         luaw_push_error(L, "internal_error: Nil user object can't call member function!");
-//         lua_error(L);
-//     }
-//     auto obj = o.obj.to_related<VkuT>();
-
-//     using RetType = decltype((obj.get()->*member_ptr)(
-//             luaw_param_t<Params, I + 2>{}.luaw_single_param(L)...));
-
-//     if constexpr (std::is_void_v<RetType>) {
-//         (obj.get()->*member_ptr)(luaw_param_t<Params, I + 2>{}.luaw_single_param(L)...);
-//         return 0;
-//     }
-//     else {
-//         luaw_returner_t<RetType>{}.luaw_ret_push(L, (obj.get()->*member_ptr)(
-//                 luaw_param_t<Params, I + 2>{}.luaw_single_param(L)...));
-//         return 1;
-//     }    
-// }
-
-// inline vkc_error_e luaw_execute_window_resize(int width, int height);
-// int luaw_catch_exception(lua_State *L) {
-//     /* We don't let errors get out of the call because we don't want to break lua. As such, we catch
-//     any error and propagate it as a lua error. */
-//     try {
-//         throw ; // re-throw the current exception
-//     }
-//     catch (vku::except_t &vkerr) {
-//         if (vkerr.vk_err == VK_SUBOPTIMAL_KHR) {
-//             DBG("TODO: resize? Somehow...");
-//             ASSERT_FN(luaw_execute_window_resize(800, 600));
-//         }
-//         else {
-//             luaw_push_error(L, std::format("Invalid call: {}", vkerr.what()));
-//             lua_error(L);
-//         }
-//     }
-//     catch (fkyaml::exception &e) {
-//         luaw_push_error(L, std::format("fkyaml::exception: {}", e.what()));
-//         lua_error(L);
-//     }
-//     catch (std::exception &e) {
-//         luaw_push_error(L, std::format("std::exception: {}", e.what()));
-//         lua_error(L);
-//     }
-//     catch (...) {
-//         throw ; /* most probably the lua string */
-//     }
-
-//     return 0;
-// }
-
-// template <auto function, typename ...Params>
-// int luaw_function_wrapper(lua_State *L) {
-//     try {
-//         return luaw_function_wrapper_impl<function, Params...>(
-//                 L, std::index_sequence_for<Params...>{});
-//     }
-//     catch (...) { return luaw_catch_exception(L); }
-// }
-
-// template <typename VkuT, auto member_ptr, typename ...Params>
-// int luaw_member_function_wrapper(lua_State *L) {
-//     try {
-//         return luaw_member_function_wrapper_impl<VkuT, member_ptr, Params...>(
-//                 L, std::index_sequence_for<Params...>{});
-//     }
-//     catch (...) { return luaw_catch_exception(L); }
-// }
-
-
-// // helper to detect if a type is vku::ref_t<...>
-// template <typename>
-// struct is_vku_ref_t : std::false_type {};
-
-// template <typename T>
-// struct is_vku_ref_t<vku::ref_t<T>> : std::true_type {};
-
-// // helper to detect if a type is vku::ref_t<...>
-// template <typename T>
-// concept is_vku_enum = requires(fkyaml::node n) {
-//     get_enum_val<T>(n);
-// };
-
-// /* getter */
-// template <typename VkuT, auto member_ptr>
-// int luaw_member_object_wrapper(lua_State *L) {
-//     try {
-//         int index = luaw_from_user_data(lua_touserdata(L, -2)); /* an int, ok on unwind */
-//         if (index == 0) {
-//             luaw_push_error(L, "Nil user object can't get member!");
-//             lua_error(L);
-//         }
-//         auto vs = luaw_get_virt_state(L);
-//         auto &o = vs->objects[index];
-//         if (!o.obj) {
-//             luaw_push_error(L, "internal_error: Nil user object can't get member!");
-//             lua_error(L);
-//         }
-//         auto obj = o.obj.to_related<VkuT>();
-//         auto &member = obj.get()->*member_ptr;
-
-//         using member_type = std::decay_t<decltype(member)>;
-
-//         if constexpr (std::is_same_v<member_type, std::string>) {
-//             lua_pushstring(L, member.c_str());
-//             return 1;
-//         }
-//         else if constexpr (std::is_integral_v<member_type>) {
-//             lua_pushinteger(L, member);
-//             return 1;
-//         }
-//         else if constexpr (std::is_floating_point_v<member_type>) {
-//             lua_pushnumber(L, member);
-//             return 1;
-//         }
-//         else if constexpr (std::is_same_v<member_type, std::vector<std::string>>) {
-//             lua_createtable(L, member.size(), 0);
-//             for (size_t i = 1; auto &str : member) {
-//                 lua_pushstring(L, str.c_str());
-//                 lua_rawseti(L, -2, i++);
-//             }
-//             return 1;
-//         }
-//         else if constexpr (is_vku_enum<member_type>) {
-//             lua_pushnumber(L, (int)member);
-//             return 1;
-//         }
-//         else if constexpr (is_vku_ref_t<member_type>::value) {
-//             if (!member) {
-//                 lua_pushnil(L);
-//                 return 1;
-//             }
-//             if (!member->cbks) {
-//                 luaw_push_error(L, "internal_error: How did this object get known to lua ?!");
-//                 lua_error(L);
-//             }
-//             if (!member->cbks->usr_ptr) {
-//                 /* So this object was no longer known by the lua side, we must resurect it */
-
-//                 /* We first get it a new id */
-//                 int new_id = vs->free_objects.back();
-//                 vs->free_objects.pop_back();
-
-//                 /* make it reference it's own id */
-//                 member->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
-
-//                 /* add it's lua-name-mapping and it's lua-id-mapping */
-//                 std::string name = new_anon_name();
-//                 vs->objects_map[name] = new_id;
-//                 vs->objects[new_id].obj = member;
-//                 vs->objects[new_id].name = name;
-//             }
-//             int member_id = (intptr_t)member->cbks->usr_ptr.get();
-//             if (member_id >= vs->objects.size() || member_id < 0) {
-//                 luaw_push_error(L, "internal_error: Integrity check failed");
-//                 lua_error(L);
-//             }
-//             lua_pushlightuserdata(L, luaw_to_user_data(member_id));
-//             luaL_setmetatable(L, "__vku_metatable");
-//             return 1;
-//         }
-//         else {
-//             demangle_static_assert<false, decltype(member)>(" - Is not a valid member type");
-//             return 0;
-//         }
-//     }
-//     catch (...) { return luaw_catch_exception(L); }
-// }
-
-// template <typename VkuT, auto member_ptr>
-// int luaw_member_setter_object_wrapper(lua_State *L) {
-//     int index = luaw_from_user_data(lua_touserdata(L, -3)); /* an int, ok on unwind */
-//     if (index == 0) {
-//         luaw_push_error(L, "Nil user object can't set member!");
-//         lua_error(L);
-//     }
-//     auto vs = luaw_get_virt_state(L);
-//     auto &o = vs->objects[index];
-//     if (!o.obj) {
-//         luaw_push_error(L, "internal_error: Nil user object can't set member!");
-//         lua_error(L);
-//     }
-//     auto obj = o.obj.to_related<VkuT>();
-//     auto &member = obj.get()->*member_ptr;
-
-//     using member_type = std::decay_t<decltype(member)>;
-
-//     if constexpr (std::is_same_v<member_type, std::string>) {
-//         const char *str = lua_tostring(L, -1);
-//         member = str ? str : "";
-//         return 0;
-//     }
-//     else if constexpr (std::is_integral_v<member_type>) {
-//         uint64_t val = lua_tointeger(L, -1);
-//         member = (member_type)val;
-//         return 0;
-//     }
-//     else if constexpr (std::is_floating_point_v<member_type>) {
-//         double val = lua_tonumber(L, -1);
-//         member = (member_type)val;
-//         return 0;
-//     }
-//     else if constexpr (std::is_same_v<member_type, std::vector<std::string>>) {
-//         if (!lua_istable(L, -1)) {
-//             luaw_push_error(L, "You need a table for this assignment!");
-//             lua_error(L);
-//         }
-//         int len = lua_rawlen(L, -1);
-//         std::vector<std::string> to_asign;
-//         for (int i = 1; i <= len; i++) {
-//             lua_rawgeti(L, -1, i);
-//             const char *str = lua_tostring(L, -1);
-//             to_asign.push_back(str ? str : "");
-//             lua_pop(L, 1);
-//         }
-//         member = to_asign;
-//         return 0;
-//     }
-//     else if constexpr (is_vku_enum<member_type>) {
-//         uint64_t val = lua_tointeger(L, -1);
-//         member = (member_type)val;
-//         return 0;
-//     }
-//     else if constexpr (is_vku_ref_t<member_type>::value) {
-//         int index = luaw_from_user_data(lua_touserdata(L, -1)); /* an int, ok on unwind */
-//         if (index == 0) {
-//             member = nullptr;
-//             return 0;
-//         }
-//         member = vs->objects[index].obj;
-//         return 0;
-//     }
-//     else {
-//         demangle_static_assert<false, decltype(member)>(" - Is not a valid member type");
-//         return 0;
-//     }
-// }
-
-// template <typename VkuT, auto member_ptr, typename ...Params>
-// void luaw_register_member_function(const char *function_name) {
-//     lua_class_members[VkuT::type_id_static()][function_name] = luaw_member_t{
-//         .fn = &luaw_member_function_wrapper<VkuT, member_ptr, Params...>,
-//         .member_type = LUAW_MEMBER_FUNCTION
-//     };
-// }
-
-// template <typename VkuT, auto member_ptr>
-// void luaw_register_member_object(const char *member_name) {
-//     lua_class_members[VkuT::type_id_static()][member_name] = luaw_member_t{
-//         .fn = &luaw_member_object_wrapper<VkuT, member_ptr>,
-//         .member_type = LUAW_MEMBER_OBJECT
-//     };
-
-//     lua_class_member_setters[VkuT::type_id_static()][member_name] =
-//             &luaw_member_setter_object_wrapper<VkuT, member_ptr>;
-// }
-
-// #define VKC_REG_MEMB(obj_type, memb)            \
-// vulkan_composer::luaw_register_member_object<   \
-// /* self        */   obj_type,                   \
-// /* member      */   &obj_type::memb>            \
-// /* member name */   (#memb)
-
-// #define VKC_REG_FN(obj_type, fn, ...)           \
-// vulkan_composer::luaw_register_member_function< \
-// /* self     */  obj_type,                       \
-// /* function */  &obj_type::fn,                  \
-// /* params   */  ##__VA_ARGS__>                  \
-// /* fn name  */  (#fn)
 
 inline void glfw_pool_events() {
     glfwPollEvents();
@@ -3402,61 +1347,504 @@ inline int copy_from_gpu_to_cpu(void *dst, vku::ref_t<vku::buffer_t> src,
     return 0;
 }
 
-inline std::vector<luaL_Reg> vku_tab_funcs = {
-    {"glfw_pool_events",    vc::luaw_function_wrapper<glfw_pool_events>},
-    {"get_key",             vc::luaw_function_wrapper<glfw_get_key,
-            vc::ref_t<vku::window_t>, uint32_t>},
-    {"signal_close",        vc::luaw_function_wrapper<internal_signal_close>},
-    {"aquire_next_img",     vc::luaw_function_wrapper<internal_aquire_next_img,
-            vc::ref_t<vku::swapchain_t>, vc::ref_t<vku::sem_t>>},
-    {"submit_cmdbuff",      vc::luaw_function_wrapper<vku::submit_cmdbuff,
-            std::vector<std::pair<vc::ref_t<vku::sem_t>, vc::bm_t<VkPipelineStageFlagBits>>>,
-            vc::ref_t<vku::cmdbuff_t>, vc::ref_t<vku::fence_t>,
-            std::vector<vc::ref_t<vku::sem_t>>>},
-    {"present",             vc::luaw_function_wrapper<vku::present,
-            vc::ref_t<vku::swapchain_t>,
-            std::vector<vc::ref_t<vku::sem_t>>,
-            uint32_t>},
-    {"wait_fences",         vc::luaw_function_wrapper<vku::wait_fences,
-            std::vector<vc::ref_t<vku::fence_t>>>},
-    {"reset_fences",        vc::luaw_function_wrapper<vku::reset_fences,
-            std::vector<vc::ref_t<vku::fence_t>>>},
-    {"device_wait_handle",  vc::luaw_function_wrapper<internal_device_wait_handle,
-            vc::ref_t<vku::device_t>>},
-    {"copy_from_cpu_to_gpu",vc::luaw_function_wrapper<copy_from_cpu_to_gpu,
-            vc::ref_t<vku::buffer_t>, void *, size_t, size_t>},
-    {"copy_from_gpu_to_cpu",vc::luaw_function_wrapper<copy_from_gpu_to_cpu,
-            void *, vc::ref_t<vku::buffer_t>, size_t, size_t>},
-};
-
 inline void luaw_set_glfw_fields(vc::virt_state_t *vs);
 
-// static std::vector<std::function<void(lua_State *L)>> cbk_register_mapping;
-// static std::vector<std::function<void(void)>> cbk_register_members;
+inline int register_meta(vc::virt_state_t *vs) {
+    DBG_SCOPE();
+
+    std::vector<luaL_Reg> vku_tab_funcs = {
+        {"glfw_pool_events",    vc::luaw_function_wrapper<glfw_pool_events>},
+        {"get_key",             vc::luaw_function_wrapper<glfw_get_key,
+                vc::ref_t<vku::window_t>, uint32_t>},
+        {"signal_close",        vc::luaw_function_wrapper<internal_signal_close>},
+        {"aquire_next_img",     vc::luaw_function_wrapper<internal_aquire_next_img,
+                vc::ref_t<vku::swapchain_t>, vc::ref_t<vku::sem_t>>},
+        {"submit_cmdbuff",      vc::luaw_function_wrapper<vku::submit_cmdbuff,
+                std::vector<std::pair<vc::ref_t<vku::sem_t>, vc::bm_t<VkPipelineStageFlagBits>>>,
+                vc::ref_t<vku::cmdbuff_t>, vc::ref_t<vku::fence_t>,
+                std::vector<vc::ref_t<vku::sem_t>>>},
+        {"present",             vc::luaw_function_wrapper<vku::present,
+                vc::ref_t<vku::swapchain_t>,
+                std::vector<vc::ref_t<vku::sem_t>>,
+                uint32_t>},
+        {"wait_fences",         vc::luaw_function_wrapper<vku::wait_fences,
+                std::vector<vc::ref_t<vku::fence_t>>>},
+        {"reset_fences",        vc::luaw_function_wrapper<vku::reset_fences,
+                std::vector<vc::ref_t<vku::fence_t>>>},
+        {"device_wait_handle",  vc::luaw_function_wrapper<internal_device_wait_handle,
+                vc::ref_t<vku::device_t>>},
+        {"copy_from_cpu_to_gpu",vc::luaw_function_wrapper<copy_from_cpu_to_gpu,
+                vc::ref_t<vku::buffer_t>, void *, size_t, size_t>},
+        {"copy_from_gpu_to_cpu",vc::luaw_function_wrapper<copy_from_gpu_to_cpu,
+                void *, vc::ref_t<vku::buffer_t>, size_t, size_t>},
+    };
+    ASSERT_FN(add_lua_tab_funcs(vs, vku_tab_funcs));
+
+    /* TODO: register object structures */
+    // /* vku::window_t
+    // ----------------------------------------------------------------------------------------- */
+
+    VC_REGISTER_MEMBER_OBJECT(vs, vku::window_t, m_name);
+    VC_REGISTER_MEMBER_OBJECT(vs, vku::window_t, m_width);
+    VC_REGISTER_MEMBER_OBJECT(vs, vku::window_t, m_height);
+
+    // /* vku::instance_t
+    // ----------------------------------------------------------------------------------------- */
+
+    VC_REGISTER_MEMBER_OBJECT(vs, vku::instance_t, m_app_name);
+    VC_REGISTER_MEMBER_OBJECT(vs, vku::instance_t, m_engine_name);
+    VC_REGISTER_MEMBER_OBJECT(vs, vku::instance_t, m_extensions);
+    VC_REGISTER_MEMBER_OBJECT(vs, vku::instance_t, m_layers);
+
+    // /* vku::cmdbuff_t
+    // ----------------------------------------------------------------------------------------- */
+
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, begin, vc::bm_t<VkCommandBufferUsageFlagBits>);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, begin_rpass, vku::ref_t<vku::framebuffs_t>, uint32_t);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_vert_buffs,
+            uint32_t, std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>>);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_desc_set,
+            vc::bm_t<VkPipelineBindPoint>, vku::ref_t<vku::pipeline_t>, vku::ref_t<vku::desc_set_t>);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_idx_buff,
+            vc::ref_t<vku::buffer_t>, uint64_t, vc::bm_t<VkIndexType>);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, draw, vku::ref_t<vku::pipeline_t>, uint64_t);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, draw_idx, vku::ref_t<vku::pipeline_t>, uint64_t);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, end_rpass);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, end);
+    vc::luaw_register_member_function<vku::cmdbuff_t, &vku::cmdbuff_t::end>(vs, "end_begin");
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, reset);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_compute, vku::ref_t<vku::compute_pipeline_t>);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, dispatch_compute, uint32_t, uint32_t, uint32_t);
+
+    // /* vkc::cpu_buffer_t
+    // ----------------------------------------------------------------------------------------- */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vkc::cpu_buffer_t, data);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vkc::cpu_buffer_t, size);
+
+    /* Done objects
+    ----------------------------------------------------------------------------------------- */
+
+    /* TODO: Register/Fix all the above builders */
+    /* TODO: Registers vulkan enums in the lua library */
+    vc::add_lua_flag_mapping(vs, vc::vk_format_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_vertex_input_rate_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_shader_stage_flag_bits_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_descriptor_type_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_pipeline_stage_flag_bits_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_index_type_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_pipeline_bind_point_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_command_buffer_usage_flag_bits_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_image_aspect_flag_bits_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_primitive_topology_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_memory_property_flag_bits_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_sharing_mode_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_buffer_usage_flag_bits_from_str);
+    vc::add_lua_flag_mapping(vs, vc::shader_stage_from_string);
+    luaw_set_glfw_fields(vs);
+
+    auto ret = add_named_builder_callback(vs,
+        "vkc::vertex_input_desc_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            std::vector<VkVertexInputAttributeDescription> attrs;
+            for (auto attr : node["m_attrs"].as_seq()) {
+                auto m_location = co_await resolve_int(vs, attr["m_location"]);
+                auto m_binding = co_await resolve_int(vs, attr["m_binding"]);
+                auto m_format = vc::get_enum_val<VkFormat>(attr["m_format"]);
+                auto m_offset = co_await resolve_int(vs, attr["m_offset"]);
+                attrs.push_back(VkVertexInputAttributeDescription{
+                    .location = (uint32_t)m_location,
+                    .binding = (uint32_t)m_binding,
+                    .format = m_format,
+                    .offset = (uint32_t)m_offset
+                });
+            }
+            auto m_binding = co_await resolve_int(vs, node["m_binding"]);
+            auto m_stride = co_await resolve_int(vs, node["m_stride"]);
+            auto m_in_rate = vc::get_enum_val<VkVertexInputRate>(node["m_in_rate"]);
+            auto obj = vertex_input_desc_t::create(vku::vertex_input_desc_t{
+                .bind_desc = {
+                    .binding = (uint32_t)m_binding,
+                    .stride = (uint32_t)m_stride,
+                    .inputRate = m_in_rate,
+                },
+                .attr_desc = attrs,
+            });
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vkc::binding_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto m_binding = co_await resolve_int(vs, node["m_binding"]);
+            auto m_stage = vc::get_enum_val<VkShaderStageFlagBits>(node["m_stage"]);
+            auto m_desc_type = vc::get_enum_val<VkDescriptorType>(node["m_desc_type"]);
+            auto obj = binding_t::create(VkDescriptorSetLayoutBinding{
+                .binding = (uint32_t)m_binding,
+                .descriptorType = m_desc_type,
+                .descriptorCount = 1,
+                .stageFlags = m_stage,
+                .pImmutableSamplers = nullptr
+            });
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vkc::cpu_buffer_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto m_size = co_await resolve_int(vs, node["m_size"]);
+            auto obj = cpu_buffer_t::create(m_size);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vkc::lua_var_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        { /* TODO: not sure how is this type usefull */
+            (void)node;
+            /* lua_var has the same tag_name as the var name */
+            auto obj = lua_var_t::create(node_name);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::instance_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            (void)node;
+            auto obj = vku::instance_t::create();
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::window_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto w = co_await resolve_int(vs, node["m_width"]);
+            auto h = co_await resolve_int(vs, node["m_height"]);
+            auto window_name = co_await resolve_str(vs, node["m_name"]);
+            auto obj = vku::window_t::create(w, h, window_name);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::surface_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto window = co_await resolve_obj<vku::window_t>(vs, node["m_window"]);
+            auto instance = co_await resolve_obj<vku::instance_t>(vs, node["m_instance"]);
+            auto obj = vku::surface_t::create(window, instance);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::image_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto cp = co_await resolve_obj<vku::cmdpool_t>(vs, node["m_cmdpool"]);
+            auto path = co_await resolve_str(vs, node["m_path"]);
+            auto obj = load_image(cp, path);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::cmdpool_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+            auto obj = vku::cmdpool_t::create(dev);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::device_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto surf = co_await resolve_obj<vku::surface_t>(vs, node["m_surface"]);
+            auto obj = vku::device_t::create(surf);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::img_sampl_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+            auto obj = vku::img_sampl_t::create(dev);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::img_view_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto img = co_await resolve_obj<vku::image_t>(vs, node["m_image"]);
+            auto aspect_mask = vc::get_enum_val<VkImageAspectFlagBits>(node["m_aspect_mask"]);
+            auto obj = vku::img_view_t::create(img, aspect_mask);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
 
 
-inline vkc_error_e luaw_execute_loop_run(lua_State *L) {
-    lua_getglobal(L, "on_loop_run");
-    if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-        DBG("LUA luaw_execute_loop_run Failed: \n%s", lua_tostring(L, -1));
-        return VKC_ERROR_FAILED_CALL;
-    }
-    return VKC_ERROR_OK;
-}
+    ret = add_named_builder_callback(vs,
+        "vku::binding_desc_set_t::sampl_binding_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto view = co_await resolve_obj<vku::img_view_t>(vs, node["m_view"]);
+            auto sampler = co_await resolve_obj<vku::img_sampl_t>(vs, node["m_sampler"]);
+            auto desc = co_await resolve_obj<vkc::binding_t>(vs, node["m_desc"]);
+            auto obj = vku::binding_desc_set_t::sampl_binding_t::create(desc->bd, view, sampler);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
 
-inline vkc_error_e luaw_execute_window_resize(lua_State *L, int width, int height) {
-    lua_getglobal(L, "on_window_resize");
-    lua_pushinteger(L, width);
-    lua_pushinteger(L, height);
-    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-        DBG("LUA luaw_execute_window_resize Failed: \n%s", lua_tostring(L, -1));
-        return VKC_ERROR_FAILED_CALL;
-    }
-    return VKC_ERROR_OK;
+    ret = add_named_builder_callback(vs,
+        "vku::binding_desc_set_t::buff_binding_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto buff = co_await resolve_obj<vku::buffer_t>(vs, node["m_buffer"]);
+            auto desc = co_await resolve_obj<vkc::binding_t>(vs, node["m_desc"]);
+            auto obj = vku::binding_desc_set_t::buff_binding_t::create(desc->bd, buff);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::binding_desc_set_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            std::vector<vku::ref_t<vku::binding_desc_set_t::binding_desc_t>> bindings;
+            for (auto& subnode : node["m_descriptors"])
+                bindings.push_back(
+                        co_await resolve_obj<vku::binding_desc_set_t::binding_desc_t>(vs, subnode));
+            auto obj = vku::binding_desc_set_t::create(bindings);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::buffer_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+            size_t sz = co_await resolve_int(vs, node["m_size"]);
+            auto usage_flags = vc::get_enum_val<VkBufferUsageFlagBits>(node["m_usage_flags"]);
+            auto share_mode = vc::get_enum_val<VkSharingMode>(node["m_sharing_mode"]);
+            auto memory_flags = vc::get_enum_val<VkMemoryPropertyFlagBits>(node["m_memory_flags"]);
+            auto obj = vku::buffer_t::create(dev, sz, usage_flags, share_mode, memory_flags);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::pipeline_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto w = co_await resolve_int(vs, node["m_width"]);
+            auto h = co_await resolve_int(vs, node["m_height"]);
+            auto rp = co_await resolve_obj<vku::renderpass_t>(vs, node["m_renderpass"]);
+            std::vector<vku::ref_t<vku::shader_t>> shaders;
+            for (auto& sh : node["m_shaders"])
+                shaders.push_back(co_await resolve_obj<vku::shader_t>(vs, sh));
+            auto topol = vc::get_enum_val<VkPrimitiveTopology>(node["m_topology"]);
+            auto indesc = co_await resolve_obj<vkc::vertex_input_desc_t>(vs, node["m_input_desc"]);
+            auto binds = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
+            auto obj = vku::pipeline_t::create(w, h, rp, shaders, topol, indesc->vid, binds);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::renderpass_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto swc = co_await resolve_obj<vku::swapchain_t>(vs, node["m_swapchain"]);
+            auto obj = vku::renderpass_t::create(swc);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::swapchain_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+            auto obj = vku::swapchain_t::create(dev);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::shader_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+            auto spirv = co_await resolve_obj<spirv_t>(vs, node["m_spirv"]);
+            auto obj = vku::shader_t::create(dev, spirv->spirv);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::fence_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+            auto obj = vku::fence_t::create(dev);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::sem_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+            auto obj = vku::sem_t::create(dev);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::framebuffs_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto rp = co_await resolve_obj<vku::renderpass_t>(vs, node["m_renderpass"]);
+            auto obj = vku::framebuffs_t::create(rp);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::desc_set_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto descriptor_pool = co_await resolve_obj<vku::desc_pool_t>(vs, node["m_descriptor_pool"]);
+            auto pipeline = co_await resolve_obj<vku::pipeline_t>(vs, node["m_pipeline"]);
+            auto bindings = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
+            auto obj = vku::desc_set_t::create(descriptor_pool, pipeline, bindings);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::desc_pool_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+            auto binds = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
+            int cnt = co_await resolve_int(vs, node["m_cnt"]);
+            auto obj = vku::desc_pool_t::create(dev, binds, cnt);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::cmdbuff_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto cp = co_await resolve_obj<vku::cmdpool_t>(vs, node["m_cmdpool"]);
+            auto obj = vku::cmdbuff_t::create(cp);
+            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
+            co_return obj.to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    return 0;
 }
 
 inline void luaw_set_glfw_fields(vc::virt_state_t *vs) {
-    std::map<lua_Integer, std::string> glfw_mapping = {
+    std::vector<std::pair<lua_Integer, std::string>> glfw_mapping = {
         {GLFW_VERSION_MAJOR, "GLFW_VERSION_MAJOR"},
         {GLFW_VERSION_MINOR, "GLFW_VERSION_MINOR"},
         {GLFW_VERSION_REVISION, "GLFW_VERSION_REVISION"},
@@ -3754,5 +2142,517 @@ inline void luaw_set_glfw_fields(vc::virt_state_t *vs) {
 }
 
 }; /* namespace vkc */
+
+namespace virt_composer {
+
+inline std::unordered_map<std::string, VkBufferUsageFlagBits> vk_buffer_usage_flag_bits_from_str = {
+    {"VK_BUFFER_USAGE_NONE", (VkBufferUsageFlagBits)0},
+    {"VK_BUFFER_USAGE_TRANSFER_SRC_BIT",
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT},
+    {"VK_BUFFER_USAGE_TRANSFER_DST_BIT",
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT},
+    {"VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT",
+            VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT},
+    {"VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT",
+            VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT},
+    {"VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT",
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT},
+    {"VK_BUFFER_USAGE_STORAGE_BUFFER_BIT",
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT},
+    {"VK_BUFFER_USAGE_INDEX_BUFFER_BIT",
+            VK_BUFFER_USAGE_INDEX_BUFFER_BIT},
+    {"VK_BUFFER_USAGE_VERTEX_BUFFER_BIT",
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT},
+    {"VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT",
+            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT},
+    {"VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT",
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT},
+    // {"VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR",
+    //         VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR},
+    // {"VK_BUFFER_USAGE_VIDEO_DECODE_DST_BIT_KHR",
+    //         VK_BUFFER_USAGE_VIDEO_DECODE_DST_BIT_KHR},
+    {"VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT",
+            VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT},
+    {"VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT",
+            VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT},
+    {"VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT",
+            VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT},
+#ifdef VK_ENABLE_BETA_EXTENSIONS
+    {"VK_BUFFER_USAGE_EXECUTION_GRAPH_SCRATCH_BIT_AMDX",
+            VK_BUFFER_USAGE_EXECUTION_GRAPH_SCRATCH_BIT_AMDX},
+#endif
+    // {"VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR",
+    //         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR},
+    // {"VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR",
+    //         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR},
+    // {"VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR",
+    //         VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR},
+    // {"VK_BUFFER_USAGE_VIDEO_ENCODE_DST_BIT_KHR",
+    //         VK_BUFFER_USAGE_VIDEO_ENCODE_DST_BIT_KHR},
+    // {"VK_BUFFER_USAGE_VIDEO_ENCODE_SRC_BIT_KHR",
+    //         VK_BUFFER_USAGE_VIDEO_ENCODE_SRC_BIT_KHR},
+    // {"VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT",
+    //         VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT},
+    // {"VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT",
+    //         VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT},
+    // {"VK_BUFFER_USAGE_PUSH_DESCRIPTORS_DESCRIPTOR_BUFFER_BIT_EXT",
+    //         VK_BUFFER_USAGE_PUSH_DESCRIPTORS_DESCRIPTOR_BUFFER_BIT_EXT},
+    // {"VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT",
+    //         VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT},
+    // {"VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT",
+    //         VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT},
+    // {"VK_BUFFER_USAGE_TILE_MEMORY_BIT_QCOM",
+    //         VK_BUFFER_USAGE_TILE_MEMORY_BIT_QCOM},
+    {"VK_BUFFER_USAGE_RAY_TRACING_BIT_NV",
+            VK_BUFFER_USAGE_RAY_TRACING_BIT_NV},
+    {"VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_EXT",
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_EXT},
+    {"VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR",
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR},
+};
+
+template <> inline VkBufferUsageFlagBits get_enum_val<VkBufferUsageFlagBits>(fkyaml::node &n) {
+    return get_enum_val(n, vk_buffer_usage_flag_bits_from_str);
+}
+
+inline std::unordered_map<std::string, VkSharingMode> vk_sharing_mode_from_str = {
+    {"VK_SHARING_MODE_EXCLUSIVE", VK_SHARING_MODE_EXCLUSIVE},
+    {"VK_SHARING_MODE_CONCURRENT", VK_SHARING_MODE_CONCURRENT},
+};
+
+template <> inline VkSharingMode get_enum_val<VkSharingMode>(fkyaml::node &n) {
+    return get_enum_val(n, vk_sharing_mode_from_str);
+}
+
+inline std::unordered_map<std::string, VkMemoryPropertyFlagBits>
+        vk_memory_property_flag_bits_from_str =
+{
+    {"VK_MEMORY_PROPERTY_NONE", (VkMemoryPropertyFlagBits)0},
+    {"VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT", VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT},
+    {"VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT", VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT},
+    {"VK_MEMORY_PROPERTY_HOST_COHERENT_BIT", VK_MEMORY_PROPERTY_HOST_COHERENT_BIT},
+    {"VK_MEMORY_PROPERTY_HOST_CACHED_BIT", VK_MEMORY_PROPERTY_HOST_CACHED_BIT},
+    {"VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT", VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT},
+    {"VK_MEMORY_PROPERTY_PROTECTED_BIT", VK_MEMORY_PROPERTY_PROTECTED_BIT},
+    {"VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD", VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD},
+    {"VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD", VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD},
+    // {"VK_MEMORY_PROPERTY_RDMA_CAPABLE_BIT_NV", VK_MEMORY_PROPERTY_RDMA_CAPABLE_BIT_NV},
+};
+
+template <> inline VkMemoryPropertyFlagBits get_enum_val<VkMemoryPropertyFlagBits>(fkyaml::node &n) {
+    return get_enum_val(n, vk_memory_property_flag_bits_from_str);
+}
+
+inline std::unordered_map<std::string, VkPrimitiveTopology> vk_primitive_topology_from_str = {
+    {"VK_PRIMITIVE_TOPOLOGY_POINT_LIST",
+            VK_PRIMITIVE_TOPOLOGY_POINT_LIST},
+    {"VK_PRIMITIVE_TOPOLOGY_LINE_LIST",
+            VK_PRIMITIVE_TOPOLOGY_LINE_LIST},
+    {"VK_PRIMITIVE_TOPOLOGY_LINE_STRIP",
+            VK_PRIMITIVE_TOPOLOGY_LINE_STRIP},
+    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST",
+            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST},
+    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP",
+            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP},
+    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN",
+            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN},
+    {"VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY",
+            VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY},
+    {"VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY",
+            VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY},
+    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY",
+            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY},
+    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY",
+            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY},
+    {"VK_PRIMITIVE_TOPOLOGY_PATCH_LIST",
+            VK_PRIMITIVE_TOPOLOGY_PATCH_LIST},
+};
+
+template <> inline VkPrimitiveTopology get_enum_val<VkPrimitiveTopology>(fkyaml::node &n) {
+    return get_enum_val(n, vk_primitive_topology_from_str);
+}
+
+inline std::unordered_map<std::string, VkImageAspectFlagBits> vk_image_aspect_flag_bits_from_str = {
+    {"VK_IMAGE_ASPECT_NONE", (VkImageAspectFlagBits)0},
+    {"VK_IMAGE_ASPECT_COLOR_BIT", VK_IMAGE_ASPECT_COLOR_BIT},
+    {"VK_IMAGE_ASPECT_DEPTH_BIT", VK_IMAGE_ASPECT_DEPTH_BIT},
+    {"VK_IMAGE_ASPECT_STENCIL_BIT", VK_IMAGE_ASPECT_STENCIL_BIT},
+    {"VK_IMAGE_ASPECT_METADATA_BIT", VK_IMAGE_ASPECT_METADATA_BIT},
+    {"VK_IMAGE_ASPECT_PLANE_0_BIT", VK_IMAGE_ASPECT_PLANE_0_BIT},
+    {"VK_IMAGE_ASPECT_PLANE_1_BIT", VK_IMAGE_ASPECT_PLANE_1_BIT},
+    {"VK_IMAGE_ASPECT_PLANE_2_BIT", VK_IMAGE_ASPECT_PLANE_2_BIT},
+    {"VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT", VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT},
+    {"VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT", VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT},
+    {"VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT", VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT},
+    {"VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT", VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT},
+    {"VK_IMAGE_ASPECT_PLANE_0_BIT_KHR", VK_IMAGE_ASPECT_PLANE_0_BIT_KHR},
+    {"VK_IMAGE_ASPECT_PLANE_1_BIT_KHR", VK_IMAGE_ASPECT_PLANE_1_BIT_KHR},
+    {"VK_IMAGE_ASPECT_PLANE_2_BIT_KHR", VK_IMAGE_ASPECT_PLANE_2_BIT_KHR},
+};
+
+template <> inline VkImageAspectFlagBits get_enum_val<VkImageAspectFlagBits>(fkyaml::node &n) {
+    return get_enum_val(n, vk_image_aspect_flag_bits_from_str);
+}
+
+inline std::unordered_map<std::string, VkCommandBufferUsageFlagBits>
+        vk_command_buffer_usage_flag_bits_from_str =
+{
+    {"VK_COMMAND_BUFFER_USAGE_NONE", (VkCommandBufferUsageFlagBits)0},
+    {"VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT",
+            VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT},
+    {"VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT",
+            VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT},
+    {"VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT",
+            VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT},
+};
+
+template <> inline VkCommandBufferUsageFlagBits get_enum_val<VkCommandBufferUsageFlagBits>(
+        fkyaml::node &n)
+{
+    return get_enum_val(n, vk_command_buffer_usage_flag_bits_from_str);
+}
+
+inline std::unordered_map<std::string, VkPipelineBindPoint> vk_pipeline_bind_point_from_str = {
+    {"VK_PIPELINE_BIND_POINT_GRAPHICS",
+            VK_PIPELINE_BIND_POINT_GRAPHICS},
+    {"VK_PIPELINE_BIND_POINT_COMPUTE",
+            VK_PIPELINE_BIND_POINT_COMPUTE},
+    {"VK_PIPELINE_BIND_POINT_RAY_TRACING_NV",
+            VK_PIPELINE_BIND_POINT_RAY_TRACING_NV},
+};
+
+template <> inline VkPipelineBindPoint get_enum_val<VkPipelineBindPoint>(fkyaml::node &n) {
+    return get_enum_val(n, vk_pipeline_bind_point_from_str);
+}
+
+inline std::unordered_map<std::string, VkIndexType> vk_index_type_from_str = {
+    {"VK_INDEX_TYPE_UINT16", VK_INDEX_TYPE_UINT16},
+    {"VK_INDEX_TYPE_UINT32", VK_INDEX_TYPE_UINT32},
+    {"VK_INDEX_TYPE_NONE_NV", VK_INDEX_TYPE_NONE_NV},
+    {"VK_INDEX_TYPE_UINT8_EXT", VK_INDEX_TYPE_UINT8_EXT},
+};
+
+template <> inline VkIndexType get_enum_val<VkIndexType>(fkyaml::node &n) {
+    return get_enum_val(n, vk_index_type_from_str);
+}
+
+inline std::unordered_map<std::string, VkPipelineStageFlagBits>
+        vk_pipeline_stage_flag_bits_from_str =
+{
+    {"VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT",
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT},
+    {"VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT",
+            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT},
+    {"VK_PIPELINE_STAGE_VERTEX_INPUT_BIT",
+            VK_PIPELINE_STAGE_VERTEX_INPUT_BIT},
+    {"VK_PIPELINE_STAGE_VERTEX_SHADER_BIT",
+            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT},
+    {"VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT",
+            VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT},
+    {"VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT",
+            VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT},
+    {"VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT",
+            VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT},
+    {"VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT",
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT},
+    {"VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT",
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT},
+    {"VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT",
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT},
+    {"VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT",
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT},
+    {"VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT",
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT},
+    {"VK_PIPELINE_STAGE_TRANSFER_BIT",
+            VK_PIPELINE_STAGE_TRANSFER_BIT},
+    {"VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT",
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT},
+    {"VK_PIPELINE_STAGE_HOST_BIT",
+            VK_PIPELINE_STAGE_HOST_BIT},
+    {"VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT",
+            VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT},
+    {"VK_PIPELINE_STAGE_ALL_COMMANDS_BIT",
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT},
+    {"VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT",
+            VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT},
+    {"VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT",
+            VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT},
+    {"VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT",
+            VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT},
+    {"VK_PIPELINE_STAGE_SHADING_RATE_IMAGE_BIT_NV",
+            VK_PIPELINE_STAGE_SHADING_RATE_IMAGE_BIT_NV},
+    {"VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV",
+            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV},
+    {"VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_NV",
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_NV},
+    {"VK_PIPELINE_STAGE_TASK_SHADER_BIT_NV",
+            VK_PIPELINE_STAGE_TASK_SHADER_BIT_NV},
+    {"VK_PIPELINE_STAGE_MESH_SHADER_BIT_NV",
+            VK_PIPELINE_STAGE_MESH_SHADER_BIT_NV},
+};
+
+template <> inline VkPipelineStageFlagBits get_enum_val<VkPipelineStageFlagBits>(fkyaml::node &n) {
+    return get_enum_val(n, vk_pipeline_stage_flag_bits_from_str);
+}
+
+inline std::unordered_map<std::string, VkFormat> vk_format_from_str = {
+    {"VK_FORMAT_UNDEFINED", VK_FORMAT_UNDEFINED},
+    {"VK_FORMAT_R4G4_UNORM_PACK8", VK_FORMAT_R4G4_UNORM_PACK8},
+    {"VK_FORMAT_R4G4B4A4_UNORM_PACK16", VK_FORMAT_R4G4B4A4_UNORM_PACK16},
+    {"VK_FORMAT_B4G4R4A4_UNORM_PACK16", VK_FORMAT_B4G4R4A4_UNORM_PACK16},
+    {"VK_FORMAT_R5G6B5_UNORM_PACK16", VK_FORMAT_R5G6B5_UNORM_PACK16},
+    {"VK_FORMAT_B5G6R5_UNORM_PACK16", VK_FORMAT_B5G6R5_UNORM_PACK16},
+    {"VK_FORMAT_R5G5B5A1_UNORM_PACK16", VK_FORMAT_R5G5B5A1_UNORM_PACK16},
+    {"VK_FORMAT_B5G5R5A1_UNORM_PACK16", VK_FORMAT_B5G5R5A1_UNORM_PACK16},
+    {"VK_FORMAT_A1R5G5B5_UNORM_PACK16", VK_FORMAT_A1R5G5B5_UNORM_PACK16},
+    {"VK_FORMAT_R8_UNORM", VK_FORMAT_R8_UNORM},
+    {"VK_FORMAT_R8_SNORM", VK_FORMAT_R8_SNORM},
+    {"VK_FORMAT_R8_USCALED", VK_FORMAT_R8_USCALED},
+    {"VK_FORMAT_R8_SSCALED", VK_FORMAT_R8_SSCALED},
+    {"VK_FORMAT_R8_UINT", VK_FORMAT_R8_UINT},
+    {"VK_FORMAT_R8_SINT", VK_FORMAT_R8_SINT},
+    {"VK_FORMAT_R8_SRGB", VK_FORMAT_R8_SRGB},
+    {"VK_FORMAT_R8G8_UNORM", VK_FORMAT_R8G8_UNORM},
+    {"VK_FORMAT_R8G8_SNORM", VK_FORMAT_R8G8_SNORM},
+    {"VK_FORMAT_R8G8_USCALED", VK_FORMAT_R8G8_USCALED},
+    {"VK_FORMAT_R8G8_SSCALED", VK_FORMAT_R8G8_SSCALED},
+    {"VK_FORMAT_R8G8_UINT", VK_FORMAT_R8G8_UINT},
+    {"VK_FORMAT_R8G8_SINT", VK_FORMAT_R8G8_SINT},
+    {"VK_FORMAT_R8G8_SRGB", VK_FORMAT_R8G8_SRGB},
+    {"VK_FORMAT_R8G8B8_UNORM", VK_FORMAT_R8G8B8_UNORM},
+    {"VK_FORMAT_R8G8B8_SNORM", VK_FORMAT_R8G8B8_SNORM},
+    {"VK_FORMAT_R8G8B8_USCALED", VK_FORMAT_R8G8B8_USCALED},
+    {"VK_FORMAT_R8G8B8_SSCALED", VK_FORMAT_R8G8B8_SSCALED},
+    {"VK_FORMAT_R8G8B8_UINT", VK_FORMAT_R8G8B8_UINT},
+    {"VK_FORMAT_R8G8B8_SINT", VK_FORMAT_R8G8B8_SINT},
+    {"VK_FORMAT_R8G8B8_SRGB", VK_FORMAT_R8G8B8_SRGB},
+    {"VK_FORMAT_B8G8R8_UNORM", VK_FORMAT_B8G8R8_UNORM},
+    {"VK_FORMAT_B8G8R8_SNORM", VK_FORMAT_B8G8R8_SNORM},
+    {"VK_FORMAT_B8G8R8_USCALED", VK_FORMAT_B8G8R8_USCALED},
+    {"VK_FORMAT_B8G8R8_SSCALED", VK_FORMAT_B8G8R8_SSCALED},
+    {"VK_FORMAT_B8G8R8_UINT", VK_FORMAT_B8G8R8_UINT},
+    {"VK_FORMAT_B8G8R8_SINT", VK_FORMAT_B8G8R8_SINT},
+    {"VK_FORMAT_B8G8R8_SRGB", VK_FORMAT_B8G8R8_SRGB},
+    {"VK_FORMAT_R8G8B8A8_UNORM", VK_FORMAT_R8G8B8A8_UNORM},
+    {"VK_FORMAT_R8G8B8A8_SNORM", VK_FORMAT_R8G8B8A8_SNORM},
+    {"VK_FORMAT_R8G8B8A8_USCALED", VK_FORMAT_R8G8B8A8_USCALED},
+    {"VK_FORMAT_R8G8B8A8_SSCALED", VK_FORMAT_R8G8B8A8_SSCALED},
+    {"VK_FORMAT_R8G8B8A8_UINT", VK_FORMAT_R8G8B8A8_UINT},
+    {"VK_FORMAT_R8G8B8A8_SINT", VK_FORMAT_R8G8B8A8_SINT},
+    {"VK_FORMAT_R8G8B8A8_SRGB", VK_FORMAT_R8G8B8A8_SRGB},
+    {"VK_FORMAT_B8G8R8A8_UNORM", VK_FORMAT_B8G8R8A8_UNORM},
+    {"VK_FORMAT_B8G8R8A8_SNORM", VK_FORMAT_B8G8R8A8_SNORM},
+    {"VK_FORMAT_B8G8R8A8_USCALED", VK_FORMAT_B8G8R8A8_USCALED},
+    {"VK_FORMAT_B8G8R8A8_SSCALED", VK_FORMAT_B8G8R8A8_SSCALED},
+    {"VK_FORMAT_B8G8R8A8_UINT", VK_FORMAT_B8G8R8A8_UINT},
+    {"VK_FORMAT_B8G8R8A8_SINT", VK_FORMAT_B8G8R8A8_SINT},
+    {"VK_FORMAT_B8G8R8A8_SRGB", VK_FORMAT_B8G8R8A8_SRGB},
+    {"VK_FORMAT_A8B8G8R8_UNORM_PACK32", VK_FORMAT_A8B8G8R8_UNORM_PACK32},
+    {"VK_FORMAT_A8B8G8R8_SNORM_PACK32", VK_FORMAT_A8B8G8R8_SNORM_PACK32},
+    {"VK_FORMAT_A8B8G8R8_USCALED_PACK32", VK_FORMAT_A8B8G8R8_USCALED_PACK32},
+    {"VK_FORMAT_A8B8G8R8_SSCALED_PACK32", VK_FORMAT_A8B8G8R8_SSCALED_PACK32},
+    {"VK_FORMAT_A8B8G8R8_UINT_PACK32", VK_FORMAT_A8B8G8R8_UINT_PACK32},
+    {"VK_FORMAT_A8B8G8R8_SINT_PACK32", VK_FORMAT_A8B8G8R8_SINT_PACK32},
+    {"VK_FORMAT_A8B8G8R8_SRGB_PACK32", VK_FORMAT_A8B8G8R8_SRGB_PACK32},
+    {"VK_FORMAT_A2R10G10B10_UNORM_PACK32", VK_FORMAT_A2R10G10B10_UNORM_PACK32},
+    {"VK_FORMAT_A2R10G10B10_SNORM_PACK32", VK_FORMAT_A2R10G10B10_SNORM_PACK32},
+    {"VK_FORMAT_A2R10G10B10_USCALED_PACK32", VK_FORMAT_A2R10G10B10_USCALED_PACK32},
+    {"VK_FORMAT_A2R10G10B10_SSCALED_PACK32", VK_FORMAT_A2R10G10B10_SSCALED_PACK32},
+    {"VK_FORMAT_A2R10G10B10_UINT_PACK32", VK_FORMAT_A2R10G10B10_UINT_PACK32},
+    {"VK_FORMAT_A2R10G10B10_SINT_PACK32", VK_FORMAT_A2R10G10B10_SINT_PACK32},
+    {"VK_FORMAT_A2B10G10R10_UNORM_PACK32", VK_FORMAT_A2B10G10R10_UNORM_PACK32},
+    {"VK_FORMAT_A2B10G10R10_SNORM_PACK32", VK_FORMAT_A2B10G10R10_SNORM_PACK32},
+    {"VK_FORMAT_A2B10G10R10_USCALED_PACK32", VK_FORMAT_A2B10G10R10_USCALED_PACK32},
+    {"VK_FORMAT_A2B10G10R10_SSCALED_PACK32", VK_FORMAT_A2B10G10R10_SSCALED_PACK32},
+    {"VK_FORMAT_A2B10G10R10_UINT_PACK32", VK_FORMAT_A2B10G10R10_UINT_PACK32},
+    {"VK_FORMAT_A2B10G10R10_SINT_PACK32", VK_FORMAT_A2B10G10R10_SINT_PACK32},
+    {"VK_FORMAT_R16_UNORM", VK_FORMAT_R16_UNORM},
+    {"VK_FORMAT_R16_SNORM", VK_FORMAT_R16_SNORM},
+    {"VK_FORMAT_R16_USCALED", VK_FORMAT_R16_USCALED},
+    {"VK_FORMAT_R16_SSCALED", VK_FORMAT_R16_SSCALED},
+    {"VK_FORMAT_R16_UINT", VK_FORMAT_R16_UINT},
+    {"VK_FORMAT_R16_SINT", VK_FORMAT_R16_SINT},
+    {"VK_FORMAT_R16_SFLOAT", VK_FORMAT_R16_SFLOAT},
+    {"VK_FORMAT_R16G16_UNORM", VK_FORMAT_R16G16_UNORM},
+    {"VK_FORMAT_R16G16_SNORM", VK_FORMAT_R16G16_SNORM},
+    {"VK_FORMAT_R16G16_USCALED", VK_FORMAT_R16G16_USCALED},
+    {"VK_FORMAT_R16G16_SSCALED", VK_FORMAT_R16G16_SSCALED},
+    {"VK_FORMAT_R16G16_UINT", VK_FORMAT_R16G16_UINT},
+    {"VK_FORMAT_R16G16_SINT", VK_FORMAT_R16G16_SINT},
+    {"VK_FORMAT_R16G16_SFLOAT", VK_FORMAT_R16G16_SFLOAT},
+    {"VK_FORMAT_R16G16B16_UNORM", VK_FORMAT_R16G16B16_UNORM},
+    {"VK_FORMAT_R16G16B16_SNORM", VK_FORMAT_R16G16B16_SNORM},
+    {"VK_FORMAT_R16G16B16_USCALED", VK_FORMAT_R16G16B16_USCALED},
+    {"VK_FORMAT_R16G16B16_SSCALED", VK_FORMAT_R16G16B16_SSCALED},
+    {"VK_FORMAT_R16G16B16_UINT", VK_FORMAT_R16G16B16_UINT},
+    {"VK_FORMAT_R16G16B16_SINT", VK_FORMAT_R16G16B16_SINT},
+    {"VK_FORMAT_R16G16B16_SFLOAT", VK_FORMAT_R16G16B16_SFLOAT},
+    {"VK_FORMAT_R16G16B16A16_UNORM", VK_FORMAT_R16G16B16A16_UNORM},
+    {"VK_FORMAT_R16G16B16A16_SNORM", VK_FORMAT_R16G16B16A16_SNORM},
+    {"VK_FORMAT_R16G16B16A16_USCALED", VK_FORMAT_R16G16B16A16_USCALED},
+    {"VK_FORMAT_R16G16B16A16_SSCALED", VK_FORMAT_R16G16B16A16_SSCALED},
+    {"VK_FORMAT_R16G16B16A16_UINT", VK_FORMAT_R16G16B16A16_UINT},
+    {"VK_FORMAT_R16G16B16A16_SINT", VK_FORMAT_R16G16B16A16_SINT},
+    {"VK_FORMAT_R16G16B16A16_SFLOAT", VK_FORMAT_R16G16B16A16_SFLOAT},
+    {"VK_FORMAT_R32_UINT", VK_FORMAT_R32_UINT},
+    {"VK_FORMAT_R32_SINT", VK_FORMAT_R32_SINT},
+    {"VK_FORMAT_R32_SFLOAT", VK_FORMAT_R32_SFLOAT},
+    {"VK_FORMAT_R32G32_UINT", VK_FORMAT_R32G32_UINT},
+    {"VK_FORMAT_R32G32_SINT", VK_FORMAT_R32G32_SINT},
+    {"VK_FORMAT_R32G32_SFLOAT", VK_FORMAT_R32G32_SFLOAT},
+    {"VK_FORMAT_R32G32B32_UINT", VK_FORMAT_R32G32B32_UINT},
+    {"VK_FORMAT_R32G32B32_SINT", VK_FORMAT_R32G32B32_SINT},
+    {"VK_FORMAT_R32G32B32_SFLOAT", VK_FORMAT_R32G32B32_SFLOAT},
+    {"VK_FORMAT_R32G32B32A32_UINT", VK_FORMAT_R32G32B32A32_UINT},
+    {"VK_FORMAT_R32G32B32A32_SINT", VK_FORMAT_R32G32B32A32_SINT},
+    {"VK_FORMAT_R32G32B32A32_SFLOAT", VK_FORMAT_R32G32B32A32_SFLOAT},
+    {"VK_FORMAT_R64_UINT", VK_FORMAT_R64_UINT},
+    {"VK_FORMAT_R64_SINT", VK_FORMAT_R64_SINT},
+    {"VK_FORMAT_R64_SFLOAT", VK_FORMAT_R64_SFLOAT},
+    {"VK_FORMAT_R64G64_UINT", VK_FORMAT_R64G64_UINT},
+    {"VK_FORMAT_R64G64_SINT", VK_FORMAT_R64G64_SINT},
+    {"VK_FORMAT_R64G64_SFLOAT", VK_FORMAT_R64G64_SFLOAT},
+    {"VK_FORMAT_R64G64B64_UINT", VK_FORMAT_R64G64B64_UINT},
+    {"VK_FORMAT_R64G64B64_SINT", VK_FORMAT_R64G64B64_SINT},
+    {"VK_FORMAT_R64G64B64_SFLOAT", VK_FORMAT_R64G64B64_SFLOAT},
+    {"VK_FORMAT_R64G64B64A64_UINT", VK_FORMAT_R64G64B64A64_UINT},
+    {"VK_FORMAT_R64G64B64A64_SINT", VK_FORMAT_R64G64B64A64_SINT},
+    {"VK_FORMAT_R64G64B64A64_SFLOAT", VK_FORMAT_R64G64B64A64_SFLOAT},
+    {"VK_FORMAT_B10G11R11_UFLOAT_PACK32", VK_FORMAT_B10G11R11_UFLOAT_PACK32},
+    {"VK_FORMAT_E5B9G9R9_UFLOAT_PACK32", VK_FORMAT_E5B9G9R9_UFLOAT_PACK32},
+    {"VK_FORMAT_D16_UNORM", VK_FORMAT_D16_UNORM},
+    {"VK_FORMAT_X8_D24_UNORM_PACK32", VK_FORMAT_X8_D24_UNORM_PACK32},
+    {"VK_FORMAT_D32_SFLOAT", VK_FORMAT_D32_SFLOAT},
+    {"VK_FORMAT_S8_UINT", VK_FORMAT_S8_UINT},
+    {"VK_FORMAT_D16_UNORM_S8_UINT", VK_FORMAT_D16_UNORM_S8_UINT},
+    {"VK_FORMAT_D24_UNORM_S8_UINT", VK_FORMAT_D24_UNORM_S8_UINT},
+    {"VK_FORMAT_D32_SFLOAT_S8_UINT", VK_FORMAT_D32_SFLOAT_S8_UINT},
+    {"VK_FORMAT_BC1_RGB_UNORM_BLOCK", VK_FORMAT_BC1_RGB_UNORM_BLOCK},
+    {"VK_FORMAT_BC1_RGB_SRGB_BLOCK", VK_FORMAT_BC1_RGB_SRGB_BLOCK},
+    {"VK_FORMAT_BC1_RGBA_UNORM_BLOCK", VK_FORMAT_BC1_RGBA_UNORM_BLOCK},
+    {"VK_FORMAT_BC1_RGBA_SRGB_BLOCK", VK_FORMAT_BC1_RGBA_SRGB_BLOCK},
+    {"VK_FORMAT_BC2_UNORM_BLOCK", VK_FORMAT_BC2_UNORM_BLOCK},
+    {"VK_FORMAT_BC2_SRGB_BLOCK", VK_FORMAT_BC2_SRGB_BLOCK},
+    {"VK_FORMAT_BC3_UNORM_BLOCK", VK_FORMAT_BC3_UNORM_BLOCK},
+    {"VK_FORMAT_BC3_SRGB_BLOCK", VK_FORMAT_BC3_SRGB_BLOCK},
+    {"VK_FORMAT_BC4_UNORM_BLOCK", VK_FORMAT_BC4_UNORM_BLOCK},
+    {"VK_FORMAT_BC4_SNORM_BLOCK", VK_FORMAT_BC4_SNORM_BLOCK},
+    {"VK_FORMAT_BC5_UNORM_BLOCK", VK_FORMAT_BC5_UNORM_BLOCK},
+    {"VK_FORMAT_BC5_SNORM_BLOCK", VK_FORMAT_BC5_SNORM_BLOCK},
+    {"VK_FORMAT_BC6H_UFLOAT_BLOCK", VK_FORMAT_BC6H_UFLOAT_BLOCK},
+    {"VK_FORMAT_BC6H_SFLOAT_BLOCK", VK_FORMAT_BC6H_SFLOAT_BLOCK},
+    {"VK_FORMAT_BC7_UNORM_BLOCK", VK_FORMAT_BC7_UNORM_BLOCK},
+    {"VK_FORMAT_BC7_SRGB_BLOCK", VK_FORMAT_BC7_SRGB_BLOCK},
+    {"VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK", VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK},
+    {"VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK", VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK},
+    {"VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK", VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK},
+    {"VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK", VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK},
+    {"VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK", VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK},
+    {"VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK", VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK},
+    {"VK_FORMAT_EAC_R11_UNORM_BLOCK", VK_FORMAT_EAC_R11_UNORM_BLOCK},
+    {"VK_FORMAT_EAC_R11_SNORM_BLOCK", VK_FORMAT_EAC_R11_SNORM_BLOCK},
+    {"VK_FORMAT_EAC_R11G11_UNORM_BLOCK", VK_FORMAT_EAC_R11G11_UNORM_BLOCK},
+    {"VK_FORMAT_EAC_R11G11_SNORM_BLOCK", VK_FORMAT_EAC_R11G11_SNORM_BLOCK},
+    {"VK_FORMAT_ASTC_4x4_UNORM_BLOCK", VK_FORMAT_ASTC_4x4_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_4x4_SRGB_BLOCK", VK_FORMAT_ASTC_4x4_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_5x4_UNORM_BLOCK", VK_FORMAT_ASTC_5x4_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_5x4_SRGB_BLOCK", VK_FORMAT_ASTC_5x4_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_5x5_UNORM_BLOCK", VK_FORMAT_ASTC_5x5_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_5x5_SRGB_BLOCK", VK_FORMAT_ASTC_5x5_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_6x5_UNORM_BLOCK", VK_FORMAT_ASTC_6x5_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_6x5_SRGB_BLOCK", VK_FORMAT_ASTC_6x5_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_6x6_UNORM_BLOCK", VK_FORMAT_ASTC_6x6_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_6x6_SRGB_BLOCK", VK_FORMAT_ASTC_6x6_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_8x5_UNORM_BLOCK", VK_FORMAT_ASTC_8x5_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_8x5_SRGB_BLOCK", VK_FORMAT_ASTC_8x5_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_8x6_UNORM_BLOCK", VK_FORMAT_ASTC_8x6_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_8x6_SRGB_BLOCK", VK_FORMAT_ASTC_8x6_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_8x8_UNORM_BLOCK", VK_FORMAT_ASTC_8x8_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_8x8_SRGB_BLOCK", VK_FORMAT_ASTC_8x8_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_10x5_UNORM_BLOCK", VK_FORMAT_ASTC_10x5_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_10x5_SRGB_BLOCK", VK_FORMAT_ASTC_10x5_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_10x6_UNORM_BLOCK", VK_FORMAT_ASTC_10x6_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_10x6_SRGB_BLOCK", VK_FORMAT_ASTC_10x6_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_10x8_UNORM_BLOCK", VK_FORMAT_ASTC_10x8_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_10x8_SRGB_BLOCK", VK_FORMAT_ASTC_10x8_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_10x10_UNORM_BLOCK", VK_FORMAT_ASTC_10x10_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_10x10_SRGB_BLOCK", VK_FORMAT_ASTC_10x10_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_12x10_UNORM_BLOCK", VK_FORMAT_ASTC_12x10_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_12x10_SRGB_BLOCK", VK_FORMAT_ASTC_12x10_SRGB_BLOCK},
+    {"VK_FORMAT_ASTC_12x12_UNORM_BLOCK", VK_FORMAT_ASTC_12x12_UNORM_BLOCK},
+    {"VK_FORMAT_ASTC_12x12_SRGB_BLOCK", VK_FORMAT_ASTC_12x12_SRGB_BLOCK},
+};
+
+template <> inline VkFormat get_enum_val<VkFormat>(fkyaml::node &n) {
+    return get_enum_val(n, vk_format_from_str);
+}
+
+inline std::unordered_map<std::string, VkVertexInputRate> vk_vertex_input_rate_from_str = {
+    {"VK_VERTEX_INPUT_RATE_VERTEX", VK_VERTEX_INPUT_RATE_VERTEX},
+    {"VK_VERTEX_INPUT_RATE_INSTANCE", VK_VERTEX_INPUT_RATE_INSTANCE},
+};
+
+template <> inline VkVertexInputRate get_enum_val<VkVertexInputRate>(fkyaml::node &n) {
+    return get_enum_val(n, vk_vertex_input_rate_from_str);
+}
+
+inline std::unordered_map<std::string, VkShaderStageFlagBits> vk_shader_stage_flag_bits_from_str = {
+    {"VK_SHADER_STAGE_VERTEX_BIT", VK_SHADER_STAGE_VERTEX_BIT},
+    {"VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT", VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT},
+    {"VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT", VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT},
+    {"VK_SHADER_STAGE_GEOMETRY_BIT", VK_SHADER_STAGE_GEOMETRY_BIT},
+    {"VK_SHADER_STAGE_FRAGMENT_BIT", VK_SHADER_STAGE_FRAGMENT_BIT},
+    {"VK_SHADER_STAGE_COMPUTE_BIT", VK_SHADER_STAGE_COMPUTE_BIT},
+    {"VK_SHADER_STAGE_ALL_GRAPHICS", VK_SHADER_STAGE_ALL_GRAPHICS},
+    {"VK_SHADER_STAGE_ALL", VK_SHADER_STAGE_ALL},
+    {"VK_SHADER_STAGE_RAYGEN_BIT_NV", VK_SHADER_STAGE_RAYGEN_BIT_NV},
+    {"VK_SHADER_STAGE_ANY_HIT_BIT_NV", VK_SHADER_STAGE_ANY_HIT_BIT_NV},
+    {"VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV", VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV},
+    {"VK_SHADER_STAGE_MISS_BIT_NV", VK_SHADER_STAGE_MISS_BIT_NV},
+    {"VK_SHADER_STAGE_INTERSECTION_BIT_NV", VK_SHADER_STAGE_INTERSECTION_BIT_NV},
+    {"VK_SHADER_STAGE_CALLABLE_BIT_NV", VK_SHADER_STAGE_CALLABLE_BIT_NV},
+    {"VK_SHADER_STAGE_TASK_BIT_NV", VK_SHADER_STAGE_TASK_BIT_NV},
+    {"VK_SHADER_STAGE_MESH_BIT_NV", VK_SHADER_STAGE_MESH_BIT_NV},
+};
+
+template <> inline VkShaderStageFlagBits get_enum_val<VkShaderStageFlagBits>(fkyaml::node &n) {
+    return get_enum_val(n, vk_shader_stage_flag_bits_from_str);
+}
+
+inline std::unordered_map<std::string, VkDescriptorType> vk_descriptor_type_from_str = {
+    {"VK_DESCRIPTOR_TYPE_SAMPLER", VK_DESCRIPTOR_TYPE_SAMPLER}, 
+    {"VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER", VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, 
+    {"VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE", VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE}, 
+    {"VK_DESCRIPTOR_TYPE_STORAGE_IMAGE", VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 
+    {"VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER", VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER}, 
+    {"VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER", VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER}, 
+    {"VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER", VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, 
+    {"VK_DESCRIPTOR_TYPE_STORAGE_BUFFER", VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 
+    {"VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC", VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC}, 
+    {"VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC", VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC}, 
+    {"VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT", VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT}, 
+    {"VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV", VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV},
+    {"VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT", VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT},
+};
+
+template <> inline VkDescriptorType get_enum_val<VkDescriptorType>(fkyaml::node &n) {
+    return get_enum_val(n, vk_descriptor_type_from_str);
+}
+
+inline std::unordered_map<std::string, vku_shader_stage_e> shader_stage_from_string = {
+    {"VKU_SPIRV_VERTEX",    VKU_SPIRV_VERTEX},
+    {"VKU_SPIRV_FRAGMENT",  VKU_SPIRV_FRAGMENT},
+    {"VKU_SPIRV_COMPUTE",   VKU_SPIRV_COMPUTE},
+    {"VKU_SPIRV_GEOMETRY",  VKU_SPIRV_GEOMETRY},
+    {"VKU_SPIRV_TESS_CTRL", VKU_SPIRV_TESS_CTRL},
+    {"VKU_SPIRV_TESS_EVAL", VKU_SPIRV_TESS_EVAL},
+};
+
+template <> inline vku_shader_stage_e get_enum_val<vku_shader_stage_e>(fkyaml::node &n) {
+    return get_enum_val(n, shader_stage_from_string);
+}
+
+
+} /* virt_composer */
 
 #endif

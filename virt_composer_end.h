@@ -10,13 +10,10 @@ namespace vc = virt_composer;
 before this file */
 constexpr vc::object_type_e _VIRT_TYPE_CNT{vo::compile_max_id<vc::virt_tag_t>() + 1};
 
-inline std::unordered_map<std::string, vulkan_composer::luaw_member_t> _data1[_VIRT_TYPE_CNT.value()];
-inline std::unordered_map<std::string, lua_CFunction> _data2[_VIRT_TYPE_CNT.value()];
-
-inline std::unordered_map<std::string, vulkan_composer::luaw_member_t> *lua_class_members = _data1;
-inline std::unordered_map<std::string, lua_CFunction> *lua_class_member_setters = _data2;
-
-inline int VIRT_TYPE_CNT = _VIRT_TYPE_CNT.value();
+inline size_t _unused_variable_only_here_for_the_side_effect = (
+    VIRT_TYPES_INITIALIZED = true,    
+    VIRT_TYPE_CNT = _VIRT_TYPE_CNT.value()
+);
 
 }
 

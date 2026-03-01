@@ -46,7 +46,6 @@ typedef struct te_expr {
     void *parameters[1];
 } te_expr;
 
-
 enum {
     TE_VARIABLE = 0,
 
@@ -66,13 +65,36 @@ typedef struct te_variable {
     void *context;
 } te_variable;
 
+
+typedef struct state {
+    const char *start;
+    const char *next;
+    int type;
+    union {double value; const double *bound; const void *function;};
+    void *context;
+
+    const te_variable *lookup;
+    const void *usr_ctx = nullptr;
+    int lookup_len;
+} state;
+
+/* Use this callback  */
+inline std::function<te_variable *(const state *s, const char *name, int len)> find_lookup_fallback =
+[](const state *s, const char *name, int len) -> te_variable * {
+    (void)s;
+    std::string s_name(name, name + len);
+    DBG("Couldn't find var: %s", s_name.c_str());
+    return nullptr;
+};
+
 /* Parses the input expression, evaluates it, and frees it. */
 /* Returns NaN on error. */
-double te_interp(const char *expression, int *error);
+double te_interp(const char *expression, int *error, void *usr_ctx);
 
 /* Parses the input expression and binds variables. */
 /* Returns NULL on error. */
-te_expr *te_compile(const char *expression, const te_variable *variables, int var_count, int *error);
+te_expr *te_compile(const char *expression, const te_variable *variables, int var_count,
+        int *error, void *usr_ctx);
 
 /* Evaluates the expression. */
 double te_eval(const te_expr *n);
@@ -129,18 +151,6 @@ enum {
 
 
 enum {TE_CONSTANT = 1};
-
-
-typedef struct state {
-    const char *start;
-    const char *next;
-    int type;
-    union {double value; const double *bound; const void *function;};
-    void *context;
-
-    const te_variable *lookup;
-    int lookup_len;
-} state;
 
 
 #define TYPE_MASK(TYPE) ((TYPE)&0x0000001F)
@@ -324,7 +334,10 @@ inline void next_token(state *s) {
                 while (isalpha(s->next[0]) || isdigit(s->next[0]) || (s->next[0] == '_')) s->next++;
                 
                 const te_variable *var = find_lookup(s, start, s->next - start);
-                if (!var) var = find_builtin(start, s->next - start);
+                if (!var)
+                    var = find_builtin(start, s->next - start);
+                if (!var)
+                    var = find_lookup_fallback(s, start, s->next - start);
 
                 if (!var) {
                     s->type = TOK_ERROR;
@@ -737,7 +750,7 @@ inline double te_eval(const te_expr *n) {
 #undef TE_FUN
 #undef MEXPAND
 
-static void optimize(te_expr *n) {
+inline void optimize(te_expr *n) {
     /* Evaluates as much as possible. */
     if (n->type == TE_CONSTANT) return;
     if (n->type == TE_VARIABLE) return;
@@ -763,11 +776,14 @@ static void optimize(te_expr *n) {
 }
 
 
-te_expr *te_compile(const char *expression, const te_variable *variables, int var_count, int *error) {
+inline te_expr *te_compile(const char *expression, const te_variable *variables, int var_count,
+        int *error, void *usr_ctx)
+{
     state s;
     s.start = s.next = expression;
     s.lookup = variables;
     s.lookup_len = var_count;
+    s.usr_ctx = usr_ctx;
 
     next_token(&s);
     te_expr *root = list(&s);
@@ -791,8 +807,8 @@ te_expr *te_compile(const char *expression, const te_variable *variables, int va
 }
 
 
-double te_interp(const char *expression, int *error) {
-    te_expr *n = te_compile(expression, 0, 0, error);
+inline double te_interp(const char *expression, int *error, void *usr_ctx) {
+    te_expr *n = te_compile(expression, 0, 0, error, usr_ctx);
 
     double ret;
     if (n) {
@@ -804,7 +820,7 @@ double te_interp(const char *expression, int *error) {
     return ret;
 }
 
-static void pn (const te_expr *n, int depth) {
+inline void pn (const te_expr *n, int depth) {
     int i, arity;
     printf("%*s", depth, "");
 
@@ -830,7 +846,7 @@ static void pn (const te_expr *n, int depth) {
 }
 
 
-void te_print(const te_expr *n) {
+inline void te_print(const te_expr *n) {
     pn(n, 0);
 }
 
