@@ -1493,3 +1493,4 @@ static int internal_create_object(lua_State *L) {
 // }
 
 } /* namespace virt_composer */
+

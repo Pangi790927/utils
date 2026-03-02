@@ -383,7 +383,7 @@ struct shader_t : public object_t {
     vku_shader_stage_e  m_type;
 
     ref_t<device_t>     m_device;
-    spirv_t             m_spirv;    /* TODO: maybe switch to vku::rev_t? */
+    spirv_t             m_spirv;    /* TODO: maybe switch to vku::ref_t? */
 
     virtual object_type_e type_id() const override { return VKU_TYPE_SHADER; }
     virtual std::string to_string() const override;
