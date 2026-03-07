@@ -1,3 +1,6 @@
+#ifdef _MSC_VER
+# define NOMINMAX
+#endif
 
 #include <filesystem>
 #include <fstream>
@@ -237,7 +240,7 @@ struct virt_state_t {
 };
 
 /* This is the path the application was run from */
-static std::string app_path = std::filesystem::canonical("./");
+static std::string app_path = std::filesystem::canonical("./").string();
 
 
 static lua_State *luaw_init(vc::virt_state_t *vs);
@@ -414,6 +417,76 @@ co::task<std::string> resolve_str(vc::virt_state_t *vs, fkyaml::node& node) {
     co_return node.as_str();
 }
 
+static bool starts_with(const std::string& a, const std::string& b) {
+    return a.size() >= b.size() && a.compare(0, b.size(), b) == 0;
+}
+
+static std::string get_file_string_content(const std::string& file_path_relative) {
+    std::string file_path = std::filesystem::canonical(file_path_relative).string();
+
+#if !(VIRT_COMPOSER_ENABLE_LUA_IO || VIRT_COMPOSER_ENABLE_LUA_OS)
+    if (!starts_with(file_path, app_path)) {
+        /* TODO: sure about this? */
+        DBG("The path is restricted to the application main directory");
+        throw vc::except_t(std::format("File_error [{} vs {}]", file_path, app_path));
+    }
+#endif
+
+    std::ifstream ifs(file_path.c_str());
+
+    if (!ifs.good()) {
+        DBG("Failed to open path: %s", file_path.c_str());
+        throw std::runtime_error("File_error");
+    }
+
+    return std::string((std::istreambuf_iterator<char>(ifs)),
+                       (std::istreambuf_iterator<char>()));
+}
+
+static co::task<vc::ref_t<vc::object_t>> init_lua_script(vc::virt_state_t *vs,
+        const std::string& name, fkyaml::node& node)
+{
+    if (!(node.contains("m_source") || node.contains("m_source_path"))) {
+        DBG("lua-script must be a node that has either m_source or m_source_path")
+        co_return nullptr;
+    }
+
+    if (node.contains("m_source") && node.contains("m_source_path")) {
+        DBG("lua-script can be either loaded from inline script or from a specified path, not"
+                "from both!");
+        co_return nullptr;
+    }
+
+    auto exec_lua_src = [](auto vs, const std::string& str){
+        if (luaL_dostring(vs->L, str.c_str()) != LUA_OK) {
+            DBG("LUA exec string Failed: \n%s", lua_tostring(vs->L, -1));
+            lua_pop(vs->L, 1);
+            return VC_ERROR_FAILED_CALL;
+        }
+        return VC_ERROR_OK;
+    };
+
+    if (node.contains("m_source")) {
+        auto obj = lua_script_t::create(node["m_source"].as_str());
+        if (exec_lua_src(vs, obj->content) != VC_ERROR_OK)
+            co_return nullptr;
+        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
+        co_return obj;
+    }
+
+    if (node.contains("m_source_path")) {
+        std::string source = get_file_string_content(node["m_source_path"].as_str());
+        auto obj = lua_script_t::create(source);
+        if (exec_lua_src(vs, obj->content) != VC_ERROR_OK)
+            co_return nullptr;
+        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
+        co_return obj;
+    }
+
+    /* shouldn't reach here either way */
+    co_return nullptr;
+}
+
 /* TODO: So, this must be dependent on ps not vs, and also a lot of functions that call lua scripts
 must be changed to directly accept an ps instead of a vs. Or maybe not, all we need in fact is a
 way to create a snapshot and in case of error, to retreive the old status of the objects.
@@ -434,7 +507,28 @@ co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
         mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
         co_return obj.to_related<vc::object_t>();
     }
-    /* TODO: also add here lua_script_t, integer_t, float_t, string_t */
+
+    if (node["m_type"] == "vc::lua_script_t")
+        co_return co_await init_lua_script(vs, name, node);
+    /* TODO: also add here integer_t, float_t, string_t */
+
+    if (node["m_type"] == "vc::integer_t") {
+        auto obj = integer_t::create(co_await resolve_int(vs, node["value"]));
+        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
+        co_return obj.to_related<vc::object_t>();
+    }
+
+    if (node["m_type"] == "vc::float_t") {
+        auto obj = float_t::create(co_await resolve_float(vs, node["value"]));
+        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
+        co_return obj.to_related<vc::object_t>();
+    }
+
+    if (node["m_type"] == "vc::string_t") {
+        auto obj = string_t::create(co_await resolve_str(vs, node["value"]));
+        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
+        co_return obj.to_related<vc::object_t>();
+    }
 
     for (auto &[match, cbk] : vs->build_object_cbks)
         if (match == node["m_type"].as_str())
@@ -442,30 +536,6 @@ co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
 
     DBG("Object m_type is not known: %s", node["m_type"].as_str().c_str());
     throw vc::except_t{std::format("Invalid object type: {}", node["m_type"].as_str())};
-}
-
-static bool starts_with(const std::string& a, const std::string& b) {
-    return a.size() >= b.size() && a.compare(0, b.size(), b) == 0;
-}
-
-static std::string get_file_string_content(const std::string& file_path_relative) {
-    std::string file_path = std::filesystem::canonical(file_path_relative);
-
-    if (!starts_with(file_path, app_path)) {
-        /* TODO: sure about this? */
-        DBG("The path is restricted to the application main directory");
-        throw vc::except_t(std::format("File_error [{} vs {}]", file_path, app_path));
-    }
-
-    std::ifstream ifs(file_path.c_str());
-
-    if (!ifs.good()) {
-        DBG("Failed to open path: %s", file_path.c_str());
-        throw std::runtime_error("File_error");
-    }
-
-    return std::string((std::istreambuf_iterator<char>(ifs)),
-                       (std::istreambuf_iterator<char>()));
 }
 
 co::task_t build_pseudo_object(vc::virt_state_t *vs, const std::string& name, fkyaml::node& node) {
@@ -497,30 +567,7 @@ co::task_t build_pseudo_object(vc::virt_state_t *vs, const std::string& name, fk
     }
 
     if (name == "lua_script") {
-        if (!(node.contains("m_source") || node.contains("source_path"))) {
-            DBG("lua-script must be a node that has either source or source-path")
-            co_return -1;
-        }
-
-        if (node.contains("m_source") && node.contains("m_source_path")) {
-            DBG("lua-script can be either loaded from inline script or from a specified path, not"
-                    "from both!");
-            co_return -1;
-        }
-
-        if (node.contains("m_source")) {
-            auto obj = lua_script_t::create(node["m_source"].as_str());
-            mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
-            co_return 0;
-        }
-
-        if (node.contains("m_source_path")) {
-            std::string source = get_file_string_content(node["m_source_path"].as_str());
-
-            auto obj = lua_script_t::create(source);
-            mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
-            co_return 0;
-        }
+        co_return (co_await init_lua_script(vs, name, node)) != nullptr ? 0 : -1;
     }
 
     DBG("Failed to build anything from this object[%s], so the object is invalid", name.c_str());
@@ -567,6 +614,23 @@ err_e parse_config(vc::virt_state_t *vs, const char *path) {
             }
             return VC_ERROR_PARSE_YAML;
         }
+
+        /* TODO: this must be common to both parser and internal obj create
+                and this must also (the code below) remember to register objects only once */
+
+        /* Registers objects loaded from the yaml confing as objects in the library */
+        lua_rawgeti(vs->L, LUA_REGISTRYINDEX, vs->lua_table_idx);
+        for (auto &[k, id] : vs->ps.objects_map) {
+            if (!vs->ps.objects[id].obj) {
+                DBG("Null user object?");
+            }
+            DBG("Registering object: %s with id: %d", k.c_str(), id);
+            /* this makes vulkan_utils.key = object_id and sets it's metadata */
+            lua_pushlightuserdata(vs->L, luaw_to_user_data(id));
+            luaL_setmetatable(vs->L, "__vc_metatable");
+            lua_setfield(vs->L, -2, k.c_str());
+        }
+        lua_pop(vs->L, 1);
     }
     catch (fkyaml::exception &e) {
         DBG("fkyaml::exception: %s", e.what());
@@ -740,19 +804,6 @@ static int luaopen_vc(lua_State *L) {
         /* Registers this lua table for later use */
         vs->lua_table_idx = luaL_ref(L, LUA_REGISTRYINDEX);
         lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_table_idx);
-
-        /* Registers objects loaded from the yaml confing as objects in the library */
-        auto vs = luaw_get_virt_state(L);
-        for (auto &[k, id] : vs->ps.objects_map) {
-            if (!vs->ps.objects[id].obj) {
-                DBG("Null user object?");
-            }
-            DBG("Registering object: %s with id: %d", k.c_str(), id);
-            /* this makes vulkan_utils.key = object_id and sets it's metadata */
-            lua_pushlightuserdata(L, luaw_to_user_data(id));
-            luaL_setmetatable(L, "__vku_metatable");
-            lua_setfield(L, -2, k.c_str());
-        }
     }
 
     DBG("top: %d gettop: %d", top, lua_gettop(L));
@@ -784,9 +835,14 @@ static lua_State *luaw_init(vc::virt_state_t *vs) {
 
     /* TODO: configure if we want or don't want to be able to access the system */
     /* We don't want lua to access our system, so we intentionally don't include those */
-    // luaL_requiref(L, LUA_IOLIBNAME, luaopen_io, 1); lua_pop(L, 1);
-    // luaL_requiref(L, LUA_OSLIBNAME, luaopen_os, 1); lua_pop(L, 1);
- 
+
+#if VIRT_COMPOSER_ENABLE_LUA_IO
+    luaL_requiref(L, LUA_IOLIBNAME, luaopen_io, 1); lua_pop(L, 1);
+#endif
+#if VIRT_COMPOSER_ENABLE_LUA_OS
+    luaL_requiref(L, LUA_OSLIBNAME, luaopen_os, 1); lua_pop(L, 1);
+#endif
+
     return L;
 }
 
@@ -1095,7 +1151,7 @@ static int internal_create_object(lua_State *L) {
         DBG("Registering object: %s with id: %d", tmp_vs.ps.objects[id].name.c_str(), id);
         /* this makes vulkan_utils.key = object_id and sets it's metadata */
         lua_pushlightuserdata(L, luaw_to_user_data(id));
-        luaL_setmetatable(L, "__vku_metatable");
+        luaL_setmetatable(L, "__vc_metatable");
         lua_setfield(L, -2, tmp_vs.ps.objects[id].name.c_str());
     }
 

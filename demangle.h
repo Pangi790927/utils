@@ -3,11 +3,18 @@
 
 #include <cstdlib>
 #include <memory>
-#include <cxxabi.h>
+
+#ifndef _MSC_VER
+# include <cxxabi.h>
+#endif
 
 template <int indent = 0>
 inline std::string demangle(const char *name) {
     int status = -4;
+
+#ifdef _MSC_VER
+    return name;
+#else
     std::unique_ptr<char, void (*)(void *)> res {
         abi::__cxa_demangle(name, NULL, NULL, &status),
         std::free
@@ -42,6 +49,7 @@ inline std::string demangle(const char *name) {
         }
     }
     return indented + "\n";
+#endif
 }
 
 template <class T, int indent = 0>

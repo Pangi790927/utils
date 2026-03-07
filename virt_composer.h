@@ -48,6 +48,11 @@
 #include "minilua.h"
 #include "demangle.h"
 
+
+#if defined(_MSC_VER) && !defined(ssize_t)
+using ssize_t = ptrdiff_t;
+#endif
+
 /*! TODO: this:
  * Something like: in .so you have a int register_meta(vc::virt_state_t *vs) function like usual,
  * but it will register it's types to the vs implementation, expanding it.
@@ -57,8 +62,18 @@
 give a large offset for example (lib-id << 24) and when receiving ids from those large numbers,
 simply offset them in place. You have a lot of space to work with types in this way and when
 compiling is done, you also know how many types where defined, so relocation is made easy */
-#ifndef VIRT_COMPILE_UID_START_OFFSET
-# define VIRT_COMPILE_UID_START_OFFSET 0
+#ifndef VIRT_COMPOSER_UID_START_OFFSET
+# define VIRT_COMPOSER_UID_START_OFFSET 0
+#endif
+
+/*! TODO: desc */
+#ifndef VIRT_COMPOSER_ENABLE_LUA_IO
+# define VIRT_COMPOSER_ENABLE_LUA_IO 0
+#endif
+
+/*! TODO: desc */
+#ifndef VIRT_COMPOSER_ENABLE_LUA_OS
+# define VIRT_COMPOSER_ENABLE_LUA_OS 0
 #endif
 
 /*!
@@ -161,7 +176,7 @@ struct except_t : public std::exception {
 };
 
 struct virt_state_t;
-struct virt_tag_t { static constexpr int off = VIRT_COMPILE_UID_START_OFFSET; };
+struct virt_tag_t { static constexpr int off = VIRT_COMPOSER_UID_START_OFFSET; };
 
 /*!
  * @brief Enumeration type for all objects derived from `vc::object_t`.

@@ -1,1 +1,1 @@
-../co-lib/colib.h
+C:/Users/apangratie/workspace/co-lib/colib.h

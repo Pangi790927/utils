@@ -1,16 +1,19 @@
 #ifndef CPP_BACKTRACE_H
 #define CPP_BACKTRACE_H
 
-#include <cxxabi.h>
+#ifdef _MSC_VER
+inline std::string cpp_backtrace(int skip = 0) { return "backtrace_not_supported_on_windwows\n"; }
+#else /*_MSC_VER*/
+# include <cxxabi.h>
 
-#if __has_include(<boost/stacktrace.hpp>)
-# if __has_include(<backtrace.h>)
-#  include <backtrace.h>
-#  define BOOST_STACKTRACE_USE_BACKTRACE
+# if __has_include(<boost/stacktrace.hpp>)
+#  if __has_include(<backtrace.h>)
+#   include <backtrace.h>
+#   define BOOST_STACKTRACE_USE_BACKTRACE
+#  endif
+#  include <boost/stacktrace.hpp>
+#  define HAS_BOOST_STACKTRACE 
 # endif
-# include <boost/stacktrace.hpp>
-# define HAS_BOOST_STACKTRACE 
-#endif
 
 /* OBS: The code is modified to fallback on the original code if no boost available */
 /*
@@ -37,14 +40,14 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <execinfo.h> // for backtrace
-#include <dlfcn.h>    // for dladdr
-#include <cxxabi.h>   // for __cxa_demangle
+# include <execinfo.h> // for backtrace
+# include <dlfcn.h>    // for dladdr
+# include <cxxabi.h>   // for __cxa_demangle
 
-#include <cstdio>
-#include <cstdlib>
-#include <string>
-#include <sstream>
+# include <cstdio>
+# include <cstdlib>
+# include <string>
+# include <sstream>
 
 // This function produces a stack backtrace with demangled function & method names.
 inline std::string cpp_backtrace(int skip = 0)
@@ -86,5 +89,7 @@ inline std::string cpp_backtrace(int skip = 0)
     return trace_buf.str();
 #endif /* HAS_BOOST_STACKTRACE */
 }
+
+#endif /* else _MSC_VER */
 
 #endif /* CPP_BACKTRACE_H */
