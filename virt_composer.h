@@ -1793,7 +1793,7 @@ template <typename T, typename U>
 requires std::is_base_of_v<vc::object_t, T> && std::is_base_of_v<vc::object_t, U>
 void luaw_register_inheritance(virt_state_t *vs) {
     if constexpr (std::is_base_of_v<U, T>)
-        set_base_derived_relation(vs, T::type_id_static(), U::type_id_static());
+        set_base_derived_relation(vs, U::type_id_static(), T::type_id_static());
     else if constexpr (std::is_base_of_v<T, U>)
         set_base_derived_relation(vs, T::type_id_static(), U::type_id_static());
     else {

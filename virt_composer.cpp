@@ -231,7 +231,10 @@ struct virt_state_t {
     std::vector<std::unordered_map<std::string, lua_CFunction>> lua_class_member_setters =
             std::vector<std::unordered_map<std::string, lua_CFunction>> {VIRT_TYPE_CNT};
 
-    std::vector<std::unordered_set<int>> inheritance_table;
+    /*! This holds for every base_type all the derived types, including itself, used for setting
+     * member functions and object to all the derived also */
+    std::vector<std::unordered_set<int>> inheritance_table =
+            std::vector<std::unordered_set<int>>{VIRT_TYPE_CNT};
 
     ~virt_state_t() {
         if (L) {
