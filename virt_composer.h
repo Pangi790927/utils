@@ -798,6 +798,11 @@ void luaw_register_member_function(virt_state_t *vs, const char *function_name);
 template <typename T, auto member_ptr>
 void luaw_register_member_object(virt_state_t *vs, const char *member_name);
 
+/*! TODO: describe */
+template <typename T, typename U>
+requires std::is_base_of_v<vc::object_t, T> && std::is_base_of_v<vc::object_t, U>
+void luaw_register_inheritance(virt_state_t *vs);
+
 /* TODO: add the functions to add the exception callbacks */
 
 /*!
@@ -995,6 +1000,10 @@ void set_lua_class_member(virt_state_t *vs, object_type_e type, const char *memb
 void set_class_member_setter(virt_state_t *vs, object_type_e type, const char *member_name,
         lua_CFunction fn);
 
+/*! TODO: desc */
+void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type_e derived);
+
+/*! TODO: desc */
 int push_vc_object(lua_State *L, ref_t<object_t> object);
 
 /*!
@@ -1395,6 +1404,20 @@ struct luaw_returner_t<Integer> {
 };
 
 template <>
+struct luaw_returner_t<const char *> {
+    void luaw_ret_push(lua_State *L, const char *x) {
+        lua_pushstring(L, x);
+    }
+};
+
+template <>
+struct luaw_returner_t<std::string> {
+    void luaw_ret_push(lua_State *L, const std::string& x) {
+        lua_pushstring(L, x.c_str());
+    }
+};
+
+template <>
 struct luaw_returner_t<void *> {
     void luaw_ret_push(lua_State *L, void *rawptr) {
         lua_pushlightuserdata(L, rawptr);
@@ -1525,6 +1548,12 @@ template <typename T>
 concept is_vc_enum = requires(fkyaml::node n) {
     get_enum_val<T>(n);
 };
+
+template <bool test, typename ToDisplay>
+inline consteval void demangle_static_assert(const char *) {
+    if constexpr (!test)
+        throw;
+}
 
 /* object at index 'index' and object 'object' of type T */
 template <typename T>
@@ -1757,6 +1786,21 @@ void luaw_register_member_object(virt_state_t *vs, const char *member_name) {
             &luaw_member_object_wrapper<T, member_ptr>, LUAW_MEMBER_OBJECT);
     set_class_member_setter(vs, T::type_id_static(), member_name,
             &luaw_member_setter_object_wrapper<T, member_ptr>);
+}
+
+template <typename T, typename U>
+requires std::is_base_of_v<vc::object_t, T> && std::is_base_of_v<vc::object_t, U>
+void luaw_register_inheritance(virt_state_t *vs) {
+    if constexpr (std::is_base_of_v<U, T>)
+        set_base_derived_relation(vs, T::type_id_static(), U::type_id_static());
+    else if constexpr (std::is_base_of_v<T, U>)
+        set_base_derived_relation(vs, T::type_id_static(), U::type_id_static());
+    else {
+        demangle_static_assert<
+                std::is_base_of_v<U, T> || std::is_base_of_v<T, U>,
+                std::pair<T, U>>
+                ("ERROR: U is not related to T and T is not related to U");
+    }   
 }
 
 

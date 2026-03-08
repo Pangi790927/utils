@@ -231,6 +231,8 @@ struct virt_state_t {
     std::vector<std::unordered_map<std::string, lua_CFunction>> lua_class_member_setters =
             std::vector<std::unordered_map<std::string, lua_CFunction>> {VIRT_TYPE_CNT};
 
+    std::vector<std::unordered_set<int>> inheritance_table;
+
     ~virt_state_t() {
         if (L) {
             lua_close(L);
@@ -345,7 +347,7 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
     int new_id = vs->ps.free_objects.back();
     vs->ps.free_objects.pop_back();
 
-    DBG("Adding object: %s [%d]", depend->to_string().c_str(), new_id);
+    DBG("Adding object: %s [%d]", depend_name.c_str(), new_id);
     vs->ps.objects_map[depend_name] = new_id;
     depend->cbks = std::make_shared<vo::object_cbks_t<vc::virt_traits_t>>();
     depend->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
@@ -901,10 +903,13 @@ void set_lua_class_member(virt_state_t *vs, object_type_e type, const char *memb
     DBG("set_lua_class_member: %s type: %s[%d] memb_type: %s vs[%p] fn[%p]",
             member_name, type.name(), type.value(),
             member_type == LUAW_MEMBER_FUNCTION ? "'function'" : "'object'", vs, fn);
-    vs->lua_class_members[type][member_name] = luaw_member_t{
-        .fn = fn,
-        .member_type = member_type
-    };
+    /* So here is what must happen: all the derived objects must also get this member */
+    vs->inheritance_table[type].insert(type);
+    for (auto &d : vs->inheritance_table[type])
+        vs->lua_class_members[d][member_name] = luaw_member_t{
+            .fn = fn,
+            .member_type = member_type
+        };
 }
 
 void set_class_member_setter(virt_state_t *vs, object_type_e type, const char *member_name,
@@ -912,7 +917,17 @@ void set_class_member_setter(virt_state_t *vs, object_type_e type, const char *m
 {
     DBG("set_class_member_setter: %s type: %s[%d] vs[%p] fn[%p]",
             member_name, type.name(), type.value(), vs, fn);
-    vs->lua_class_member_setters[type][member_name] = fn;
+    /* So here is what must happen: all the derived objects must also get this member */
+    vs->inheritance_table[type].insert(type);
+    for (auto &d : vs->inheritance_table[type])
+        vs->lua_class_member_setters[d][member_name] = fn;
+}
+
+void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type_e derived) {
+    DBG("set_base_derived_relation set %s as base of %s", base.name(), derived.name());
+    vs->inheritance_table[base].insert(base);
+    vs->inheritance_table[derived].insert(derived);
+    vs->inheritance_table[base].insert(derived);
 }
 
 int push_vc_object(lua_State *L, ref_t<object_t> object) {
