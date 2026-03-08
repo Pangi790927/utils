@@ -1398,7 +1398,7 @@ struct luaw_returner_t {
 
 template <std::integral Integer>
 struct luaw_returner_t<Integer> {
-    void luaw_ret_push(lua_State *L, Integer&& x) {
+    void luaw_ret_push(lua_State *L, Integer x) {
         lua_pushinteger(L, x);
     }
 };
@@ -1424,6 +1424,34 @@ struct luaw_returner_t<void *> {
     }
 };
 
+template <typename T>
+struct luaw_returner_t<vc::ref_t<T>> {
+    void luaw_ret_push(lua_State *L, vc::ref_t<T> ref) {
+        if (!ref) {
+            lua_pushnil(L);
+            return;
+        }
+        if (push_vc_object(L, ref) != VC_ERROR_OK)
+            throw except_t("Failed to push user object");
+    }
+};
+
+template <typename ...Args>
+struct luaw_returner_t<std::tuple<Args...>> {
+    void luaw_ret_push(lua_State *L, std::tuple<Args...> t) {
+        lua_createtable(L, std::tuple_size_v<decltype(t)>, 0);
+
+        int i = 1;
+        auto fn = [&](auto &arg) {
+            using Type = std::decay_t<decltype(arg)>;
+            luaw_returner_t<Type>{}.luaw_ret_push(L, arg);
+            lua_rawseti(L, -2, i++);
+        };
+        std::apply([&](auto&& ...args){
+            (fn(args), ...);  
+        }, t);
+    }
+};
 
 template <auto function, typename ...Params, size_t ...I>
 inline int luaw_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
