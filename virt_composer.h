@@ -1424,6 +1424,20 @@ struct luaw_returner_t<void *> {
     }
 };
 
+template <>
+struct luaw_returner_t<const char *> {
+    void luaw_ret_push(lua_State *L, const char *str) {
+        lua_pushstring(L, str);
+    }
+};
+
+template <>
+struct luaw_returner_t<std::string> {
+    void luaw_ret_push(lua_State *L, const std::string& str) {
+        lua_pushstring(L, str.c_str());
+    }
+};
+
 template <auto function, typename ...Params, size_t ...I>
 inline int luaw_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     using RetType = decltype(function(
