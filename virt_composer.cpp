@@ -198,26 +198,26 @@ struct virt_state_t {
 
     /*! Holds a list of constants that can be used inside  */
     std::map<std::string, double> constants = {
-        {"SIZEOF_INT16", sizeof(int16_t)},
-        {"SIZEOF_INT32", sizeof(int32_t)},
-        {"SIZEOF_INT64", sizeof(int64_t)},
-        {"SIZEOF_UINT16", sizeof(uint16_t)},
-        {"SIZEOF_UINT32", sizeof(int32_t)},
-        {"SIZEOF_UINT64", sizeof(int64_t)},
-        {"SIZEOF_FLOAT", sizeof(float)},
-        {"SIZEOF_DOUBLE", sizeof(double)},
-        {"SIZEOF_VEC_2F", sizeof(float)*2},
-        {"SIZEOF_VEC_3F", sizeof(float)*3},
-        {"SIZEOF_VEC_4F", sizeof(float)*4},
-        {"SIZEOF_VEC_2D", sizeof(double)*2},
-        {"SIZEOF_VEC_3D", sizeof(double)*3},
-        {"SIZEOF_VEC_4D", sizeof(double)*4},
-        {"SIZEOF_MAT_2x2F", sizeof(float)*2*2},
-        {"SIZEOF_MAT_3x3F", sizeof(float)*3*3},
-        {"SIZEOF_MAT_4x4F", sizeof(float)*4*4},
-        {"SIZEOF_MAT_2x2D", sizeof(double)*2*2},
-        {"SIZEOF_MAT_3x3D", sizeof(double)*3*3},
-        {"SIZEOF_MAT_4x4D", sizeof(double)*4*4},
+        {"SIZEOF_INT16", (double)sizeof(int16_t)},
+        {"SIZEOF_INT32", (double)sizeof(int32_t)},
+        {"SIZEOF_INT64", (double)sizeof(int64_t)},
+        {"SIZEOF_UINT16", (double)sizeof(uint16_t)},
+        {"SIZEOF_UINT32", (double)sizeof(int32_t)},
+        {"SIZEOF_UINT64", (double)sizeof(int64_t)},
+        {"SIZEOF_FLOAT", (double)sizeof(float)},
+        {"SIZEOF_DOUBLE", (double)sizeof(double)},
+        {"SIZEOF_VEC_2F", (double)sizeof(float)*2},
+        {"SIZEOF_VEC_3F", (double)sizeof(float)*3},
+        {"SIZEOF_VEC_4F", (double)sizeof(float)*4},
+        {"SIZEOF_VEC_2D", (double)sizeof(double)*2},
+        {"SIZEOF_VEC_3D", (double)sizeof(double)*3},
+        {"SIZEOF_VEC_4D", (double)sizeof(double)*4},
+        {"SIZEOF_MAT_2x2F", (double)sizeof(float)*2*2},
+        {"SIZEOF_MAT_3x3F", (double)sizeof(float)*3*3},
+        {"SIZEOF_MAT_4x4F", (double)sizeof(float)*4*4},
+        {"SIZEOF_MAT_2x2D", (double)sizeof(double)*2*2},
+        {"SIZEOF_MAT_3x3D", (double)sizeof(double)*3*3},
+        {"SIZEOF_MAT_4x4D", (double)sizeof(double)*4*4},
     };
 
     /*! Holds free functions (TODO:) */
@@ -397,7 +397,7 @@ co::task<int64_t> resolve_int(vc::virt_state_t *vs, fkyaml::node& node) {
         co_return (co_await vc::depend_resolver_t<integer_t>(vs, node.as_str()))->value;
     if (node.is_string()) {
         /* Try to resolve an expression resulting in an integer: */
-        co_return std::round(resolve_string_as_expression(node.as_str(), vs));
+        co_return (int64_t)std::round(resolve_string_as_expression(node.as_str(), vs));
     }
     else
         co_return node.as_int();

@@ -126,8 +126,10 @@ struct FnScope {
  * Do not depend on its uniqueness across multiple objects, shared libraries,
  * or other separate translation units.
  */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wnon-template-friend"
+#ifndef _MSC_VER
+# pragma GCC diagnostic push
+# pragma GCC diagnostic ignored "-Wnon-template-friend"
+#endif /* _MSC_VER */
 template<typename UniqueTag, auto Id>
 struct compile_counter {
     using tag = compile_counter;
@@ -161,8 +163,9 @@ consteval auto compile_unique_id() {
     else
         return compile_unique_id<UniqueTag, Id + 1>();
 }
-#pragma GCC diagnostic pop
-
+#ifndef _MSC_VER
+# pragma GCC diagnostic pop
+#endif /* _MSC_VER */
 /* Example for the above example, you can use whatever type as a tag.  */
 struct compile_counter_example_tag_t { static constexpr int off = 0; };
 static_assert(compile_unique_id<compile_counter_example_tag_t>() == 0);
