@@ -358,7 +358,7 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
     vs->ps.objects[new_id].name = depend_name;
 
     /* Second, awake all the ones waiting for the respective dependency */
-    if (vc::has(vs->ps.wanted_objects, depend_name)) {
+    if (::has(vs->ps.wanted_objects, depend_name)) {
         for (auto s : vs->ps.wanted_objects[depend_name])
             co::external_sched_resume(s);
         vs->ps.wanted_objects.erase(depend_name);

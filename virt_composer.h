@@ -1881,16 +1881,10 @@ call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
     }
 }
 
-template <typename T, typename K>
-constexpr auto has(T&& data_struct, K&& key) {
-    return std::forward<T>(data_struct).find(std::forward<K>(key))
-            != std::forward<T>(data_struct).end();
-}
-
 template <typename T>
 inline T get_enum_val(fkyaml::node &node, const std::unordered_map<std::string, T>& enum_vals) {
     if (node.is_string()) {
-        if (!vc::has(enum_vals, node.as_str()))
+        if (!::has(enum_vals, node.as_str()))
             throw vc::except_t(std::format("Unknown enum({}) value: {}",
                     demangle<T>(), node.as_str()));
         return enum_vals.find(node.as_str())->second;
