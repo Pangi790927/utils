@@ -1438,8 +1438,8 @@ struct luaw_returner_t<vc::ref_t<T>> {
 
 template <typename ...Args>
 struct luaw_returner_t<std::tuple<Args...>> {
-    void luaw_ret_push(lua_State *L, std::tuple<Args...> t) {
-        lua_createtable(L, std::tuple_size_v<decltype(t)>, 0);
+    void luaw_ret_push(lua_State *L, const std::tuple<Args...>& t) {
+        lua_createtable(L, std::tuple_size_v<std::decay_t<decltype(t)>>, 0);
 
         int i = 1;
         auto fn = [&](auto &arg) {
@@ -1450,6 +1450,17 @@ struct luaw_returner_t<std::tuple<Args...>> {
         std::apply([&](auto&& ...args){
             (fn(args), ...);  
         }, t);
+    }
+};
+
+template <typename T>
+struct luaw_returner_t<std::vector<T>> {
+    void luaw_ret_push(lua_State *L, const std::vector<T>& v) {
+        lua_createtable(L, v.size(), 0);
+        for (int i = 0; i < v.size(); i++) {
+            luaw_returner_t<std::decay_t<T>>{}.luaw_ret_push(L, v[i]);
+            lua_rawseti(L, -2, i);
+        }
     }
 };
 

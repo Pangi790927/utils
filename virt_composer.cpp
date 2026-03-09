@@ -936,9 +936,11 @@ void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type
 int push_vc_object(lua_State *L, ref_t<object_t> object) {
     auto vs = luaw_get_virt_state(L);
     if (!object->cbks) {
-        DBG("internal_error: How did this object get known to virt_composer ?!");
-        return -1;
+        /* This happens when the object was not created/registered by the dependency enegine, but
+        it was created on the fly. We give it callbacks, a name and be on our way. */
+        object->cbks = std::make_shared<vo::object_cbks_t<vc::virt_traits_t>>();
     }
+
     if (!object->cbks->usr_ptr) {
         /* So this object was no longer known by the lua side, we must resurect it */
 
