@@ -31,6 +31,15 @@
 #define KCYN                "\x1B[36m"
 #define KWHT                "\x1B[37m"
 
+template <typename T>
+T& ref(T& obj) { return obj; }
+
+template <typename T, typename K>
+constexpr auto has(T&& data_struct, K&& key) {
+    return std::forward<T>(data_struct).find(std::forward<K>(key))
+            != std::forward<T>(data_struct).end();
+}
+
 struct c_free_deleter {
     template <typename T>
     void operator()(T *p) const {
