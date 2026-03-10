@@ -320,7 +320,12 @@ err_e add_auto_builder_callback(vc::virt_state_t *vs,
 }
 
 err_e add_lua_tab_funcs(virt_state_t *vs, const std::vector<luaL_Reg>& vc_tab_funcs) {
-    /* TODO: */
+    vs->tab_funcs.pop_back();
+    vs->tab_funcs.insert(vs->tab_funcs.end(), vc_tab_funcs.begin(), vc_tab_funcs.end());
+    vs->tab_funcs.push_back({NULL, NULL});
+
+    lua_rawgeti(vs->L, LUA_REGISTRYINDEX, vs->lua_table_idx);
+    luaL_setfuncs(vs->L, vs->tab_funcs.data(), 0);
     return VC_ERROR_OK;
 }
 
@@ -1161,7 +1166,7 @@ static int internal_create_object(lua_State *L) {
 
     DBG("Getting lua table...");
 
-    /* Get back the vulkan_utils table */
+    /* Get back the virt_composer table */
     lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_table_idx);
 
     for (int id : new_idx) {

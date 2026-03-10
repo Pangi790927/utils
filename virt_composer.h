@@ -1283,9 +1283,9 @@ struct luaw_param_t<Float, index> {
 
 /* This resolves strings received from lua to an vc parameter */
 template <ssize_t index>
-struct luaw_param_t<char *, index> {
-    char *luaw_single_param(lua_State *L) {
-        char *ret = lua_tostring(L, index);
+struct luaw_param_t<const char *, index> {
+    const char *luaw_single_param(lua_State *L) {
+        const char *ret = lua_tostring(L, index);
         if (!ret) {
             luaw_push_error(L,
                     std::format("Invalid parameter at index {}, failed conversion to string from "
