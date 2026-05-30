@@ -190,9 +190,9 @@ inline char const * errnoname(int errno_)
 #ifdef EFORMAT
         case EFORMAT: return "EFORMAT";
 #endif
-#ifdef EFSCORRUPTED
-        case EFSCORRUPTED: return "EFSCORRUPTED";
-#endif
+// #ifdef EFSCORRUPTED
+//         case EFSCORRUPTED: return "EFSCORRUPTED";
+// #endif
 #ifdef EFTYPE
         case EFTYPE: return "EFTYPE";
 #endif
