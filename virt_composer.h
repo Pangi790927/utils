@@ -1403,6 +1403,13 @@ struct luaw_returner_t<Integer> {
     }
 };
 
+template <std::floating_point Floating>
+struct luaw_returner_t<Floating> {
+    void luaw_ret_push(lua_State *L, Floating x) {
+        lua_pushnumber(L, x);
+    }
+};
+
 template <>
 struct luaw_returner_t<const char *> {
     void luaw_ret_push(lua_State *L, const char *x) {
@@ -1863,7 +1870,8 @@ call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
     }
     if constexpr (std::is_void_v<R>) {
         if (lua_pcall(L, std::tuple_size_v<std::tuple<Args...>>, 0, 0) != LUA_OK) {
-            DBG("LUA luaw_execute_loop_run Failed: \n%s", lua_tostring(L, -1));
+            DBG("LUA luaw_execute_loop_run Failed: \n%s -- EXECUTING: %s",
+                    lua_tostring(L, -1), function_name);
             lua_pop(L, 1);
             return {0, VC_ERROR_FAILED_CALL};
         }
@@ -1872,7 +1880,8 @@ call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
     else {
         R result;
         if (lua_pcall(L, std::tuple_size_v<std::tuple<Args...>>, 1, 0) != LUA_OK) {
-            DBG("LUA luaw_execute_loop_run Failed: \n%s", lua_tostring(L, -1));
+            DBG("LUA luaw_execute_loop_run Failed: \n%s -- EXECUTING: %s",
+                    lua_tostring(L, -1), function_name);
             lua_pop(L, 1);
             return {result, VC_ERROR_FAILED_CALL};
         }
