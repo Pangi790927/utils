@@ -127,9 +127,9 @@ public:
     bool operator < (const ap_string_t& str) const {
         int i = 0, j = 0;
         while (i < size() && j < str.size()) {
-            if (vec[i] < str[i])
+            if (vec[i] < str[j])
                 return true;
-            if (vec[i] > str[i])
+            if (vec[i] > str[j])
                 return false;
             i++;
             j++;
