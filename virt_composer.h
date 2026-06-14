@@ -1403,6 +1403,13 @@ struct luaw_returner_t<Integer> {
     }
 };
 
+template <std::floating_point Floating>
+struct luaw_returner_t<Floating> {
+    void luaw_ret_push(lua_State *L, Floating x) {
+        lua_pushnumber(L, x);
+    }
+};
+
 template <>
 struct luaw_returner_t<const char *> {
     void luaw_ret_push(lua_State *L, const char *x) {

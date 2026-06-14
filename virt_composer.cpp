@@ -75,65 +75,12 @@ struct parser_state_t {
         for (int i = table_size-1; i >= 1; i--)
             free_objects.push_back(i);
     }
-
-    /* TODO: move this function from here, it doesn't belong here it is usefull only when
-    the 'oth' state is made by copying this state into another object and after that adding to it.
-    This function will not make sense or work in many other cases */
-    /* TODO: this is stupid slow, must be made faster (create a clear interface of adding and
-    removing objects and make get_new and append return the internal held update list) */
-    std::vector<int> get_new(const parser_state_t &oth) {
-        std::set<int> free_objects_this(free_objects.begin(), free_objects.end());
-        std::set<int> free_objects_other(oth.free_objects.begin(), oth.free_objects.end());
-
-        std::vector<int> new_other;
-        std::set_difference(
-            free_objects_this.begin(), free_objects_this.end(),
-            free_objects_other.begin(), free_objects_other.end(),
-            std::back_inserter(new_other)
-        );
-
-        std::vector<int> new_this;
-        std::set_difference(
-            free_objects_other.begin(), free_objects_other.end(),
-            free_objects_this.begin(), free_objects_this.end(),
-            std::back_inserter(new_this)
-        );
-
-        if (new_this.size())
-            throw vc::except_t(
-                    "How could the state change while we where creating a new object? huh?");
-        return new_other;
-    }
-
-    /* TODO: as for above: move it and make it faster */
-    void append(const parser_state_t &oth) {
-        std::set<int> free_objects_this(free_objects.begin(), free_objects.end());
-        std::set<int> free_objects_other(oth.free_objects.begin(), oth.free_objects.end());
-
-        std::vector<int> new_other;
-        std::set_difference(
-            free_objects_this.begin(), free_objects_this.end(),
-            free_objects_other.begin(), free_objects_other.end(),
-            std::back_inserter(new_other)
-        );
-
-        std::vector<int> new_this;
-        std::set_difference(
-            free_objects_other.begin(), free_objects_other.end(),
-            free_objects_this.begin(), free_objects_this.end(),
-            std::back_inserter(new_this)
-        );
-
-        for (int idx : new_other) {
-            this->objects[idx] = oth.objects[idx];
-            this->objects_map[oth.objects[idx].name] = idx;
-        }
-        this->free_objects = std::vector<int>(free_objects_other.begin(), free_objects_other.end());
-    }
 };
 
 /*! This holds the state of the  */
 struct virt_state_t {
+    co::pool_p pool;
+
     /*! The Lua state associated with this virt state */
     lua_State *L = nullptr;
 
@@ -220,7 +167,7 @@ struct virt_state_t {
         {"SIZEOF_MAT_4x4D", (double)sizeof(double)*4*4},
     };
 
-    /*! Holds free functions (TODO:) */
+    /*! Holds free functions */
     std::vector<luaL_Reg> tab_funcs;
 
     /*! This holds member functions and member objects getters */
@@ -269,6 +216,7 @@ std::shared_ptr<virt_state_t> create_state() {
     ASSERT_RET(nullptr, CHK_BOOL(VIRT_TYPES_INITIALIZED));
 
     auto vs = std::make_shared<virt_state_t>();
+    vs->pool = co::create_pool();
 
     ASSERT_RET(nullptr, CHK_PTR(vs->L = luaw_init(vs.get())));
     ASSERT_RET(nullptr, add_lua_tab_funcs(vs.get(), {{"create_object", internal_create_object}}));
@@ -361,6 +309,12 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
     depend->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
     vs->ps.objects[new_id].obj = depend;
     vs->ps.objects[new_id].name = depend_name;
+
+    lua_rawgeti(vs->L, LUA_REGISTRYINDEX, vs->lua_table_idx);
+    lua_pushlightuserdata(vs->L, luaw_to_user_data(new_id));
+    luaL_setmetatable(vs->L, "__vc_metatable");
+    lua_setfield(vs->L, -2, depend_name.c_str());
+    lua_pop(vs->L, 1);
 
     /* Second, awake all the ones waiting for the respective dependency */
     if (::has(vs->ps.wanted_objects, depend_name)) {
@@ -609,38 +563,18 @@ err_e parse_config(vc::virt_state_t *vs, const char *path) {
 
     try {
         auto config = fkyaml::node::deserialize(file);
+        vs->pool->sched(build_schema(vs, config));
 
-        auto pool = co::create_pool();
-        pool->sched(build_schema(vs, config));
-
-        if (pool->run() != co::RUN_OK) {
+        if (vs->pool->run() != co::RUN_OK) {
             DBG("Failed to create the schema");
             return VC_ERROR_GENERIC;
         }
 
         if (vs->ps.wanted_objects.size()) {
             for (auto &[k, v]: vs->ps.wanted_objects) {
-                DBG("Unknown Object: %s", k.c_str());
+                DBG("WARNING: Unknown Object: %s", k.c_str());
             }
-            return VC_ERROR_PARSE_YAML;
         }
-
-        /* TODO: this must be common to both parser and internal obj create
-                and this must also (the code below) remember to register objects only once */
-
-        /* Registers objects loaded from the yaml confing as objects in the library */
-        lua_rawgeti(vs->L, LUA_REGISTRYINDEX, vs->lua_table_idx);
-        for (auto &[k, id] : vs->ps.objects_map) {
-            if (!vs->ps.objects[id].obj) {
-                DBG("Null user object?");
-            }
-            DBG("Registering object: %s with id: %d", k.c_str(), id);
-            /* this makes vulkan_utils.key = object_id and sets it's metadata */
-            lua_pushlightuserdata(vs->L, luaw_to_user_data(id));
-            luaL_setmetatable(vs->L, "__vc_metatable");
-            lua_setfield(vs->L, -2, k.c_str());
-        }
-        lua_pop(vs->L, 1);
     }
     catch (fkyaml::exception &e) {
         DBG("fkyaml::exception: %s", e.what());
@@ -961,6 +895,12 @@ int push_vc_object(lua_State *L, ref_t<object_t> object) {
         vs->ps.objects_map[name] = new_id;
         vs->ps.objects[new_id].obj = object;
         vs->ps.objects[new_id].name = name;
+
+        lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_table_idx);
+        lua_pushlightuserdata(L, luaw_to_user_data(new_id));
+        luaL_setmetatable(L, "__vc_metatable");
+        lua_setfield(L, -2, name.c_str());
+        lua_pop(L, 1);
     }
     int obj_id = (intptr_t)object->cbks->usr_ptr.get();
     if (obj_id >= (int)vs->ps.objects.size() || obj_id < 0) {
@@ -1124,71 +1064,41 @@ static int internal_create_object(lua_State *L) {
         lua_error(L);
     }
     auto object_description = create_yaml_from_lua_object(L, 2);
-
-    /* We copy the whole objects ref state, such that for now we have an exact copy of the global
-    vku namespace and we can reference it's objects. If we error out, the only references that will
-    remain alive are those that where backed up by g_rs and if we don't error out, at the end we
-    append the differences to g_rs. */
     auto vs = luaw_get_virt_state(L);
-    vc::virt_state_t tmp_vs = *vs;
 
     DBG("create_object: %s", fkyaml::node::serialize(object_description).c_str());
-    auto pool = co::create_pool();
 
     if (!object_description.contains("m_type")) {
-        pool->sched(vc::build_pseudo_object(&tmp_vs, name, object_description));
+        vs->pool->sched(vc::build_pseudo_object(vs, name, object_description));
     }
     else {
-        pool->sched(build_object(&tmp_vs, name, object_description));
+        vs->pool->sched(build_object(vs, name, object_description));
     }
 
-    if (pool->run() != co::RUN_OK) {
+    if (vs->pool->run() != co::RUN_OK) {
         luaw_push_error(L, "CO_OJECT_CREATOR: Failed to create the object");
         lua_error(L);
     }
 
-    if (tmp_vs.ps.wanted_objects.size()) {
-        std::string unknown_objects = "[";
-        for (auto &[k, v]: tmp_vs.ps.wanted_objects) {
-            unknown_objects += std::format("{}, ", k);
+    if (vs->ps.wanted_objects.size()) {
+        for (auto &[k, v]: vs->ps.wanted_objects) {
+            DBG("WARNING: Unknown Object: %s", k.c_str());
         }
-        unknown_objects += "]";
-        luaw_push_error(L, std::format("unknown objects: {}", unknown_objects));
-        lua_error(L);
     }
 
-    if (!has(tmp_vs.ps.objects_map, name)) {
+    if (!has(vs->ps.objects_map, name)) {
         luaw_push_error(L, "internal_error: Object is not found after creation");
         lua_error(L);
     }
-
-    auto new_idx = vs->ps.get_new(tmp_vs.ps);
 
     DBG("Getting lua table...");
 
     /* Get back the virt_composer table */
     lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_table_idx);
-
-    for (int id : new_idx) {
-        if (!tmp_vs.ps.objects[id].obj) {
-            DBG("Null user object?");
-        }
-        DBG("Registering object: %s with id: %d", tmp_vs.ps.objects[id].name.c_str(), id);
-        /* this makes vulkan_utils.key = object_id and sets it's metadata */
-        lua_pushlightuserdata(L, luaw_to_user_data(id));
-        luaL_setmetatable(L, "__vc_metatable");
-        lua_setfield(L, -2, tmp_vs.ps.objects[id].name.c_str());
-    }
-
-    lua_getfield(L, -1, name);
+    lua_getfield(L, -1, name); /* get the object with the respective name */
     lua_remove(L, -2); /* pops vulkan_utils table */
 
-    /* actualize the global state */
-    vs->ps.append(tmp_vs.ps);
-
-    /*TODO: make sure old vs and new vs have the same data at the end of the day */
-
-    /* Eventual errors are catched outside of this function */
+    DBG("Done reg new objs");
     return 1;
 }
 

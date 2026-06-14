@@ -134,6 +134,12 @@ struct object_cbks_t {
     std::function<void(object_t<R> *, std::shared_ptr<void> &)> post_uninit;
 };
 
+/* TODO: I think only vulkan objects get a use out of _init/_uninit idea, so maybe move it
+there */
+/* TODO: Similar to above todo: maybe the base_t doesn't need all those things about update, rebuild
+and such, maybe we can move that into vulkan's object_t. In this way, the main object_t will become
+much lighter which makes sense for a lot of other applications that only need yaml+lua. */
+
 /*! This is virtual only for init/uninit, which need to describe how the object should be
  * initialized once it is created and it's parameters are filled */
 template <typename R>
@@ -165,9 +171,9 @@ struct object_t {
     virtual R::type_t type_id() const = 0;
     virtual std::string to_string() const = 0;
 
-    std::shared_ptr<object_cbks_t<R>> cbks;
-
     virtual void update() {}
+
+    std::shared_ptr<object_cbks_t<R>> cbks;
 
 private:
     virtual R::ret_t _init() = 0;
