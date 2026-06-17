@@ -807,6 +807,7 @@ int push_vc_object(lua_State *L, ref_t<object_t> object) {
 }
 
 int luaw_push_unnamed(lua_State *L, ref_t<object_t> object) {
+    auto vs = luaw_get_virt_state(L);
     vs->obj_keepalive.insert(object);
     lua_pushlightuserdata(L, object.get());
     luaL_setmetatable(L, "__vc_metatable");
