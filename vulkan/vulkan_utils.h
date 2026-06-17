@@ -1232,6 +1232,9 @@ inline vc::ret_t device_t::_init() {
         DBG("Failed to get a suitable physical device");
         throw vku::except_t(VK_ERROR_UNKNOWN);
     }
+    VkPhysicalDeviceProperties dev_prop;
+    vkGetPhysicalDeviceProperties(vk_phy_dev, &dev_prop);
+    DBG("Selected GPU Name: %s", dev_prop.deviceName);
 
     m_que_fams = find_queue_families(vk_phy_dev, m_surface->vk_surface);
     m_que_ids = { m_que_fams.graphics_id, m_que_fams.present_id };
@@ -1679,7 +1682,7 @@ inline vc::ret_t pipeline_t::_init() {
         .depthClampEnable           = VK_FALSE,
         .rasterizerDiscardEnable    = VK_FALSE,
         .polygonMode                = VK_POLYGON_MODE_FILL,
-        .cullMode                   = VK_CULL_MODE_BACK_BIT,
+        .cullMode                   = VK_CULL_MODE_NONE, // VK_CULL_MODE_BACK_BIT,
         .frontFace                  = VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depthBiasEnable            = VK_FALSE,
         .depthBiasConstantFactor    = 0.0f,
@@ -3767,14 +3770,14 @@ inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
     VK_ASSERT(init());
     DBG("NEW GLSLANG COMPILE");
 
-    glslang_stage_t stage;
-    switch (vku_stage) {
-        case VKU_SPIRV_VERTEX:    stage = GLSLANG_STAGE_VERTEX;         break;
-        case VKU_SPIRV_TESS_CTRL: stage = GLSLANG_STAGE_TESSCONTROL;    break;
-        case VKU_SPIRV_TESS_EVAL: stage = GLSLANG_STAGE_TESSEVALUATION; break;
-        case VKU_SPIRV_GEOMETRY:  stage = GLSLANG_STAGE_GEOMETRY;       break;
-        case VKU_SPIRV_FRAGMENT:  stage = GLSLANG_STAGE_FRAGMENT;       break;
-        case VKU_SPIRV_COMPUTE:   stage = GLSLANG_STAGE_COMPUTE;        break;
+    glslang_stage_t gs_stage;
+    switch (stage) {
+        case VKU_SPIRV_VERTEX:    gs_stage = GLSLANG_STAGE_VERTEX;         break;
+        case VKU_SPIRV_TESS_CTRL: gs_stage = GLSLANG_STAGE_TESSCONTROL;    break;
+        case VKU_SPIRV_TESS_EVAL: gs_stage = GLSLANG_STAGE_TESSEVALUATION; break;
+        case VKU_SPIRV_GEOMETRY:  gs_stage = GLSLANG_STAGE_GEOMETRY;       break;
+        case VKU_SPIRV_FRAGMENT:  gs_stage = GLSLANG_STAGE_FRAGMENT;       break;
+        case VKU_SPIRV_COMPUTE:   gs_stage = GLSLANG_STAGE_COMPUTE;        break;
         default:
             DBG("Unknown shader stage type: %d", (uint32_t)stage);
             throw vku::except_t(VK_ERROR_UNKNOWN);
@@ -3782,7 +3785,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
 
     const glslang_input_t input = {
         .language = GLSLANG_SOURCE_GLSL,
-        .stage = stage,
+        .stage = gs_stage,
         .client = GLSLANG_CLIENT_VULKAN,
         .client_version = GLSLANG_TARGET_VULKAN_1_2,
         .target_language = GLSLANG_TARGET_SPV,
@@ -3827,7 +3830,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
         throw vku::except_t("GLSL linking failed");
     }
 
-    glslang_program_SPIRV_generate(program, stage);
+    glslang_program_SPIRV_generate(program, gs_stage);
 
     int size = glslang_program_SPIRV_get_size(program);
     spirv_t ret;

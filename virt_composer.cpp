@@ -22,7 +22,6 @@ namespace vc = virt_composer;
 /* Max number of named references objects */
 static constexpr const int MAX_NUMBER_OF_OBJECTS = 16384;
 
-
 /*! Holds information of a member, either a member funtion or a member object */
 struct luaw_member_t {
     lua_CFunction fn;
@@ -75,65 +74,12 @@ struct parser_state_t {
         for (int i = table_size-1; i >= 1; i--)
             free_objects.push_back(i);
     }
-
-    /* TODO: move this function from here, it doesn't belong here it is usefull only when
-    the 'oth' state is made by copying this state into another object and after that adding to it.
-    This function will not make sense or work in many other cases */
-    /* TODO: this is stupid slow, must be made faster (create a clear interface of adding and
-    removing objects and make get_new and append return the internal held update list) */
-    std::vector<int> get_new(const parser_state_t &oth) {
-        std::set<int> free_objects_this(free_objects.begin(), free_objects.end());
-        std::set<int> free_objects_other(oth.free_objects.begin(), oth.free_objects.end());
-
-        std::vector<int> new_other;
-        std::set_difference(
-            free_objects_this.begin(), free_objects_this.end(),
-            free_objects_other.begin(), free_objects_other.end(),
-            std::back_inserter(new_other)
-        );
-
-        std::vector<int> new_this;
-        std::set_difference(
-            free_objects_other.begin(), free_objects_other.end(),
-            free_objects_this.begin(), free_objects_this.end(),
-            std::back_inserter(new_this)
-        );
-
-        if (new_this.size())
-            throw vc::except_t(
-                    "How could the state change while we where creating a new object? huh?");
-        return new_other;
-    }
-
-    /* TODO: as for above: move it and make it faster */
-    void append(const parser_state_t &oth) {
-        std::set<int> free_objects_this(free_objects.begin(), free_objects.end());
-        std::set<int> free_objects_other(oth.free_objects.begin(), oth.free_objects.end());
-
-        std::vector<int> new_other;
-        std::set_difference(
-            free_objects_this.begin(), free_objects_this.end(),
-            free_objects_other.begin(), free_objects_other.end(),
-            std::back_inserter(new_other)
-        );
-
-        std::vector<int> new_this;
-        std::set_difference(
-            free_objects_other.begin(), free_objects_other.end(),
-            free_objects_this.begin(), free_objects_this.end(),
-            std::back_inserter(new_this)
-        );
-
-        for (int idx : new_other) {
-            this->objects[idx] = oth.objects[idx];
-            this->objects_map[oth.objects[idx].name] = idx;
-        }
-        this->free_objects = std::vector<int>(free_objects_other.begin(), free_objects_other.end());
-    }
 };
 
 /*! This holds the state of the  */
 struct virt_state_t {
+    co::pool_p pool;
+
     /*! The Lua state associated with this virt state */
     lua_State *L = nullptr;
 
@@ -202,8 +148,8 @@ struct virt_state_t {
         {"SIZEOF_INT32", (double)sizeof(int32_t)},
         {"SIZEOF_INT64", (double)sizeof(int64_t)},
         {"SIZEOF_UINT16", (double)sizeof(uint16_t)},
-        {"SIZEOF_UINT32", (double)sizeof(int32_t)},
-        {"SIZEOF_UINT64", (double)sizeof(int64_t)},
+        {"SIZEOF_UINT32", (double)sizeof(uint32_t)},
+        {"SIZEOF_UINT64", (double)sizeof(uint64_t)},
         {"SIZEOF_FLOAT", (double)sizeof(float)},
         {"SIZEOF_DOUBLE", (double)sizeof(double)},
         {"SIZEOF_VEC_2F", (double)sizeof(float)*2},
@@ -220,7 +166,7 @@ struct virt_state_t {
         {"SIZEOF_MAT_4x4D", (double)sizeof(double)*4*4},
     };
 
-    /*! Holds free functions (TODO:) */
+    /*! Holds free functions */
     std::vector<luaL_Reg> tab_funcs;
 
     /*! This holds member functions and member objects getters */
@@ -269,6 +215,7 @@ std::shared_ptr<virt_state_t> create_state() {
     ASSERT_RET(nullptr, CHK_BOOL(VIRT_TYPES_INITIALIZED));
 
     auto vs = std::make_shared<virt_state_t>();
+    vs->pool = co::create_pool();
 
     ASSERT_RET(nullptr, CHK_PTR(vs->L = luaw_init(vs.get())));
     ASSERT_RET(nullptr, add_lua_tab_funcs(vs.get(), {{"create_object", internal_create_object}}));
@@ -367,6 +314,12 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
     vs->ps.objects[new_id].obj = depend;
     vs->ps.objects[new_id].name = depend_name;
 
+    lua_rawgeti(vs->L, LUA_REGISTRYINDEX, vs->lua_table_idx);
+    lua_pushlightuserdata(vs->L, luaw_to_user_data(new_id));
+    luaL_setmetatable(vs->L, "__vc_metatable");
+    lua_setfield(vs->L, -2, depend_name.c_str());
+    lua_pop(vs->L, 1);
+
     /* Second, awake all the ones waiting for the respective dependency */
     if (::has(vs->ps.wanted_objects, depend_name)) {
         for (auto s : vs->ps.wanted_objects[depend_name])
@@ -420,6 +373,9 @@ co::task<double> resolve_float(vc::virt_state_t *vs, fkyaml::node& node) {
     if (node.is_string()) {
         /* Try to resolve an expression resulting in an double: */
         co_return resolve_string_as_expression(node.as_str(), vs);
+    }
+    else if (node.is_integer()) {
+        co_return node.as_int();
     }
     else
         co_return node.as_float();
@@ -502,11 +458,6 @@ static co::task<vc::ref_t<vc::object_t>> init_lua_script(vc::virt_state_t *vs,
     co_return nullptr;
 }
 
-/* TODO: So, this must be dependent on ps not vs, and also a lot of functions that call lua scripts
-must be changed to directly accept an ps instead of a vs. Or maybe not, all we need in fact is a
-way to create a snapshot and in case of error, to retreive the old status of the objects.
-    OF Course this invites UB if destructors/constructors are called. Maybe we need just to live
-with it? */
 co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
         const std::string& name, fkyaml::node& node)
 {
@@ -525,7 +476,6 @@ co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
 
     if (node["m_type"] == "vc::lua_script_t")
         co_return co_await init_lua_script(vs, name, node);
-    /* TODO: also add here integer_t, float_t, string_t */
 
     if (node["m_type"] == "vc::integer_t") {
         auto obj = integer_t::create(co_await resolve_int(vs, node["value"]));
@@ -614,38 +564,18 @@ err_e parse_config(vc::virt_state_t *vs, const char *path) {
 
     try {
         auto config = fkyaml::node::deserialize(file);
+        vs->pool->sched(build_schema(vs, config));
 
-        auto pool = co::create_pool();
-        pool->sched(build_schema(vs, config));
-
-        if (pool->run() != co::RUN_OK) {
+        if (vs->pool->run() != co::RUN_OK) {
             DBG("Failed to create the schema");
             return VC_ERROR_GENERIC;
         }
 
         if (vs->ps.wanted_objects.size()) {
             for (auto &[k, v]: vs->ps.wanted_objects) {
-                DBG("Unknown Object: %s", k.c_str());
+                DBG("WARNING: Unknown Object: %s", k.c_str());
             }
-            return VC_ERROR_PARSE_YAML;
         }
-
-        /* TODO: this must be common to both parser and internal obj create
-                and this must also (the code below) remember to register objects only once */
-
-        /* Registers objects loaded from the yaml confing as objects in the library */
-        lua_rawgeti(vs->L, LUA_REGISTRYINDEX, vs->lua_table_idx);
-        for (auto &[k, id] : vs->ps.objects_map) {
-            if (!vs->ps.objects[id].obj) {
-                DBG("Null user object?");
-            }
-            // DBG("Registering object: %s with id: %d", k.c_str(), id);
-            /* this makes vulkan_utils.key = object_id and sets it's metadata */
-            lua_pushlightuserdata(vs->L, luaw_to_user_data(id));
-            luaL_setmetatable(vs->L, "__vc_metatable");
-            lua_setfield(vs->L, -2, k.c_str());
-        }
-        lua_pop(vs->L, 1);
     }
     catch (fkyaml::exception &e) {
         DBG("fkyaml::exception: %s", e.what());
@@ -809,9 +739,6 @@ static int luaopen_vc(lua_State *L) {
     ASSERT_FN(CHK_BOOL(top == lua_gettop(L))); /* sanity check */
 
     {
-        /* TODO: recheck the old registration functions */
-        /* Registers the vulkan_utils library and some standalone functions from vku(vulkan utils)
-        or vkc(vulkan composer) */
         vs->tab_funcs.push_back({NULL, NULL});
         luaL_checkversion(L);
         lua_createtable(L, 0, vs->tab_funcs.size() - 1);
@@ -893,7 +820,6 @@ int luaw_catch_exception(lua_State *L) {
 }
 
 vc::virt_state_t *luaw_get_virt_state(lua_State *L) {
-    /* TODO: set/get lua_vs from a named entry inside the registry index */
     lua_pushstring(L, "virt_state");
     lua_gettable(L, LUA_REGISTRYINDEX);
     auto ptr = (vc::virt_state_t *)lua_touserdata(L, -1);
@@ -906,7 +832,7 @@ lua_State *luaw_get_lua_state(vc::virt_state_t *vs) {
 }
 
 vc::ref_t<vc::object_t> luaw_get_object_at_index(vc::virt_state_t *vs, ssize_t index) {
-    if (index <= 0 && index >= (ssize_t)vs->ps.objects.size()) {
+    if (index <= 0 || index >= (ssize_t)vs->ps.objects.size()) {
         return nullptr; /* 0 is also invalid from our point of view */
     }
     return vs->ps.objects[index].obj;
@@ -968,6 +894,12 @@ int push_vc_object(lua_State *L, ref_t<object_t> object) {
         vs->ps.objects_map[name] = new_id;
         vs->ps.objects[new_id].obj = object;
         vs->ps.objects[new_id].name = name;
+
+        lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_table_idx);
+        lua_pushlightuserdata(L, luaw_to_user_data(new_id));
+        luaL_setmetatable(L, "__vc_metatable");
+        lua_setfield(L, -2, name.c_str());
+        lua_pop(L, 1);
     }
     int obj_id = (intptr_t)object->cbks->usr_ptr.get();
     if (obj_id >= (int)vs->ps.objects.size() || obj_id < 0) {
@@ -1124,324 +1056,57 @@ static fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
 }
 
 static int internal_create_object(lua_State *L) {
-    const char *name = lua_tostring(L, 1);
-    if (!name) {
-        luaw_push_error(L, "Error at index 1: first parameter must be a string, the tag of the "
-                "object");
-        lua_error(L);
-    }
+    auto vs = luaw_get_virt_state(L);
+    const char *cname = lua_tostring(L, 1);
+    std::string name;
+    if (!cname)
+        name = new_anon_name(vs);
+    else
+        name = cname;
     auto object_description = create_yaml_from_lua_object(L, 2);
 
-    /* We copy the whole objects ref state, such that for now we have an exact copy of the global
-    vku namespace and we can reference it's objects. If we error out, the only references that will
-    remain alive are those that where backed up by g_rs and if we don't error out, at the end we
-    append the differences to g_rs. */
-    auto vs = luaw_get_virt_state(L);
-    vc::virt_state_t tmp_vs = *vs;
-
-    DBG("create_object: %s", fkyaml::node::serialize(object_description).c_str());
-    auto pool = co::create_pool();
-
     if (!object_description.contains("m_type")) {
-        pool->sched(vc::build_pseudo_object(&tmp_vs, name, object_description));
+        vs->pool->sched(vc::build_pseudo_object(vs, name, object_description));
     }
     else {
-        pool->sched(build_object(&tmp_vs, name, object_description));
+        vs->pool->sched(build_object(vs, name, object_description));
     }
 
-    if (pool->run() != co::RUN_OK) {
+    co::run_e ret;
+    try {
+        ret = vs->pool->run();
+    }
+    catch (fkyaml::exception &e) {
+        luaw_push_error(L, sformat("fkyaml::exception: %s", e.what()));
+        lua_error(L);
+    }
+    catch (std::exception &e) {
+        luaw_push_error(L, sformat("Exception: %s", e.what()));
+        lua_error(L);
+    }
+    if (ret != co::RUN_OK) {
         luaw_push_error(L, "CO_OJECT_CREATOR: Failed to create the object");
         lua_error(L);
     }
 
-    if (tmp_vs.ps.wanted_objects.size()) {
-        std::string unknown_objects = "[";
-        for (auto &[k, v]: tmp_vs.ps.wanted_objects) {
-            unknown_objects += std::format("{}, ", k);
+    if (vs->ps.wanted_objects.size()) {
+        for (auto &[k, v]: vs->ps.wanted_objects) {
+            DBG("WARNING: Unknown Object: %s", k.c_str());
         }
-        unknown_objects += "]";
-        luaw_push_error(L, std::format("unknown objects: {}", unknown_objects));
-        lua_error(L);
     }
 
-    if (!has(tmp_vs.ps.objects_map, name)) {
+    if (!has(vs->ps.objects_map, name)) {
         luaw_push_error(L, "internal_error: Object is not found after creation");
         lua_error(L);
     }
 
-    auto new_idx = vs->ps.get_new(tmp_vs.ps);
-
-    DBG("Getting lua table...");
-
     /* Get back the virt_composer table */
     lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_table_idx);
-
-    for (int id : new_idx) {
-        if (!tmp_vs.ps.objects[id].obj) {
-            DBG("Null user object?");
-        }
-        // DBG("Registering object: %s with id: %d", tmp_vs.ps.objects[id].name.c_str(), id);
-        /* this makes vulkan_utils.key = object_id and sets it's metadata */
-        lua_pushlightuserdata(L, luaw_to_user_data(id));
-        luaL_setmetatable(L, "__vc_metatable");
-        lua_setfield(L, -2, tmp_vs.ps.objects[id].name.c_str());
-    }
-
-    lua_getfield(L, -1, name);
+    lua_getfield(L, -1, name.c_str()); /* get the object with the respective name */
     lua_remove(L, -2); /* pops vulkan_utils table */
 
-    /* actualize the global state */
-    vs->ps.append(tmp_vs.ps);
-
-    /*TODO: make sure old vs and new vs have the same data at the end of the day */
-
-    /* Eventual errors are catched outside of this function */
     return 1;
 }
-
-
-// // helper to detect if a type is vku::ref_t<...>
-// template <typename>
-// struct is_vku_ref_t : std::false_type {};
-
-// template <typename T>
-// struct is_vku_ref_t<vku::ref_t<T>> : std::true_type {};
-
-// // helper to detect if a type is vku::ref_t<...>
-// template <typename T>
-// concept is_vku_enum = requires(fkyaml::node n) {
-//     get_enum_val<T>(n);
-// };
-
-// /* getter */
-// template <typename VkuT, auto member_ptr>
-// int luaw_member_object_wrapper(lua_State *L) {
-//     try {
-//         int index = luaw_from_user_data(lua_touserdata(L, -2)); /* an int, ok on unwind */
-//         if (index == 0) {
-//             luaw_push_error(L, "Nil user object can't get member!");
-//         }
-//         auto vs = luaw_get_virt_state(L);
-//         auto &o = vs->ps.objects[index];
-//         if (!o.obj) {
-//             luaw_push_error(L, "internal_error: Nil user object can't get member!");
-//         }
-//         auto obj = o.obj.to_related<VkuT>();
-//         auto &member = obj.get()->*member_ptr;
-
-//         using member_type = std::decay_t<decltype(member)>;
-
-//         if constexpr (std::is_same_v<member_type, std::string>) {
-//             lua_pushstring(L, member.c_str());
-//             return 1;
-//         }
-//         else if constexpr (std::is_integral_v<member_type>) {
-//             lua_pushinteger(L, member);
-//             return 1;
-//         }
-//         else if constexpr (std::is_floating_point_v<member_type>) {
-//             lua_pushnumber(L, member);
-//             return 1;
-//         }
-//         else if constexpr (std::is_same_v<member_type, std::vector<std::string>>) {
-//             lua_createtable(L, member.size(), 0);
-//             for (size_t i = 1; auto &str : member) {
-//                 lua_pushstring(L, str.c_str());
-//                 lua_rawseti(L, -2, i++);
-//             }
-//             return 1;
-//         }
-//         else if constexpr (is_vku_enum<member_type>) {
-//             lua_pushnumber(L, (int)member);
-//             return 1;
-//         }
-//         else if constexpr (is_vku_ref_t<member_type>::value) {
-//             if (!member) {
-//                 lua_pushnil(L);
-//                 return 1;
-//             }
-//             if (!member->cbks) {
-//                 luaw_push_error(L, "internal_error: How did this object get known to lua ?!");
-//             }
-//             if (!member->cbks->usr_ptr) {
-//                 /* So this object was no longer known by the lua side, we must resurect it */
-
-//                 /* We first get it a new id */
-//                 int new_id = vs->ps.free_objects.back();
-//                 vs->ps.free_objects.pop_back();
-
-//                 /* make it reference it's own id */
-//                 member->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
-
-//                 /* add it's lua-name-mapping and it's lua-id-mapping */
-//                 std::string name = new_anon_name();
-//                 vs->ps.objects_map[name] = new_id;
-//                 vs->ps.objects[new_id].obj = member;
-//                 vs->ps.objects[new_id].name = name;
-//             }
-//             int member_id = (intptr_t)member->cbks->usr_ptr.get();
-//             if (member_id >= vs->ps.objects.size() || member_id < 0) {
-//                 luaw_push_error(L, "internal_error: Integrity check failed");
-//             }
-//             lua_pushlightuserdata(L, luaw_to_user_data(member_id));
-//             luaL_setmetatable(L, "__vku_metatable");
-//             return 1;
-//         }
-//         else {
-//             demangle_static_assert<false, decltype(member)>(" - Is not a valid member type");
-//             return 0;
-//         }
-//     }
-//     catch (...) { return luaw_catch_exception(L); }
-// }
-
-// template <typename VkuT, auto member_ptr>
-// int luaw_member_setter_object_wrapper(lua_State *L) {
-//     int index = luaw_from_user_data(lua_touserdata(L, -3)); /* an int, ok on unwind */
-//     if (index == 0) {
-//         luaw_push_error(L, "Nil user object can't set member!");
-//     }
-//     auto vs = luaw_get_virt_state(L);
-//     auto &o = vs->ps.objects[index];
-//     if (!o.obj) {
-//         luaw_push_error(L, "internal_error: Nil user object can't set member!");
-//     }
-//     auto obj = o.obj.to_related<VkuT>();
-//     auto &member = obj.get()->*member_ptr;
-
-//     using member_type = std::decay_t<decltype(member)>;
-
-//     if constexpr (std::is_same_v<member_type, std::string>) {
-//         const char *str = lua_tostring(L, -1);
-//         member = str ? str : "";
-//         return 0;
-//     }
-//     else if constexpr (std::is_integral_v<member_type>) {
-//         uint64_t val = lua_tointeger(L, -1);
-//         member = (member_type)val;
-//         return 0;
-//     }
-//     else if constexpr (std::is_floating_point_v<member_type>) {
-//         double val = lua_tonumber(L, -1);
-//         member = (member_type)val;
-//         return 0;
-//     }
-//     else if constexpr (std::is_same_v<member_type, std::vector<std::string>>) {
-//         if (!lua_istable(L, -1)) {
-//             luaw_push_error(L, "You need a table for this assignment!");
-//         }
-//         int len = lua_rawlen(L, -1);
-//         std::vector<std::string> to_asign;
-//         for (int i = 1; i <= len; i++) {
-//             lua_rawgeti(L, -1, i);
-//             const char *str = lua_tostring(L, -1);
-//             to_asign.push_back(str ? str : "");
-//             lua_pop(L, 1);
-//         }
-//         member = to_asign;
-//         return 0;
-//     }
-//     else if constexpr (is_vku_enum<member_type>) {
-//         uint64_t val = lua_tointeger(L, -1);
-//         member = (member_type)val;
-//         return 0;
-//     }
-//     else if constexpr (is_vku_ref_t<member_type>::value) {
-//         int index = luaw_from_user_data(lua_touserdata(L, -1)); /* an int, ok on unwind */
-//         if (index == 0) {
-//             member = nullptr;
-//             return 0;
-//         }
-//         member = vs->ps.objects[index].obj;
-//         return 0;
-//     }
-//     else {
-//         demangle_static_assert<false, decltype(member)>(" - Is not a valid member type");
-//         return 0;
-//     }
-// }
-
-// template <typename VkuT, auto member_ptr, typename ...Params>
-// void luaw_register_member_function(const char *function_name) {
-//     lua_class_members[VkuT::type_id_static()][function_name] = luaw_member_t{
-//         .fn = &luaw_member_function_wrapper<VkuT, member_ptr, Params...>,
-//         .member_type = LUAW_MEMBER_FUNCTION
-//     };
-// }
-
-// template <typename VkuT, auto member_ptr>
-// void luaw_register_member_object(const char *member_name) {
-//     lua_class_members[VkuT::type_id_static()][member_name] = luaw_member_t{
-//         .fn = &luaw_member_object_wrapper<VkuT, member_ptr>,
-//         .member_type = LUAW_MEMBER_OBJECT
-//     };
-
-//     lua_class_member_setters[VkuT::type_id_static()][member_name] =
-//             &luaw_member_setter_object_wrapper<VkuT, member_ptr>;
-// }
-
-// static std::vector<luaL_Reg> vku_tab_funcs = {
-//     {"glfw_pool_events",    luaw_function_wrapper<glfw_pool_events>},
-//     {"get_key",             luaw_function_wrapper<glfw_get_key,
-//             vku::ref_t<vku::window_t>, uint32_t>},
-//     {"signal_close",        luaw_function_wrapper<internal_signal_close>},
-//     {"aquire_next_img",     luaw_function_wrapper<internal_aquire_next_img,
-//             vku::ref_t<vku::swapchain_t>, vku::ref_t<vku::sem_t>>},
-//     {"submit_cmdbuff",      luaw_function_wrapper<vku::submit_cmdbuff,
-//             std::vector<std::pair<vku::ref_t<vku::sem_t>, bm_t<VkPipelineStageFlagBits>>>,
-//             vku::ref_t<vku::cmdbuff_t>, vku::ref_t<vku::fence_t>,
-//             std::vector<vku::ref_t<vku::sem_t>>>},
-//     {"present",             luaw_function_wrapper<vku::present,
-//             vku::ref_t<vku::swapchain_t>,
-//             std::vector<vku::ref_t<vku::sem_t>>,
-//             uint32_t>},
-//     {"wait_fences",         luaw_function_wrapper<vku::wait_fences,
-//             std::vector<vku::ref_t<vku::fence_t>>>},
-//     {"reset_fences",        luaw_function_wrapper<vku::reset_fences,
-//             std::vector<vku::ref_t<vku::fence_t>>>},
-//     {"device_wait_handle",  luaw_function_wrapper<internal_device_wait_handle,
-//             vku::ref_t<vku::device_t>>},
-//     {"copy_from_cpu_to_gpu",luaw_function_wrapper<copy_from_cpu_to_gpu,
-//             vku::ref_t<vku::buffer_t>, void *, size_t, size_t>},
-//     {"copy_from_gpu_to_cpu",luaw_function_wrapper<copy_from_gpu_to_cpu,
-//             void *, vku::ref_t<vku::buffer_t>, size_t, size_t>},
-// };
-
-// inline void luaw_set_glfw_fields(lua_State *L);
-
-// void register_flag_mapping(lua_State *L, auto &mapping) {
-//     for (auto& [k, v] : mapping) {
-//         lua_pushinteger(L, (uint32_t)v);
-//         lua_setfield(L, -2, k.c_str());
-//     }
-// };
-
-// static std::vector<std::function<void(lua_State *L)>> cbk_register_mapping;
-// static std::vector<std::function<void(void)>> cbk_register_members;
-
-
-// inline vkc_error_e luaw_execute_loop_run(lua_State *L) {
-//     lua_getglobal(L, "on_loop_run");
-//     if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-//         DBG("LUA luaw_execute_loop_run Failed: \n%s", lua_tostring(L, -1));
-//         return VKC_ERROR_FAILED_CALL;
-//     }
-//     return VKC_ERROR_OK;
-// }
-
-// inline vkc_error_e luaw_execute_window_resize(lua_State *L, int width, int height) {
-//     lua_getglobal(L, "on_window_resize");
-//     lua_pushinteger(L, width);
-//     lua_pushinteger(L, height);
-//     if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-//         DBG("LUA luaw_execute_window_resize Failed: \n%s", lua_tostring(L, -1));
-//         return VKC_ERROR_FAILED_CALL;
-//     }
-//     return VKC_ERROR_OK;
-// }
-
-
-
 
 /*! TODO: When executing a lua script, we can use the follwing trick to resolve unknown variables
  * from inside the __index callback:

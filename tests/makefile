@@ -18,7 +18,7 @@ LIBS 	  += -Wl,--end-group
 LIBS      += -lpthread
 LIBS      += -lbacktrace
 
-CXX       := g++-13
+CXX       := g++
 
 SRCS      := $(wildcard ../*.cpp)
 SRCS      += $(wildcard ../ap/*.cpp)
