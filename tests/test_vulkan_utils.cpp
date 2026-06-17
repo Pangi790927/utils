@@ -69,10 +69,10 @@ static auto load_image(auto cp, std::string path) {
     /* TODO: some more logs around here */
     VkDeviceSize imag_sz = w*h*4;
     if (!pixels) {
-        throw vku::err_t("Failed to load image");
+        throw vku::except_t("Failed to load image");
     }
 
-    auto img = vku::image_t::create(cp->dev, w, h, VK_FORMAT_R8G8B8A8_SRGB);
+    auto img = vku::image_t::create(cp->m_device, w, h, VK_FORMAT_R8G8B8A8_SRGB);
     img->set_data(cp, pixels, imag_sz);
 
     stbi_image_free(pixels);
@@ -182,12 +182,12 @@ int main(int argc, char const *argv[])
         vku::binding_desc_set_t::buff_binding_t::create(
             vku::ubo_t::get_desc_set(0, VK_SHADER_STAGE_VERTEX_BIT),
             mvp_buff
-        ).to_base<vku::binding_desc_set_t::binding_desc_t>(),
+        ).to_related<vku::binding_desc_set_t::binding_desc_t>(),
         vku::binding_desc_set_t::sampl_binding_t::create(
             vku::img_sampl_t::get_desc_set(1, VK_SHADER_STAGE_FRAGMENT_BIT),
             view,
             sampl
-        ).to_base<vku::binding_desc_set_t::binding_desc_t>(),
+        ).to_related<vku::binding_desc_set_t::binding_desc_t>(),
     });
 
     auto sh_vert =  vku::shader_t::create(dev, vert);
@@ -262,7 +262,7 @@ int main(int argc, char const *argv[])
             vku::wait_fences({fence});
             vku::reset_fences({fence});
         }
-        catch (vku::err_t &e) {
+        catch (vku::except_t &e) {
             /* TODO: fix this (next time write what's wrong with it) */
             DBG("resize?");
             if (e.vk_err == VK_SUBOPTIMAL_KHR) {

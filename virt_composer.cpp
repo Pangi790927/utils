@@ -275,6 +275,11 @@ std::shared_ptr<virt_state_t> create_state() {
     return vs;
 }
 
+ref_t<vc::object_t> get_ref_base(virt_state_t *vs, const std::string& name) {
+    if (!has(vs->ps.objects_map, name))
+        return nullptr;
+    return vs->ps.objects[vs->ps.objects_map[name]].obj;
+}
 
 bool depend_resolver_internal_t::internal_check_depend(const std::string &dep_name) {
      return has(vs->ps.objects_map, dep_name);
@@ -355,7 +360,7 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
     int new_id = vs->ps.free_objects.back();
     vs->ps.free_objects.pop_back();
 
-    DBG("Adding object: %s [%d]", depend_name.c_str(), new_id);
+    // DBG("Adding object: %s [%d]", depend_name.c_str(), new_id);
     vs->ps.objects_map[depend_name] = new_id;
     depend->cbks = std::make_shared<vo::object_cbks_t<vc::virt_traits_t>>();
     depend->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
@@ -634,7 +639,7 @@ err_e parse_config(vc::virt_state_t *vs, const char *path) {
             if (!vs->ps.objects[id].obj) {
                 DBG("Null user object?");
             }
-            DBG("Registering object: %s with id: %d", k.c_str(), id);
+            // DBG("Registering object: %s with id: %d", k.c_str(), id);
             /* this makes vulkan_utils.key = object_id and sets it's metadata */
             lua_pushlightuserdata(vs->L, luaw_to_user_data(id));
             luaL_setmetatable(vs->L, "__vc_metatable");
@@ -722,12 +727,12 @@ static int luaopen_vc(lua_State *L) {
 
         /* params: 1.usrptr, 2.key, 3.value  */
         lua_pushcfunction(L, [](lua_State *L) {
-            DBG("__newindex: %d", lua_gettop(L));
+            // DBG("__newindex: %d", lua_gettop(L));
             int id = luaw_from_user_data(lua_touserdata(L, -3)); /* an int, ok on unwind */
             const char *member_name = lua_tostring(L, -2); /* an const char *, ok on unwind */
 
-            DBG("usr_id: %d", id);
-            DBG("member_name: %s", member_name);
+            // DBG("usr_id: %d", id);
+            // DBG("member_name: %s", member_name);
 
             auto vs = luaw_get_virt_state(L);
             auto &o = vs->ps.objects[id]; /* a reference, ok on unwind? (if err) */
@@ -749,22 +754,23 @@ static int luaopen_vc(lua_State *L) {
 
         /* params: 1.usrptr [... rest of params] */
         lua_pushcfunction(L, [](lua_State *L) {
-            DBG("__call: %d", lua_gettop(L));
+            // DBG("__call: %d", lua_gettop(L));
             int id = luaw_from_user_data(lua_touserdata(L, 1)); /* an int, ok on unwind */
 
-            DBG("usr_id: %d", id);
+            // DBG("usr_id: %d", id);
 
             auto vs = luaw_get_virt_state(L);
             auto &o = vs->ps.objects[id]; /* a reference, ok on unwind? (if err) */
             if (!o.obj) {
                 luaw_push_error(L, std::format("invalid object id: {}", id));
             }
-            DBG("tostr: %s", o.obj->to_string().c_str());
+            // DBG("tostr: %s", o.obj->to_string().c_str());
             vc::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
             if (class_id != VC_TYPE_LUA_FUNCTION) {
                 luaw_push_error(L, std::format("invalid class id: {} is not VC_TYPE_LUA_FUNCTION",
                         vc::to_string(class_id)));
             }
+            lua_remove(L, 1); /* We don't want the function itself as an parameter */
             return o.obj.to_related<lua_function_t>()->call(L);
         });
         lua_setfield(L, -2, "__call");
@@ -860,6 +866,7 @@ int luaw_catch_exception(lua_State *L) {
     /* We don't let errors get out of the call because we don't want to break lua. As such, we catch
     any error and propagate it as a lua error. */
     try {
+        DBG("Rethrow");
         throw ; // re-throw the current exception
     }
     catch (vc::except_t &err) {
@@ -1173,7 +1180,7 @@ static int internal_create_object(lua_State *L) {
         if (!tmp_vs.ps.objects[id].obj) {
             DBG("Null user object?");
         }
-        DBG("Registering object: %s with id: %d", tmp_vs.ps.objects[id].name.c_str(), id);
+        // DBG("Registering object: %s with id: %d", tmp_vs.ps.objects[id].name.c_str(), id);
         /* this makes vulkan_utils.key = object_id and sets it's metadata */
         lua_pushlightuserdata(L, luaw_to_user_data(id));
         luaL_setmetatable(L, "__vc_metatable");

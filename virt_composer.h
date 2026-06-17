@@ -458,26 +458,54 @@ struct lua_function_t : public vc::object_t {
                 std::make_unique<lua_function_t>(), {});
         ret->m_name = name;
         ret->m_source = source;
+        if (ret->_call_init() < 0)
+            throw vc::except_t("Failed lua_function_t init");
         return ret;
     }
 
     virtual vc::object_type_e type_id() const override { return VC_TYPE_LUA_FUNCTION; }
 
     int call(lua_State *L) {
-        DBG("Calling %s from %s", m_name.c_str(), m_source.c_str());
-        (void)L;
-        return 0;
+        if (!_fn) {
+            DBG("No function to call");
+            return -1;
+        }
+        return _fn(L);
     }
 
     inline std::string to_string() const override {
-        return std::format("vc::lua_var[{}]: m_name={} m_source={}", (void*)this, m_name, m_source);
+        return std::format("vc::lua_function[{}]: m_name={} m_source={}",
+                (void*)this, m_name, m_source);
     }
 
+    static void add_internal_func(std::string name, std::function<int(lua_State *L)> fn) {
+        lua_function_t::internal_funcs[name] = fn;
+    }
 
 private:
-    virtual vc::ret_t _init() override { return VC_ERROR_OK; }
+    std::function<int(lua_State *L)> _fn;
+    static std::map<std::string, std::function<int(lua_State *L)>> internal_funcs;
+
+    /* TODO: */
+    static std::map<std::string, void *> dll_handles;
+    static std::map<std::string, std::function<int(lua_State *L)>> dll_funcs;
+
+    virtual vc::ret_t _init() override {
+        if (m_source == "[INTERNAL]" && has(internal_funcs, m_name)) {
+            _fn = internal_funcs[m_name];
+            return VC_ERROR_OK;
+        }
+        /* TODO: DLL/SO source */
+        else {
+            return VC_ERROR_GENERIC;
+        }
+    }
     virtual vc::ret_t _uninit() override { return VC_ERROR_OK; }
 };
+
+inline std::map<std::string, std::function<int(lua_State *L)>>  lua_function_t::internal_funcs;
+inline std::map<std::string, std::function<int(lua_State *L)>>  lua_function_t::dll_funcs;
+inline std::map<std::string, void *>                            lua_function_t::dll_handles;
 
 inline std::string to_string(object_type_e type);
 
@@ -494,6 +522,10 @@ inline std::string to_string(const object_t& ref);
  *         A shared pointer to the newly created @c virt_state_t object.
  */
 std::shared_ptr<virt_state_t> create_state();
+
+/*! TODO: Explain*/
+template <typename T>
+ref_t<T> get_ref(virt_state_t *vs, const std::string& name);
 
 template <typename T>
 inline T get_enum_val(fkyaml::node &node, const std::unordered_map<std::string, T>& enum_vals);
@@ -1006,6 +1038,13 @@ void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type
 /*! TODO: desc */
 int push_vc_object(lua_State *L, ref_t<object_t> object);
 
+/*! TODO: desc */
+ref_t<vc::object_t> get_ref_base(virt_state_t *vs, const std::string& name);
+
+template <typename T>
+ref_t<T> get_ref(virt_state_t *vs, const std::string& name) {
+        return get_ref_base(vs, name).to_related<T>(); }
+
 /*!
  * [INTERNAL] Non-templated core of the dependency resolver.
  *
@@ -1142,6 +1181,7 @@ err_e add_lua_flag_mapping(virt_state_t *vs, const std::unordered_map<std::strin
 template <typename Param, ssize_t index>
 struct luaw_param_t{
     void luaw_single_param(lua_State *L) {
+        DBG("FAILURE at index: %zd", index);
         /* What a parameter can be:
         1. vc::ref_t of some object
         2. a std::string
@@ -1159,6 +1199,7 @@ struct luaw_param_t{
 template <ssize_t index>
 struct luaw_param_t<void *, index> {
     void *luaw_single_param(lua_State *L) {
+        // DBG("void* at index: %zd", index);
         if (lua_isnil(L, index))
             return NULL;
         return lua_touserdata(L, index);
@@ -1169,6 +1210,7 @@ struct luaw_param_t<void *, index> {
 template <typename T, ssize_t index>
 struct luaw_param_t<vc::ref_t<T>, index> {
     vc::ref_t<T> luaw_single_param(lua_State *L) {
+        // DBG("Ref at index: %zd", index);
         if (lua_isnil(L, index))
             return vc::ref_t<T>{}; /* if the user intended to pass a nill, we give it as a nullptr */
         int obj_index = luaw_from_user_data(lua_touserdata(L, index));
@@ -1188,6 +1230,7 @@ struct luaw_param_t<bm_t<T>, index> {
     std::function<void (lua_State *, const std::string&)> throw_error = luaw_push_error;
 
     T luaw_single_param(lua_State *L) {
+        // DBG("BitMap at index: %zd", index);
         /* There are 2 options here (maybe later we will also add numbers, but not for now):
             1. This is a string that converts to the respective type bitmask
             2. An integer, this will be converted to T
@@ -1253,6 +1296,7 @@ struct luaw_param_t<bm_t<T>, index> {
 template <std::integral Integer, ssize_t index>
 struct luaw_param_t<Integer, index> {
     Integer luaw_single_param(lua_State *L) {
+        // DBG("Integer at index: %zd", index);
         int valid = 0;
         Integer ret = lua_tointegerx(L, index, &valid);
         if (!valid) {
@@ -1269,11 +1313,12 @@ struct luaw_param_t<Integer, index> {
 template <std::floating_point Float, ssize_t index>
 struct luaw_param_t<Float, index> {
     Float luaw_single_param(lua_State *L) {
+        // DBG("Float at index: %zd", index);
         int valid = 0;
         Float ret = lua_tonumberx(L, index, &valid);
         if (!valid) {
             luaw_push_error(L,
-                    std::format("Invalid parameter at index {}, failed conversion to integer from "
+                    std::format("Invalid parameter at index {}, failed conversion to float from "
                     "[{}]",
                     index, lua_typename(L, lua_type(L, index))));
         }
@@ -1285,6 +1330,7 @@ struct luaw_param_t<Float, index> {
 template <ssize_t index>
 struct luaw_param_t<const char *, index> {
     const char *luaw_single_param(lua_State *L) {
+        // DBG("char* at index: %zd", index);
         const char *ret = lua_tostring(L, index);
         if (!ret) {
             luaw_push_error(L,
@@ -1346,6 +1392,7 @@ struct luaw_param_t<std::tuple<Args...>, index> {
     }
 
     auto luaw_single_param(lua_State *L) {
+        // DBG("Tuple at index: %zd", index);
         return _luaw_single_param_impl(L, std::index_sequence_for<Args...>{});
     }
 };
@@ -1353,6 +1400,7 @@ struct luaw_param_t<std::tuple<Args...>, index> {
 template <typename Arg1, typename Arg2, ssize_t index>
 struct luaw_param_t<std::pair<Arg1, Arg2>, index> {
     auto luaw_single_param(lua_State *L) {
+        // DBG("Pair at index: %zd", index);
         auto tuple = luaw_param_t<std::tuple<Arg1, Arg2>, index>{}.luaw_single_param(L);
         typename de_bitmaptizize<std::pair<Arg1, Arg2>>::Type ret =
                 {std::get<0>(tuple), std::get<1>(tuple)};
@@ -1363,6 +1411,7 @@ struct luaw_param_t<std::pair<Arg1, Arg2>, index> {
 template <typename T, ssize_t index>
 struct luaw_param_t<std::vector<T>, index> {
     auto luaw_single_param(lua_State *L) {
+        // DBG("Vector at index: %zd", index);
         typename de_bitmaptizize<std::vector<T>>::Type ret;
         if (lua_isnil(L, index))
             return ret;
@@ -1468,6 +1517,11 @@ template <auto function, typename ...Params, size_t ...I>
 inline int luaw_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     using RetType = decltype(function(
             luaw_param_t<Params, I + 1>{}.luaw_single_param(L)...));
+
+    // ([L]{
+    //     DBG("Index: %zu -> (%s, %s)", I + 1, demangle<Params>().c_str(),
+    //             lua_typename(L, lua_type(L, I + 1)));
+    // }(), ...);
 
     if constexpr (std::is_void_v<RetType>) {
         function(luaw_param_t<Params, I + 1>{}.luaw_single_param(L)...);
@@ -1861,9 +1915,10 @@ call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
     catch (...) {
         return {0, VC_ERROR_FAILED_CALL};
     }
+    int argc = std::tuple_size_v<std::tuple<Args...>>;
     if constexpr (std::is_void_v<R>) {
-        if (lua_pcall(L, std::tuple_size_v<std::tuple<Args...>>, 0, 0) != LUA_OK) {
-            DBG("LUA luaw_execute_loop_run Failed: \n%s", lua_tostring(L, -1));
+        if (lua_pcall(L, argc, 0, 0) != LUA_OK) {
+            DBG("LUA call_lua[%s([%d])] Failed: \n%s", function_name, argc, lua_tostring(L, -1));
             lua_pop(L, 1);
             return {0, VC_ERROR_FAILED_CALL};
         }
@@ -1871,8 +1926,8 @@ call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
     }
     else {
         R result;
-        if (lua_pcall(L, std::tuple_size_v<std::tuple<Args...>>, 1, 0) != LUA_OK) {
-            DBG("LUA luaw_execute_loop_run Failed: \n%s", lua_tostring(L, -1));
+        if (lua_pcall(L, argc, 1, 0) != LUA_OK) {
+            DBG("LUA call_lua[%s([%d])] Failed: \n%s", function_name, argc, lua_tostring(L, -1));
             lua_pop(L, 1);
             return {result, VC_ERROR_FAILED_CALL};
         }

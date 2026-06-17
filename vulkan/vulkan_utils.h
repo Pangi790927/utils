@@ -831,7 +831,7 @@ inline VkExtent2D choose_extent(GLFWwindow *window, VkSurfaceCapabilitiesKHR cap
 inline int score_phydev(VkPhysicalDevice dev, VkSurfaceKHR surf);
 inline VkShaderStageFlagBits get_shader_type(vku_shader_stage_e own_type);
 
-#ifndef HAS_NEW_GLSLANG
+#ifndef VKU_HAS_NEW_GLSLANG
 inline TBuiltInResource spirv_resources = {};
 #else
 inline glslang_resource_t spirv_resources = {};
@@ -3761,14 +3761,14 @@ inline int spirv_save(const spirv_t& code, const char *filepath) {
     return file.good() ? 0 : -1;
 }
 
-#ifdef HAS_NEW_GLSLANG
+#ifdef VKU_HAS_NEW_GLSLANG
 
-inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code) {
+inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
     VK_ASSERT(init());
     DBG("NEW GLSLANG COMPILE");
 
     glslang_stage_t stage;
-    switch (stage) {
+    switch (vku_stage) {
         case VKU_SPIRV_VERTEX:    stage = GLSLANG_STAGE_VERTEX;         break;
         case VKU_SPIRV_TESS_CTRL: stage = GLSLANG_STAGE_TESSCONTROL;    break;
         case VKU_SPIRV_TESS_EVAL: stage = GLSLANG_STAGE_TESSEVALUATION; break;
@@ -3831,7 +3831,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code) {
 
     int size = glslang_program_SPIRV_get_size(program);
     spirv_t ret;
-    ret.type = stage;
+    ret.type = vku_stage;
     ret.content.resize(size);
     glslang_program_SPIRV_get(program, ret.content.data());
 
@@ -3959,7 +3959,7 @@ inline void spirv_uninit() {
     glslang_finalize_process();
 }
 
-#else /* HAS_NEW_GLSLANG */
+#else /* VKU_HAS_NEW_GLSLANG */
 
 inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code) {
     VK_ASSERT(init());
@@ -4112,7 +4112,7 @@ inline void spirv_uninit() {
     glslang::FinalizeProcess();
 }
 
-#endif /* HAS_NEW_GLSLANG */
+#endif /* VKU_HAS_NEW_GLSLANG */
 
 inline uint32_t find_memory_type(ref_t<device_t> dev,
         uint32_t type_filter, VkMemoryPropertyFlags properties)

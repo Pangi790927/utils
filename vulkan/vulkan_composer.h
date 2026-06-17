@@ -853,8 +853,6 @@
  * the program. The objective is to have the entire Vulkan pipeline described from outside of the
  * source code. */
 
-/* TODO: figure out what to do with this: (The LUA_IMPL part, I think most of the things in
-vulkan_composer would stay better in a CPP file) */
 #include "vulkan_utils.h"
 #include "yaml.h"
 #include "tinyexpr.h"
@@ -865,16 +863,8 @@ vulkan_composer would stay better in a CPP file) */
 #include <filesystem>
 
 /* TODO: Thsi is almost done now, I must think what I want to further expose, and some tweaks:
-    - I want to be able to add objects from the outside, so those need to be:
-        1. added to build_object, such that those will be created from yaml/lua
-        2. added to lua
-        3. integrated with vku::ref_t
-    - I want to be able to add more enums to lua
-    - I want to be able to add more functions to lua (maybe add something to identify builtins)
     - I still need to create matrices and vectors
     - I want to have includes for shaders
-    - I want this header to be split into some objects because it takes too much to compile and
-    there is no real point of having the composer in a single file 
     - Add functions to manipulate buffers, matrices and vectors
     ~ We need to fix the stupidity that is descriptors?
  */
@@ -1319,11 +1309,28 @@ inline uint32_t internal_device_wait_handle(vku::ref_t<vku::device_t> dev) {
     return vkDeviceWaitIdle(dev->vk_dev);
 }
 
-inline int copy_from_cpu_to_gpu(vku::ref_t<vku::buffer_t> dst, void *src,
-        size_t len, size_t off)
+inline int copy_from_cpu_to_gpu(vku::ref_t<vku::cmdpool_t> cp, vku::ref_t<vku::buffer_t> dst,
+        void *src, size_t len, size_t off)
 {
-    (void)dst, void(src), void(len), void(off);
-    DBG("TODO: transfer cpu->gpu");
+    auto staging_vbuff = vku::buffer_t::create(
+        cp->m_device,
+        len,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+    memcpy(staging_vbuff->map_data(0, len), src, len);
+    staging_vbuff->unmap_data();
+
+    auto vbuff = vku::buffer_t::create(
+        cp->m_device,
+        len,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    );
+    /* TODO: add offsets to copy_buff */
+    vku::copy_buff(cp, dst, staging_vbuff, len, nullptr);
     return 0;
 }
 
@@ -1384,7 +1391,8 @@ inline int register_meta(vc::virt_state_t *vs) {
         >},
         {"copy_from_cpu_to_gpu", vc::luaw_function_wrapper<
                 /* FN:    */ copy_from_cpu_to_gpu,
-                /* PARAMS:*/ vc::ref_t<vku::buffer_t>,
+                /* PARAMS:*/ vku::ref_t<vku::cmdpool_t>,
+                             vc::ref_t<vku::buffer_t>,
                              void *,
                              size_t,
                              size_t
@@ -1443,8 +1451,6 @@ inline int register_meta(vc::virt_state_t *vs) {
     /* Done objects
     ----------------------------------------------------------------------------------------- */
 
-    /* TODO: Register/Fix all the above builders */
-    /* TODO: Registers vulkan enums in the lua library */
     vc::add_lua_flag_mapping(vs, vc::vk_format_from_str);
     vc::add_lua_flag_mapping(vs, vc::vk_vertex_input_rate_from_str);
     vc::add_lua_flag_mapping(vs, vc::vk_shader_stage_flag_bits_from_str);
