@@ -15,6 +15,19 @@ using ref_t = std::shared_ptr<T>;
 
 using ret_t = int64_t;
 
+/*!
+ * Generic base for composer objects
+ * 
+ * Such objects are virtual and are required to have a type(see EnumClass) and a method to print
+ * them.
+ * 
+ * storage - links the object with the storage entity that ensures this object doesn't go out of
+ * scope while part of the Lua state.
+ * 
+ * init/uninit - a formal pair of sorts, but the uninit function will be allways called on
+ * destruction and it is customary to call init on object creation, near or imediately after
+ * make_shared.
+ */
 template <typename Id>
 struct object_t : public std::enable_shared_from_this<object_t<Id>> {
 private:
@@ -46,7 +59,7 @@ public:
     template <class T, class... Args>
     friend constexpr std::shared_ptr<T> std::make_shared(Args&&... args);
 
-    std::shared_ptr<void> usr_ptr;
+    std::shared_ptr<void> storage;
 };
 
 /*!

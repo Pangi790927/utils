@@ -309,7 +309,7 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
 
     // DBG("Adding object: %s [%d]", depend_name.c_str(), new_id);
     vs->ps.objects_map[depend_name] = new_id;
-    depend->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
+    depend->storage = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
     vs->ps.objects[new_id].obj = depend;
     vs->ps.objects[new_id].name = depend_name;
 
@@ -714,7 +714,7 @@ static int luaopen_vc(lua_State *L) {
             /* The object is no longer known to lua, as such we also delete it's slot. Obs: It may
             still be alive, meaning, it is known by the c++ side, just not by the lua side.
             !!! It will also loose it's name with this operation (Is that really ok?) */
-            o.obj->usr_ptr = nullptr;
+            o.obj->storage = nullptr;
 
             /* we clean it's name mapping, it's reference and free it's id */
             vs->ps.objects_map.erase(o.name);
@@ -869,7 +869,7 @@ void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type
 int push_vc_object(lua_State *L, ref_t<object_t> object) {
     auto vs = luaw_get_virt_state(L);
 
-    if (!object->usr_ptr) {
+    if (!object->storage) {
         /* So this object was no longer known by the lua side, we must resurect it */
 
         /* We first get it a new id */
@@ -877,7 +877,7 @@ int push_vc_object(lua_State *L, ref_t<object_t> object) {
         vs->ps.free_objects.pop_back();
 
         /* make it reference it's own id */
-        object->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
+        object->storage = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
 
         /* add it's lua-name-mapping and it's lua-id-mapping */
         std::string name = new_anon_name(vs);
@@ -891,7 +891,7 @@ int push_vc_object(lua_State *L, ref_t<object_t> object) {
         lua_setfield(L, -2, name.c_str());
         lua_pop(L, 1);
     }
-    int obj_id = (intptr_t)object->usr_ptr.get();
+    int obj_id = (intptr_t)object->storage.get();
     if (obj_id >= (int)vs->ps.objects.size() || obj_id < 0) {
         DBG("internal_error: Integrity check failed");
         return -1;
