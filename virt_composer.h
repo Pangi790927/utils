@@ -821,6 +821,10 @@ void luaw_register_inheritance(virt_state_t *vs);
 
 /* TODO: add the functions to add the exception callbacks */
 
+/*! pushes the reference as a light user data on the lua stack (returns 0 if ok, ie allways, usefull
+ * for lightweight data that is not meant to be tracked by name) */
+int luaw_push_unnamed(lua_State *L, ref_t<object_t> object);
+
 /*!
  * Ret is the type that lua returned, can be a std::tupple
  * Args is the arguments that will be passed to lua

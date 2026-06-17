@@ -806,6 +806,13 @@ int push_vc_object(lua_State *L, ref_t<object_t> object) {
     return 0;
 }
 
+int luaw_push_unnamed(lua_State *L, ref_t<object_t> object) {
+    vs->obj_keepalive.insert(object);
+    lua_pushlightuserdata(L, object.get());
+    luaL_setmetatable(L, "__vc_metatable");
+    return 0;
+}
+
 
 void luaw_push_error(lua_State *L, const std::string& err_str, const std::source_location sloc) {
     DBG("Throwing error: %s SRC_LOC[%s:%d %s]",
