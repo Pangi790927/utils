@@ -309,8 +309,7 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
 
     // DBG("Adding object: %s [%d]", depend_name.c_str(), new_id);
     vs->ps.objects_map[depend_name] = new_id;
-    depend->cbks = std::make_shared<vo::object_cbks_t<vc::virt_traits_t>>();
-    depend->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
+    depend->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
     vs->ps.objects[new_id].obj = depend;
     vs->ps.objects[new_id].name = depend_name;
 
@@ -441,7 +440,7 @@ static co::task<vc::ref_t<vc::object_t>> init_lua_script(vc::virt_state_t *vs,
         auto obj = lua_script_t::create(node["m_source"].as_str());
         if (exec_lua_src(vs, obj->content) != VC_ERROR_OK)
             co_return nullptr;
-        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
+        mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
         co_return obj;
     }
 
@@ -450,7 +449,7 @@ static co::task<vc::ref_t<vc::object_t>> init_lua_script(vc::virt_state_t *vs,
         auto obj = lua_script_t::create(source);
         if (exec_lua_src(vs, obj->content) != VC_ERROR_OK)
             co_return nullptr;
-        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
+        mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
         co_return obj;
     }
 
@@ -470,8 +469,8 @@ co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
         /* lua_function has the same tag_name as the function name */
         auto src = co_await resolve_str(vs, node["m_source"]);
         auto obj = vc::lua_function_t::create(name, src);
-        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
-        co_return obj.to_related<vc::object_t>();
+        mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
+        co_return obj->to_related<vc::object_t>();
     }
 
     if (node["m_type"] == "vc::lua_script_t")
@@ -479,20 +478,20 @@ co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
 
     if (node["m_type"] == "vc::integer_t") {
         auto obj = integer_t::create(co_await resolve_int(vs, node["value"]));
-        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
-        co_return obj.to_related<vc::object_t>();
+        mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
+        co_return obj->to_related<vc::object_t>();
     }
 
     if (node["m_type"] == "vc::float_t") {
         auto obj = float_t::create(co_await resolve_float(vs, node["value"]));
-        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
-        co_return obj.to_related<vc::object_t>();
+        mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
+        co_return obj->to_related<vc::object_t>();
     }
 
     if (node["m_type"] == "vc::string_t") {
         auto obj = string_t::create(co_await resolve_str(vs, node["value"]));
-        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
-        co_return obj.to_related<vc::object_t>();
+        mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
+        co_return obj->to_related<vc::object_t>();
     }
 
     for (auto &[match, cbk] : vs->build_object_cbks)
@@ -514,20 +513,20 @@ co::task_t build_pseudo_object(vc::virt_state_t *vs, const std::string& name, fk
     /* builtin integer resolution */
     if (node.is_integer()) {
         auto obj = integer_t::create(node.as_int());
-        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
+        mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
         co_return 0;
     }
 
     if (node.is_float_number()) {
         auto obj = float_t::create(node.as_float());
-        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
+        mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
         co_return 0;
     }
 
     /* builtin */
     if (node.is_string()) {
         auto obj = string_t::create(node.as_str());
-        mark_dependency_solved(vs, name, obj.to_related<vc::object_t>());
+        mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
         co_return 0;
     }
 
@@ -633,10 +632,6 @@ static int luaopen_vc(lua_State *L) {
                 luaw_push_error(L, std::format("invalid class id: {}", vc::to_string(class_id)));
             }
             if (!has(vs->lua_class_members[class_id], member_name)) {
-                if (strcmp(member_name, "rebuild") == 0) try {
-                    o.obj.rebuild();
-                    return 0;
-                } catch (...) { return luaw_catch_exception(L); }
                 luaw_push_error(L, std::format("class id {} doesn't have member: {}",
                         vc::to_string(class_id), member_name));
             }
@@ -701,7 +696,7 @@ static int luaopen_vc(lua_State *L) {
                         vc::to_string(class_id)));
             }
             lua_remove(L, 1); /* We don't want the function itself as an parameter */
-            return o.obj.to_related<lua_function_t>()->call(L);
+            return o.obj->to_related<lua_function_t>()->call(L);
         });
         lua_setfield(L, -2, "__call");
 
@@ -719,7 +714,7 @@ static int luaopen_vc(lua_State *L) {
             /* The object is no longer known to lua, as such we also delete it's slot. Obs: It may
             still be alive, meaning, it is known by the c++ side, just not by the lua side.
             !!! It will also loose it's name with this operation (Is that really ok?) */
-            o.obj->cbks->usr_ptr = nullptr;
+            o.obj->usr_ptr = nullptr;
 
             /* we clean it's name mapping, it's reference and free it's id */
             vs->ps.objects_map.erase(o.name);
@@ -873,13 +868,8 @@ void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type
 
 int push_vc_object(lua_State *L, ref_t<object_t> object) {
     auto vs = luaw_get_virt_state(L);
-    if (!object->cbks) {
-        /* This happens when the object was not created/registered by the dependency enegine, but
-        it was created on the fly. We give it callbacks, a name and be on our way. */
-        object->cbks = std::make_shared<vo::object_cbks_t<vc::virt_traits_t>>();
-    }
 
-    if (!object->cbks->usr_ptr) {
+    if (!object->usr_ptr) {
         /* So this object was no longer known by the lua side, we must resurect it */
 
         /* We first get it a new id */
@@ -887,7 +877,7 @@ int push_vc_object(lua_State *L, ref_t<object_t> object) {
         vs->ps.free_objects.pop_back();
 
         /* make it reference it's own id */
-        object->cbks->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
+        object->usr_ptr = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
 
         /* add it's lua-name-mapping and it's lua-id-mapping */
         std::string name = new_anon_name(vs);
@@ -901,7 +891,7 @@ int push_vc_object(lua_State *L, ref_t<object_t> object) {
         lua_setfield(L, -2, name.c_str());
         lua_pop(L, 1);
     }
-    int obj_id = (intptr_t)object->cbks->usr_ptr.get();
+    int obj_id = (intptr_t)object->usr_ptr.get();
     if (obj_id >= (int)vs->ps.objects.size() || obj_id < 0) {
         DBG("internal_error: Integrity check failed");
         return -1;

@@ -199,36 +199,21 @@ VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_LUA_SCRIPT);
 VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_LUA_FUNCTION);
 
 /*!
- * @brief Traits struct for virt_composer's virtual objects.
- *
- * Defines the return type (`ret_t`) and type enumeration (`type_t`) used by virt_composer's object
- * system.
- * Currently, `ret_t` is fixed as `int64_t` for consistency, but may be adjusted in the future for
- * specific needs (e.g., `VkResult`).
- */
-struct virt_traits_t {
-    using ret_t = int64_t; /* it annoys me to no end that I don't seem to find a way to make this
-                              return whatever (ex: VkResult), but whatever */
-    using type_t = object_type_e;
-};
-
-/*!
  * @brief Base object type for virt_composer.
  *
  * This type represents the base class for all objects in the virt_composer framework.
  * It is parameterized by @ref virt_traits_t and provides core functionality for object lifecycle
  * and type tracking.
  */
-using object_t = vo::object_t<virt_traits_t>;
+using object_t = vo::object_t<object_type_e>;
 
 /*!
  * @brief Return type for object operations.
  *
- * Alias for the return type used by default functions (e.g., `_init()`, `_uninit()`) in objects
+ * Alias for the return type used by default functions (e.g., `init()`, `uninit()`) in objects
  * derived from @ref object_t. Defined by @ref virt_traits_t::ret_t.
  */
-using ret_t = virt_traits_t::ret_t;
-
+using ret_t = vo::ret_t;
 
 /*!
  * @brief Reference type for virt_composer objects.
@@ -239,7 +224,7 @@ using ret_t = virt_traits_t::ret_t;
  * @tparam T The object type that is held by this reference.
  */
 template <typename T>
-using ref_t = vo::ref_t<T, virt_traits_t>;
+using ref_t = vo::ref_t<T>;
 
 /*!
  * @brief Template struct for handling bitmask/enum parameters from Lua.
@@ -293,7 +278,7 @@ struct integer_t : public vc::object_t {
 
     static vc::object_type_e type_id_static() { return VC_TYPE_INTEGER; }
     static vc::ref_t<integer_t> create(int64_t value) {
-        auto ret = vc::ref_t<integer_t>::create_obj_ref(std::make_unique<integer_t>(), {});
+        auto ret = std::make_shared<integer_t>();
         ret->value = value;
         return ret;
     }
@@ -305,8 +290,8 @@ struct integer_t : public vc::object_t {
     }
 
 private:
-    virtual vc::ret_t _init() override { return VC_ERROR_OK; }
-    virtual vc::ret_t _uninit() override { return VC_ERROR_OK; }
+    virtual vc::ret_t init() override { return VC_ERROR_OK; }
+    virtual vc::ret_t uninit() override { return VC_ERROR_OK; }
 };
 
 /*!
@@ -334,7 +319,7 @@ struct float_t : public vc::object_t {
 
     static vc::object_type_e type_id_static() { return VC_TYPE_FLOAT; }
     static vc::ref_t<float_t> create(double value) {
-        auto ret = vc::ref_t<float_t>::create_obj_ref(std::make_unique<float_t>(), {});
+        auto ret = std::make_shared<float_t>();
         ret->value = value;
         return ret;
     }
@@ -346,8 +331,8 @@ struct float_t : public vc::object_t {
     }
 
 private:
-    virtual vc::ret_t _init() override { return VC_ERROR_OK; }
-    virtual vc::ret_t _uninit() override { return VC_ERROR_OK; }
+    virtual vc::ret_t init() override { return VC_ERROR_OK; }
+    virtual vc::ret_t uninit() override { return VC_ERROR_OK; }
 };
 
 /*!
@@ -372,7 +357,7 @@ struct string_t : public vc::object_t {
 
     static vc::object_type_e type_id_static() { return VC_TYPE_STRING; }
     static vc::ref_t<string_t> create(const std::string& value) {
-        auto ret = vc::ref_t<string_t>::create_obj_ref(std::make_unique<string_t>(), {});
+        auto ret = std::make_shared<string_t>();
         ret->value = value;
         return ret;
     }
@@ -384,8 +369,8 @@ struct string_t : public vc::object_t {
     }
 
 private:
-    virtual vc::ret_t _init() override { return VC_ERROR_OK; }
-    virtual vc::ret_t _uninit() override { return VC_ERROR_OK; }
+    virtual vc::ret_t init() override { return VC_ERROR_OK; }
+    virtual vc::ret_t uninit() override { return VC_ERROR_OK; }
 };
 
 /* TODO: add `!lua` */
@@ -410,7 +395,7 @@ struct lua_script_t : public vc::object_t {
 
     static vc::object_type_e type_id_static() { return VC_TYPE_LUA_SCRIPT; }
     static vc::ref_t<lua_script_t> create(std::string content) {
-        auto ret = vc::ref_t<lua_script_t>::create_obj_ref(std::make_unique<lua_script_t>(), {});
+        auto ret = std::make_shared<lua_script_t>();
         ret->content = content;
         return ret;
     }
@@ -422,8 +407,8 @@ struct lua_script_t : public vc::object_t {
     }
 
 private:
-    virtual vc::ret_t _init() override { return VC_ERROR_OK; }
-    virtual vc::ret_t _uninit() override { return VC_ERROR_OK; }
+    virtual vc::ret_t init() override { return VC_ERROR_OK; }
+    virtual vc::ret_t uninit() override { return VC_ERROR_OK; }
 };
 
 /* Does this really have any irl usage? ANSW: YES! It holds (should hold) C lua callbacks */
@@ -454,11 +439,10 @@ struct lua_function_t : public vc::object_t {
 
     static vc::object_type_e type_id_static() { return VC_TYPE_LUA_FUNCTION; }
     static vc::ref_t<lua_function_t> create(std::string name, std::string source) {
-        auto ret = vc::ref_t<lua_function_t>::create_obj_ref(
-                std::make_unique<lua_function_t>(), {});
+        auto ret = std::make_shared<lua_function_t>();
         ret->m_name = name;
         ret->m_source = source;
-        if (ret->_call_init() < 0)
+        if (ret->init() < 0)
             throw vc::except_t("Failed lua_function_t init");
         return ret;
     }
@@ -490,7 +474,7 @@ private:
     static std::map<std::string, void *> dll_handles;
     static std::map<std::string, std::function<int(lua_State *L)>> dll_funcs;
 
-    virtual vc::ret_t _init() override {
+    virtual vc::ret_t init() override {
         if (m_source == "[INTERNAL]" && has(internal_funcs, m_name)) {
             _fn = internal_funcs[m_name];
             return VC_ERROR_OK;
@@ -500,7 +484,7 @@ private:
             return VC_ERROR_GENERIC;
         }
     }
-    virtual vc::ret_t _uninit() override { return VC_ERROR_OK; }
+    virtual vc::ret_t uninit() override { return VC_ERROR_OK; }
 };
 
 inline std::map<std::string, std::function<int(lua_State *L)>>  lua_function_t::internal_funcs;
@@ -1043,7 +1027,7 @@ ref_t<vc::object_t> get_ref_base(virt_state_t *vs, const std::string& name);
 
 template <typename T>
 ref_t<T> get_ref(virt_state_t *vs, const std::string& name) {
-        return get_ref_base(vs, name).to_related<T>(); }
+        return get_ref_base(vs, name)->to_related<T>(); }
 
 /*!
  * [INTERNAL] Non-templated core of the dependency resolver.
@@ -1112,7 +1096,7 @@ struct depend_resolver_t : depend_resolver_internal_t {
     }
 
     vc::ref_t<T> await_resume() {
-        auto ret = internal_get_dep_object(required_depend).to_related<T>();
+        auto ret = internal_get_dep_object(required_depend)->to_related<T>();
         if (!ret) {
             DBG("Invalid ref...");
             throw vc::except_t(
@@ -1139,14 +1123,14 @@ co::task<vc::ref_t<T>> resolve_obj(virt_state_t *vs, fkyaml::node& node) {
         /* This is in the form m_field: tag_name: m_type: "..." */
         std::string tag = node.as_map().begin()->first.as_str();
         auto ref = co_await vc::build_object(vs, tag, node.as_map().begin()->second);
-        co_return ref.template to_related<T>();
+        co_return ref->template to_related<T>();
     }
     else if (node.contains("m_type")) {
         /* This is in the form m_field: m_type: "...", ie, inlined object */
         std::string tag = node.contains("m_tag") ?
                 node["m_tag"].as_str() : new_anon_name(vs);
         auto ref = co_await vc::build_object(vs, tag, node);
-        co_return ref.template to_related<T>();
+        co_return ref->template to_related<T>();
     }
 
     /* None of the above */
@@ -1220,7 +1204,7 @@ struct luaw_param_t<vc::ref_t<T>, index> {
                     index, demangle<T>(), lua_typename(L, lua_type(L, index))));
         }
         auto vs = luaw_get_virt_state(L);
-        return luaw_get_object_at_index(vs, obj_index).to_related<T>();
+        return luaw_get_object_at_index(vs, obj_index)->to_related<T>();
     }
 };
 
@@ -1551,7 +1535,7 @@ int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     auto o = luaw_get_object_at_index(vs, index);
     if (!o)
         luaw_push_error(L, "internal_error: Nil user object can't call member function!");
-    auto obj = o.to_related<T>();
+    auto obj = o->to_related<T>();
 
     using RetType = decltype((obj.get()->*member_ptr)(
             luaw_param_t<Params, I + 2>{}.luaw_single_param(L)...));
@@ -1741,7 +1725,7 @@ int luaw_member_object_wrapper(lua_State *L) {
         if (!o) {
             luaw_push_error(L, "internal_error: Nil user object can't get member!");
         }
-        auto obj = o.to_related<T>();
+        auto obj = o->to_related<T>();
         auto &member = obj.get()->*member_ptr;
 
         if (luaw_push_cpp_object(L, member) < 0) {
@@ -1865,7 +1849,7 @@ int luaw_member_setter_object_wrapper(lua_State *L) {
     if (!o) {
         luaw_push_error(L, "internal_error: Nil user object can't set member!");
     }
-    auto obj = o.to_related<T>();
+    auto obj = o->to_related<T>();
     auto &member = obj.get()->*member_ptr;
 
     if (luaw_lua_to_cpp_object(L, -1, member) < 1) {

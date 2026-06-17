@@ -2,102 +2,6 @@
 #define VULKAN_COMPOSER_H
 
 /*!
- * Core Objects and Functions:
- * ===========================
- * 
- * The following are used to manage all the objects inside the Vulkan Utils (vkc) wrapper:
- * 
- * vku::ref_t<VkuT>
- * ----------------
- *
- * Description: Reference handle to a Vulkan wrapper object (VkuT). Implements 
- * safe shared ownership and automatic update propagation via base_t. Users hold 
- * ref_t instead of direct object pointers.
- *
- * Member functions:
- * - operator->(): Access the underlying VkuT object.
- * - operator*(): Dereference to the underlying VkuT object.
- * - get(): Returns raw pointer to the underlying VkuT object.
- * - to_related(): Cast between related reference types safely.
- * - operator bool(): Checks if the reference holds a valid object.
- *
- * Init: create_obj_ref(obj, dependencies)
- *   - Parameters:
- *     - obj: Unique pointer to a VkuT object.
- *     - dependencies: List of ref_base_t objects this object depends on.
- *
- * Notes:
- * - Manages the DAG of dependencies for update propagation.
- * - Allows safe, type-checked access to Vulkan wrapper objects.
- * 
- * 
- * vku::ref_t<VkuT>::update()
- * --------------------------
- *
- * Propagates changes in this object to all dependent objects in the DAG.
- * 
- * - Each Vulkan wrapper object (object_t) may implement update() to reflect
- *   modifications to its GPU resources (e.g., updating descriptor sets or buffers).
- * - The base_t wrapper ensures that calling update() on a ref_t-managed object
- *   automatically calls update() on all dependees (objects that depend on it).
- * - This allows changes to a low-level resource (like a buffer or image) to
- *   cascade safely to higher-level objects (like pipelines or descriptor sets)
- *   that rely on it.
- *
- * Example:
- *   If a buffer bound in a descriptor set is modified, calling update() on
- *   the buffer’s ref_t triggers update() on all desc_set_t objects that use it,
- *   ensuring that GPU descriptor sets remain in sync.
- *
- * Notes:
- * - The base_t update mechanism is recursive, but only follows _dependees.
- * - Users usually call update() on high-level objects (e.g., desc_set_t),
- *   which automatically propagates to underlying resources as needed.
- * 
- * 
- * vku::ref_t<VkuT>::rebuild()
- * ---------------------------
- *
- * Re-initializes this object and all dependent objects in the DAG.
- * 
- * - Each Vulkan wrapper object (object_t) implements _init() and _uninit() to 
- *   allocate or release GPU resources as needed.
- * - This allows structural changes to a low-level resource (like resizing an image,
- *   changing a buffer format, or replacing a shader) to propagate safely to all 
- *   higher-level objects (like pipelines or descriptor sets) that rely on it.
- *
- * Example:
- *   If a window or swapchain’s dimensions change, calling rebuild() on the swapchain’s
- *   ref_t will uninitialize and reinitialize the swapchain with the new size, then
- *   automatically rebuild all framebuffers, pipelines, or descriptor sets that depend
- *   on it, ensuring the GPU objects stay consistent with the new window size. All those
- *   objects will be rebuilt using their stored parameters.
- *
- * Notes:
- * - The base_t rebuild mechanism is recursive and follows _dependees.
- * - rebuild() is used for structural or configuration changes that require full
- *   GPU resource re-creation, whereas update() is for incremental changes.
- * 
- * 
- * vku::object_t
- * --------
- *
- * Description: Base class for all Vulkan wrapper objects in the library. Provides 
- * virtual methods for initialization (_init/_uninit), type identification, 
- * string representation, and optional update propagation.
- *
- * Members:
- * - cbks: Optional callbacks invoked before/after init and uninit.
- *
- * Member functions:
- * - type_id(): Returns the type identifier of the object.
- * - to_string(): Returns a human-readable string describing the object.
- * - update(): Default no-op. Can be overridden to propagate changes to dependent GPU resources.
- *
- * Notes:
- * - update() may be called to refresh GPU state after modifying object parameters.
- * 
- * 
  * LUA API: Vulkan Utils
  * =====================
  * 
@@ -966,7 +870,7 @@ struct lua_var_t : public vku::object_t {
 
     static vku::object_type_e type_id_static() { return VKC_TYPE_LUA_VARIABLE; }
     static vku::ref_t<lua_var_t> create(std::string name) {
-        auto ret = vku::ref_t<lua_var_t>::create_obj_ref(std::make_unique<lua_var_t>(), {});
+        auto ret = std::make_shared<lua_var_t>();
         ret->name = name;
         return ret;
     }
@@ -979,8 +883,8 @@ struct lua_var_t : public vku::object_t {
 
 
 private:
-    virtual vc::ret_t _init() override { return VK_SUCCESS; }
-    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t init() override { return VK_SUCCESS; }
+    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
 };
 
 /*!
@@ -1004,7 +908,7 @@ private:
 struct cpu_buffer_t : public vku::object_t {
     static vku::object_type_e type_id_static() { return VKC_TYPE_CPU_BUFFER; }
     static vku::ref_t<cpu_buffer_t> create(size_t sz) {
-        auto ret = vku::ref_t<cpu_buffer_t>::create_obj_ref(std::make_unique<cpu_buffer_t>(), {});
+        auto ret = std::make_shared<cpu_buffer_t>();
         ret->_data.resize(sz);
         return ret;
     }
@@ -1019,8 +923,8 @@ struct cpu_buffer_t : public vku::object_t {
     }
 
 private:
-    virtual vc::ret_t _init() override { return VK_SUCCESS; }
-    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t init() override { return VK_SUCCESS; }
+    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
 
     std::vector<uint8_t> _data;
 };
@@ -1050,7 +954,7 @@ struct spirv_t : public vku::object_t {
 
     static vku::object_type_e type_id_static() { return VKC_TYPE_SPIRV; }
     static vku::ref_t<spirv_t> create(const vku::spirv_t& spirv) {
-        auto ret = vku::ref_t<spirv_t>::create_obj_ref(std::make_unique<spirv_t>(), {});
+        auto ret = std::make_shared<spirv_t>();
         ret->spirv = spirv;
         return ret;
     }
@@ -1064,8 +968,8 @@ struct spirv_t : public vku::object_t {
     }
 
 private:
-    virtual vc::ret_t _init() override { return VK_SUCCESS; }
-    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t init() override { return VK_SUCCESS; }
+    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
 };
 
 /*!
@@ -1095,8 +999,7 @@ struct vertex_input_desc_t : public vku::object_t {
 
     static vku::object_type_e type_id_static() { return VKC_TYPE_VERTEX_INPUT_DESC; }
     static vku::ref_t<vertex_input_desc_t> create(const vku::vertex_input_desc_t& vid) {
-        auto ret = vku::ref_t<vertex_input_desc_t>::create_obj_ref(
-                std::make_unique<vertex_input_desc_t>(), {});
+        auto ret = std::make_shared<vertex_input_desc_t>();
         ret->vid = vid;
         return ret;
     }
@@ -1115,8 +1018,8 @@ struct vertex_input_desc_t : public vku::object_t {
     }
 
 private:
-    virtual vc::ret_t _init() override { return VK_SUCCESS; }
-    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t init() override { return VK_SUCCESS; }
+    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
 };
 
 /*!
@@ -1143,8 +1046,7 @@ struct binding_t : public vku::object_t {
 
     static vku::object_type_e type_id_static() { return VKC_TYPE_BINDING_DESC; }
     static vku::ref_t<binding_t> create(const VkDescriptorSetLayoutBinding& bd) {
-        auto ret = vku::ref_t<binding_t>::create_obj_ref(
-                std::make_unique<binding_t>(), {});
+        auto ret = std::make_shared<binding_t>();
         ret->bd = bd;
         return ret;
     }
@@ -1159,8 +1061,8 @@ struct binding_t : public vku::object_t {
     }
 
 private:
-    virtual vc::ret_t _init() override { return VK_SUCCESS; }
-    virtual vc::ret_t _uninit() override { return VK_SUCCESS; }
+    virtual vc::ret_t init() override { return VK_SUCCESS; }
+    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
 };
 
 /*! IMPLEMENTATION
@@ -1273,7 +1175,7 @@ inline co::task_t build_pseudo_object_cbk(vc::virt_state_t *vs, const std::strin
         }
 
         auto obj = spirv_t::create(spirv);
-        mark_dependency_solved(vs, name, obj.to_related<vku::object_t>());
+        mark_dependency_solved(vs, name, obj->to_related<vku::object_t>());
 
         co_return 0;
     }
@@ -1498,8 +1400,8 @@ inline int register_meta(vc::virt_state_t *vs) {
                 },
                 .attr_desc = attrs,
             });
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1519,8 +1421,8 @@ inline int register_meta(vc::virt_state_t *vs) {
                 .stageFlags = m_stage,
                 .pImmutableSamplers = nullptr
             });
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1532,8 +1434,8 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto m_size = co_await resolve_int(vs, node["m_size"]);
             auto obj = cpu_buffer_t::create(m_size);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1546,8 +1448,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             (void)node;
             /* lua_var has the same tag_name as the var name */
             auto obj = lua_var_t::create(node_name);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1559,8 +1461,8 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             (void)node;
             auto obj = vku::instance_t::create();
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1574,8 +1476,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             auto h = co_await resolve_int(vs, node["m_height"]);
             auto window_name = co_await resolve_str(vs, node["m_name"]);
             auto obj = vku::window_t::create(w, h, window_name);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1588,8 +1490,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             auto window = co_await resolve_obj<vku::window_t>(vs, node["m_window"]);
             auto instance = co_await resolve_obj<vku::instance_t>(vs, node["m_instance"]);
             auto obj = vku::surface_t::create(window, instance);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1602,8 +1504,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             auto cp = co_await resolve_obj<vku::cmdpool_t>(vs, node["m_cmdpool"]);
             auto path = co_await resolve_str(vs, node["m_path"]);
             auto obj = load_image(cp, path);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1615,8 +1517,8 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
             auto obj = vku::cmdpool_t::create(dev);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1628,8 +1530,8 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto surf = co_await resolve_obj<vku::surface_t>(vs, node["m_surface"]);
             auto obj = vku::device_t::create(surf);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1641,8 +1543,8 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
             auto obj = vku::img_sampl_t::create(dev);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1655,8 +1557,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             auto img = co_await resolve_obj<vku::image_t>(vs, node["m_image"]);
             auto aspect_mask = vc::get_enum_val<VkImageAspectFlagBits>(node["m_aspect_mask"]);
             auto obj = vku::img_view_t::create(img, aspect_mask);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1671,8 +1573,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             auto sampler = co_await resolve_obj<vku::img_sampl_t>(vs, node["m_sampler"]);
             auto desc = co_await resolve_obj<vkc::binding_t>(vs, node["m_desc"]);
             auto obj = vku::binding_desc_set_t::sampl_binding_t::create(desc->bd, view, sampler);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1685,8 +1587,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             auto buff = co_await resolve_obj<vku::buffer_t>(vs, node["m_buffer"]);
             auto desc = co_await resolve_obj<vkc::binding_t>(vs, node["m_desc"]);
             auto obj = vku::binding_desc_set_t::buff_binding_t::create(desc->bd, buff);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1701,8 +1603,8 @@ inline int register_meta(vc::virt_state_t *vs) {
                 bindings.push_back(
                         co_await resolve_obj<vku::binding_desc_set_t::binding_desc_t>(vs, subnode));
             auto obj = vku::binding_desc_set_t::create(bindings);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1718,8 +1620,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             auto share_mode = vc::get_enum_val<VkSharingMode>(node["m_sharing_mode"]);
             auto memory_flags = vc::get_enum_val<VkMemoryPropertyFlagBits>(node["m_memory_flags"]);
             auto obj = vku::buffer_t::create(dev, sz, usage_flags, share_mode, memory_flags);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1739,8 +1641,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             auto indesc = co_await resolve_obj<vkc::vertex_input_desc_t>(vs, node["m_input_desc"]);
             auto binds = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
             auto obj = vku::pipeline_t::create(w, h, rp, shaders, topol, indesc->vid, binds);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1752,8 +1654,8 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto swc = co_await resolve_obj<vku::swapchain_t>(vs, node["m_swapchain"]);
             auto obj = vku::renderpass_t::create(swc);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1765,8 +1667,8 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
             auto obj = vku::swapchain_t::create(dev);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1779,8 +1681,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
             auto spirv = co_await resolve_obj<spirv_t>(vs, node["m_spirv"]);
             auto obj = vku::shader_t::create(dev, spirv->spirv);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1792,8 +1694,8 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
             auto obj = vku::fence_t::create(dev);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1805,8 +1707,8 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
             auto obj = vku::sem_t::create(dev);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1818,8 +1720,8 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto rp = co_await resolve_obj<vku::renderpass_t>(vs, node["m_renderpass"]);
             auto obj = vku::framebuffs_t::create(rp);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1833,8 +1735,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             auto pipeline = co_await resolve_obj<vku::pipeline_t>(vs, node["m_pipeline"]);
             auto bindings = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
             auto obj = vku::desc_set_t::create(descriptor_pool, pipeline, bindings);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1848,8 +1750,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             auto binds = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
             int cnt = co_await resolve_int(vs, node["m_cnt"]);
             auto obj = vku::desc_pool_t::create(dev, binds, cnt);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);
@@ -1861,8 +1763,8 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto cp = co_await resolve_obj<vku::cmdpool_t>(vs, node["m_cmdpool"]);
             auto obj = vku::cmdbuff_t::create(cp);
-            mark_dependency_solved(vs, node_name, obj.to_related<vku::object_t>());
-            co_return obj.to_related<vku::object_t>();
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
         }
     );
     ASSERT_FN(ret);

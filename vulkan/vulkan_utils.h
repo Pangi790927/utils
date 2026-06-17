@@ -282,8 +282,8 @@ struct window_t : public object_t {
     GLFWwindow *get_window() const { return _window; }
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 
     GLFWwindow *_window = NULL;
 };
@@ -308,8 +308,8 @@ struct instance_t : public object_t {
             const std::vector<std::string>& layers = { "VK_LAYER_KHRONOS_validation" });
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 /* VkSurfaceKHR */
@@ -326,8 +326,8 @@ struct surface_t : public object_t {
     static ref_t<surface_t> create(ref_t<window_t> window, ref_t<instance_t> inst);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct device_t : public object_t {
@@ -347,8 +347,8 @@ struct device_t : public object_t {
     static ref_t<device_t> create(ref_t<surface_t> surf);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 /* VkSwapchainKHR */
@@ -371,8 +371,8 @@ struct swapchain_t : public object_t {
     static ref_t<swapchain_t> create(ref_t<device_t> dev);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct shader_t : public object_t {
@@ -397,8 +397,8 @@ struct shader_t : public object_t {
     static ref_t<shader_t> create(ref_t<device_t> dev, const char *path, vku_shader_stage_e type);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct renderpass_t : public object_t {
@@ -413,8 +413,8 @@ struct renderpass_t : public object_t {
     static ref_t<renderpass_t> create(ref_t<swapchain_t> swc);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct pipeline_t : public object_t {
@@ -444,8 +444,8 @@ struct pipeline_t : public object_t {
             ref_t<binding_desc_set_t>           bd);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct compute_pipeline_t : public object_t {
@@ -467,8 +467,8 @@ struct compute_pipeline_t : public object_t {
             ref_t<binding_desc_set_t>   bindings);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 /*engine_create_framebuffs*/
@@ -484,8 +484,8 @@ struct framebuffs_t : public object_t {
     static ref_t<framebuffs_t> create(ref_t<renderpass_t> rp);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 /*engine_create_cmdpool*/
@@ -501,8 +501,8 @@ struct cmdpool_t : public object_t {
     static ref_t<cmdpool_t> create(ref_t<device_t> dev);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct cmdbuff_t : public object_t {
@@ -535,8 +535,8 @@ struct cmdbuff_t : public object_t {
     void dispatch_compute(uint32_t x, uint32_t y = 1, uint32_t z = 1);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct sem_t : public object_t {
@@ -550,8 +550,8 @@ struct sem_t : public object_t {
     static ref_t<sem_t> create(ref_t<device_t> dev);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct fence_t : public object_t {
@@ -567,8 +567,8 @@ struct fence_t : public object_t {
     static ref_t<fence_t> create(ref_t<device_t> dev, VkFenceCreateFlags flags = 0);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct buffer_t : public object_t {
@@ -597,8 +597,8 @@ struct buffer_t : public object_t {
     void unmap_data();
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 
@@ -639,8 +639,8 @@ struct image_t : public object_t {
             ref_t<cmdbuff_t>    cbuff = nullptr);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct img_view_t : public object_t {
@@ -656,8 +656,8 @@ struct img_view_t : public object_t {
     static ref_t<img_view_t> create(ref_t<image_t> img, VkImageAspectFlags aspect_mask);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct img_sampl_t : public object_t {
@@ -674,8 +674,8 @@ struct img_sampl_t : public object_t {
     static VkDescriptorSetLayoutBinding get_desc_set(uint32_t binding, VkShaderStageFlags stage);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct desc_pool_t : public object_t {
@@ -695,8 +695,8 @@ struct desc_pool_t : public object_t {
             uint32_t                    cnt);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct desc_set_t : public object_t {
@@ -718,8 +718,8 @@ struct desc_set_t : public object_t {
             ref_t<binding_desc_set_t>   bindings);
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 struct binding_desc_set_t : public object_t {
@@ -730,8 +730,8 @@ struct binding_desc_set_t : public object_t {
         virtual VkWriteDescriptorSet get_write() const = 0;
 
     private:
-        virtual vc::ret_t _init() = 0;
-        virtual vc::ret_t _uninit() override { return VK_SUCCESS; };
+        virtual vc::ret_t init() = 0;
+        virtual vc::ret_t uninit() override { return VK_SUCCESS; };
     };
 
     struct buff_binding_t : public binding_desc_t {
@@ -749,7 +749,7 @@ struct binding_desc_set_t : public object_t {
                 ref_t<buffer_t>                 buff);
 
     private:
-        virtual vc::ret_t _init() override;
+        virtual vc::ret_t init() override;
     };
 
     struct sampl_binding_t : public binding_desc_t {
@@ -769,7 +769,7 @@ struct binding_desc_set_t : public object_t {
                 ref_t<img_sampl_t>              sampl);
 
     private:
-        virtual vc::ret_t _init() override;
+        virtual vc::ret_t init() override;
     };
 
     std::vector<ref_t<binding_desc_t>> m_binds;
@@ -784,8 +784,8 @@ struct binding_desc_set_t : public object_t {
     std::vector<VkDescriptorSetLayoutBinding> get_descriptors() const;
 
 private:
-    virtual vc::ret_t _init() override;
-    virtual vc::ret_t _uninit() override;
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
 };
 
 /* Internal:
@@ -970,13 +970,13 @@ inline VkDescriptorSetLayoutBinding ssbo_t::get_desc_set(uint32_t binding,
 /* window_t
 ================================================================================================= */
 
-inline vc::ret_t window_t::_uninit() {
+inline vc::ret_t window_t::uninit() {
     if (_window)
         glfwDestroyWindow(_window);
     return VK_SUCCESS;
 }
 
-inline vc::ret_t window_t::_init() {
+inline vc::ret_t window_t::init() {
     VK_ASSERT(init());
     _window = glfwCreateWindow(m_width, m_height, m_name.c_str(), NULL, NULL);
     if (!_window) {
@@ -987,13 +987,12 @@ inline vc::ret_t window_t::_init() {
 }
 
 inline ref_t<window_t> window_t::create(int width, int height, std::string name) {
-    auto ret = ref_t<window_t>::create_obj_ref(std::make_unique<window_t>(), {});
-
+    auto ret = std::make_shared<window_t>();
     ret->m_name = name;
     ret->m_width = width;
     ret->m_height = height;
 
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     DBG("Done post init");
     return ret;
 }
@@ -1006,7 +1005,7 @@ inline std::string window_t::to_string() const {
 /* instance_t
 ================================================================================================= */
 
-inline vc::ret_t instance_t::_init() {
+inline vc::ret_t instance_t::init() {
     FnScope err_scope;
 
     /* The instance can be used without a window, so it must also init vku if it was not already
@@ -1131,7 +1130,7 @@ inline vc::ret_t instance_t::_init() {
     return VK_SUCCESS;
 }
 
-inline vc::ret_t instance_t::_uninit() {
+inline vc::ret_t instance_t::uninit() {
     destroy_dbg_messenger(vk_instance, vk_dbg_messenger, NULL);
     vkDestroyInstance(vk_instance, NULL);
     return VK_SUCCESS;
@@ -1143,14 +1142,13 @@ inline ref_t<instance_t> instance_t::create(
         const std::vector<std::string>& extensions,
         const std::vector<std::string>& layers)
 {
-    auto ret = ref_t<instance_t>::create_obj_ref(std::make_unique<instance_t>(), {});
-
+    auto ret = std::make_shared<instance_t>();
     ret->m_app_name = app_name;
     ret->m_engine_name = engine_name;
     ret->m_extensions = extensions;
     ret->m_layers = layers;
 
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -1171,7 +1169,7 @@ inline std::string instance_t::to_string() const {
 /* surface_t
 ================================================================================================= */
 
-inline vc::ret_t surface_t::_init() {
+inline vc::ret_t surface_t::init() {
     if (glfwCreateWindowSurface(m_instance->vk_instance, m_window->get_window(),
             NULL, &vk_surface) != VK_SUCCESS)
     {
@@ -1180,7 +1178,7 @@ inline vc::ret_t surface_t::_init() {
     }
     return VK_SUCCESS;
 }
-inline vc::ret_t surface_t::_uninit() {
+inline vc::ret_t surface_t::uninit() {
     vkDestroySurfaceKHR(m_instance->vk_instance, vk_surface, NULL);
     return VK_SUCCESS;
 }
@@ -1188,11 +1186,10 @@ inline ref_t<surface_t> surface_t::create(
         ref_t<window_t> window,
         ref_t<instance_t> inst)
 {
-    auto ret = ref_t<surface_t>::create_obj_ref(
-            std::make_unique<surface_t>(), {window, inst});
+    auto ret = std::make_shared<surface_t>();
     ret->m_window = window;
     ret->m_instance = inst;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -1204,7 +1201,7 @@ inline std::string surface_t::to_string() const {
 /* device_t
 ================================================================================================= */
 
-inline vc::ret_t device_t::_init() {
+inline vc::ret_t device_t::init() {
     uint32_t dev_cnt = 0;
     VK_ASSERT(vkEnumeratePhysicalDevices(m_surface->m_instance->vk_instance, &dev_cnt, NULL));
 
@@ -1279,14 +1276,14 @@ inline vc::ret_t device_t::_init() {
     DBG("Created Vulkan Logical Device");
     return VK_SUCCESS;
 }
-inline vc::ret_t device_t::_uninit() {
+inline vc::ret_t device_t::uninit() {
     vkDestroyDevice(vk_dev, NULL);
     return VK_SUCCESS;
 }
 inline ref_t<device_t> device_t::create(ref_t<surface_t> surf) {
-    auto ret = ref_t<device_t>::create_obj_ref(std::make_unique<device_t>(), {surf});
+    auto ret = std::make_shared<device_t>();
     ret->m_surface = surf;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -1297,7 +1294,7 @@ inline std::string device_t::to_string() const {
 /* swapchain_t
 ================================================================================================= */
 
-inline vc::ret_t swapchain_t::_init() {
+inline vc::ret_t swapchain_t::init() {
     FnScope err_scope;
     auto sc_detail = get_swapchain_details(m_device->vk_phy_dev,
             m_device->m_surface->vk_surface);
@@ -1402,17 +1399,16 @@ inline vc::ret_t swapchain_t::_init() {
     err_scope.disable();
     return VK_SUCCESS;
 }
-inline vc::ret_t swapchain_t::_uninit() {
+inline vc::ret_t swapchain_t::uninit() {
     for (auto &iv : vk_sc_image_views)
         vkDestroyImageView(m_device->vk_dev, iv, NULL);
     vkDestroySwapchainKHR(m_device->vk_dev, vk_swapchain, NULL);
     return VK_SUCCESS;
 }
 inline ref_t<swapchain_t> swapchain_t::create(ref_t<device_t> dev) {
-    auto ret = ref_t<swapchain_t>::create_obj_ref(
-            std::make_unique<swapchain_t>(), {dev});
+    auto ret = std::make_shared<swapchain_t>();
     ret->m_device = dev;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -1423,7 +1419,7 @@ inline std::string swapchain_t::to_string() const {
 /* shader_t
 ================================================================================================= */
 
-inline vc::ret_t shader_t::_init() {
+inline vc::ret_t shader_t::init() {
     if (m_init_from_path) {
         std::ifstream file(m_path, std::ios::binary | std::ios::ate);
         std::streamsize size = file.tellg();
@@ -1460,7 +1456,7 @@ inline vc::ret_t shader_t::_init() {
     }
     return VK_SUCCESS;
 }
-inline vc::ret_t shader_t::_uninit() {
+inline vc::ret_t shader_t::uninit() {
     vkDestroyShaderModule(m_device->vk_dev, vk_shader, NULL);
     return VK_SUCCESS;
 }
@@ -1468,11 +1464,11 @@ inline ref_t<shader_t> shader_t::create(
         ref_t<device_t> dev,
         const spirv_t& spirv)
 {
-    auto ret = ref_t<shader_t>::create_obj_ref(std::make_unique<shader_t>(), {dev});
+    auto ret = std::make_shared<shader_t>();
     ret->m_init_from_path = false;
     ret->m_device = dev;
     ret->m_spirv = spirv;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 inline ref_t<shader_t> shader_t::create(
@@ -1480,12 +1476,12 @@ inline ref_t<shader_t> shader_t::create(
         const char *path,
         vku_shader_stage_e type)
 {
-    auto ret = ref_t<shader_t>::create_obj_ref(std::make_unique<shader_t>(), {dev});
+    auto ret = std::make_shared<shader_t>();
     ret->m_init_from_path = true;
     ret->m_path = path;
     ret->m_type = type;
     ret->m_device = dev;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -1498,7 +1494,7 @@ inline std::string shader_t::to_string() const {
 /* renderpass_t
 ================================================================================================= */
 
-inline vc::ret_t renderpass_t::_init() {
+inline vc::ret_t renderpass_t::init() {
     VkAttachmentDescription color_attach {
         .flags = 0,
         .format = m_swapchain->vk_surf_fmt.format,
@@ -1581,15 +1577,14 @@ inline vc::ret_t renderpass_t::_init() {
 
     return VK_SUCCESS;
 }
-inline vc::ret_t renderpass_t::_uninit() {
+inline vc::ret_t renderpass_t::uninit() {
     vkDestroyRenderPass(m_swapchain->m_device->vk_dev, vk_render_pass, NULL);
     return VK_SUCCESS;
 }
 inline ref_t<renderpass_t> renderpass_t::create(ref_t<swapchain_t> swc) {
-    auto ret = ref_t<renderpass_t>::create_obj_ref(
-            std::make_unique<renderpass_t>(), {swc});
+    auto ret = std::make_shared<renderpass_t>()
     ret->m_swapchain = swc;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -1600,7 +1595,7 @@ inline std::string renderpass_t::to_string() const {
 /* pipeline_t
 ================================================================================================= */
 
-inline vc::ret_t pipeline_t::_init() {
+inline vc::ret_t pipeline_t::init() {
     FnScope err_scope;
 
     std::vector<VkPipelineShaderStageCreateInfo> shader_stages;
@@ -1809,7 +1804,7 @@ inline vc::ret_t pipeline_t::_init() {
     DBGVV("Allocated pipeline: %p", vk_pipeline);
     return VK_SUCCESS;
 }
-inline vc::ret_t pipeline_t::_uninit() {
+inline vc::ret_t pipeline_t::uninit() {
     DBGVV("Dealocating pipeline: %p", vk_pipeline);
 
     vkDestroyPipeline(m_renderpass->m_swapchain->m_device->vk_dev, vk_pipeline, NULL);
@@ -1832,8 +1827,7 @@ inline ref_t<pipeline_t> pipeline_t::create(
         deps.push_back(sh);
     deps.push_back(rp);
     deps.push_back(bindings);
-    auto ret = ref_t<pipeline_t>::create_obj_ref(
-            std::make_unique<pipeline_t>(), deps);
+    auto ret = std::make_shared<pipeline_t>();
     ret->m_width = width;
     ret->m_height = height;
     ret->m_renderpass = rp;
@@ -1841,7 +1835,7 @@ inline ref_t<pipeline_t> pipeline_t::create(
     ret->m_topology = topology;
     ret->m_input_desc = input_desc;
     ret->m_bindings = bindings;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -1860,7 +1854,7 @@ inline std::string pipeline_t::to_string() const {
 /* compute_pipeline_t
 ================================================================================================= */
 
-inline vc::ret_t compute_pipeline_t::_init() {
+inline vc::ret_t compute_pipeline_t::init() {
     FnScope err_scope;
 
     auto bind_descriptors = m_bindings->get_descriptors();
@@ -1927,7 +1921,7 @@ inline vc::ret_t compute_pipeline_t::_init() {
     err_scope.disable();
     return VK_SUCCESS;
 }
-inline vc::ret_t compute_pipeline_t::_uninit() {
+inline vc::ret_t compute_pipeline_t::uninit() {
     DBGVV("Dealocating pipeline: %p", vk_pipeline);
 
     vkDestroyPipeline(m_device->vk_dev, vk_pipeline, NULL);
@@ -1940,12 +1934,11 @@ inline ref_t<compute_pipeline_t> compute_pipeline_t::create(
         ref_t<shader_t> shader,
         ref_t<binding_desc_set_t> bindings)
 {
-    auto ret = ref_t<compute_pipeline_t>::create_obj_ref(
-            std::make_unique<compute_pipeline_t>(), {dev, shader, bindings});
+    auto ret = std::make_shared<compute_pipeline_t>()
     ret->m_device = dev;
     ret->m_shader = shader;
     ret->m_bindings = bindings;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -1957,7 +1950,7 @@ inline std::string compute_pipeline_t::to_string() const {
 /* framebuffs_t
 ================================================================================================= */
 
-inline vc::ret_t framebuffs_t::_init() {
+inline vc::ret_t framebuffs_t::init() {
     vk_fbuffs.resize(m_renderpass->m_swapchain->vk_sc_image_views.size());
 
     FnScope err_scope;
@@ -1989,16 +1982,15 @@ inline vc::ret_t framebuffs_t::_init() {
     err_scope.disable();
     return VK_SUCCESS;
 }
-inline vc::ret_t framebuffs_t::_uninit() {
+inline vc::ret_t framebuffs_t::uninit() {
     for (auto fbuff : vk_fbuffs)
         vkDestroyFramebuffer(m_renderpass->m_swapchain->m_device->vk_dev, fbuff, NULL);
     return VK_SUCCESS;
 }
 inline ref_t<framebuffs_t> framebuffs_t::create(ref_t<renderpass_t> rp){
-    auto ret = ref_t<framebuffs_t>::create_obj_ref(
-            std::make_unique<framebuffs_t>(), {rp});
+    auto ret = std::make_shared<framebuffs_t>();
     ret->m_renderpass = rp;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -2010,7 +2002,7 @@ inline std::string framebuffs_t::to_string() const {
 /* cmdpool_t
 ================================================================================================= */
 
-inline vc::ret_t cmdpool_t::_init() {
+inline vc::ret_t cmdpool_t::init() {
     VkCommandPoolCreateInfo pool_info{
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .pNext = nullptr,
@@ -2021,15 +2013,14 @@ inline vc::ret_t cmdpool_t::_init() {
     VK_ASSERT(vkCreateCommandPool(m_device->vk_dev, &pool_info, NULL, &vk_pool));
     return VK_SUCCESS;
 }
-inline vc::ret_t cmdpool_t::_uninit() {
+inline vc::ret_t cmdpool_t::uninit() {
     vkDestroyCommandPool(m_device->vk_dev, vk_pool, NULL);
     return VK_SUCCESS;
 }
 inline ref_t<cmdpool_t> cmdpool_t::create(ref_t<device_t> dev) {
-    auto ret = ref_t<cmdpool_t>::create_obj_ref(
-            std::make_unique<cmdpool_t>(), {dev});
+    auto ret = std::make_shared<cmdpool_t>();
     ret->m_device = dev;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -2040,7 +2031,7 @@ inline std::string cmdpool_t::to_string() const {
 /* cmdbuff_t
 ================================================================================================= */
 
-inline vc::ret_t cmdbuff_t::_init() {
+inline vc::ret_t cmdbuff_t::init() {
     VkCommandBufferAllocateInfo buff_info {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext = nullptr,
@@ -2052,7 +2043,7 @@ inline vc::ret_t cmdbuff_t::_init() {
     VK_ASSERT(vkAllocateCommandBuffers(m_cmdpool->m_device->vk_dev, &buff_info, &vk_buff));
     return VK_SUCCESS;
 }
-inline vc::ret_t cmdbuff_t::_uninit() {
+inline vc::ret_t cmdbuff_t::uninit() {
     if (m_host_free) {
         vkFreeCommandBuffers(m_cmdpool->m_device->vk_dev, m_cmdpool->vk_pool, 1, &vk_buff);
     }
@@ -2061,11 +2052,10 @@ inline vc::ret_t cmdbuff_t::_uninit() {
 inline ref_t<cmdbuff_t> cmdbuff_t::create(
         ref_t<cmdpool_t> cp, bool host_free)
 {
-    auto ret = ref_t<cmdbuff_t>::create_obj_ref(
-            std::make_unique<cmdbuff_t>(), {cp});
+    auto ret = std::make_shared<cmdbuff_t>();
     ret->m_cmdpool = cp;
     ret->m_host_free = host_free;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -2194,7 +2184,7 @@ inline void cmdbuff_t::dispatch_compute(uint32_t x, uint32_t y, uint32_t z) {
 /* sem_t
 ================================================================================================= */
 
-inline vc::ret_t sem_t::_init() {
+inline vc::ret_t sem_t::init() {
     VkSemaphoreCreateInfo sem_info {
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
         .pNext = nullptr,
@@ -2204,15 +2194,14 @@ inline vc::ret_t sem_t::_init() {
     VK_ASSERT(vkCreateSemaphore(m_device->vk_dev, &sem_info, NULL, &vk_sem));
     return VK_SUCCESS;
 }
-inline vc::ret_t sem_t::_uninit() {
+inline vc::ret_t sem_t::uninit() {
     vkDestroySemaphore(m_device->vk_dev, vk_sem, NULL);
     return VK_SUCCESS;
 }
 inline ref_t<sem_t> sem_t::create(ref_t<device_t> dev) {
-    auto ret = ref_t<sem_t>::create_obj_ref(
-            std::make_unique<sem_t>(), {dev});
+    auto ret = std::make_shared<sem_t>();
     ret->m_device = dev;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -2223,7 +2212,7 @@ inline std::string sem_t::to_string() const {
 /* fence_t
 ================================================================================================= */
 
-inline vc::ret_t fence_t::_init() {
+inline vc::ret_t fence_t::init() {
     VkFenceCreateInfo fence_info {
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
         .pNext = nullptr,
@@ -2233,7 +2222,7 @@ inline vc::ret_t fence_t::_init() {
     VK_ASSERT(vkCreateFence(m_device->vk_dev, &fence_info, NULL, &vk_fence));
     return VK_SUCCESS;
 }
-inline vc::ret_t fence_t::_uninit() {
+inline vc::ret_t fence_t::uninit() {
     vkDestroyFence(m_device->vk_dev, vk_fence, NULL);
     return VK_SUCCESS;
 }
@@ -2241,11 +2230,10 @@ inline ref_t<fence_t> fence_t::create(
         ref_t<device_t> dev,
         VkFenceCreateFlags flags)
 {
-    auto ret = ref_t<fence_t>::create_obj_ref(
-            std::make_unique<fence_t>(), {dev});
+    auto ret = std::make_shared<fence_t>()
     ret->m_device = dev;
     ret->m_flags = flags;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -2258,7 +2246,7 @@ inline std::string fence_t::to_string() const {
 /* buffer_t
 ================================================================================================= */
 
-inline vc::ret_t buffer_t::_init() {
+inline vc::ret_t buffer_t::init() {
     VkBufferCreateInfo buff_info{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = nullptr,
@@ -2286,7 +2274,7 @@ inline vc::ret_t buffer_t::_init() {
     VK_ASSERT(vkBindBufferMemory(m_device->vk_dev, vk_buff, vk_mem, 0));
     return VK_SUCCESS;
 }
-inline vc::ret_t buffer_t::_uninit() {
+inline vc::ret_t buffer_t::uninit() {
     if (m_map_ptr)
         unmap_data();
     vkDestroyBuffer(m_device->vk_dev, vk_buff, nullptr);
@@ -2300,14 +2288,13 @@ inline ref_t<buffer_t> buffer_t::create(
         VkSharingMode sh_mode,
         VkMemoryPropertyFlags mem_flags)
 {
-    auto ret = ref_t<buffer_t>::create_obj_ref(
-            std::make_unique<buffer_t>(), {dev});
+    auto ret = std::make_shared<buffer_t>();
     ret->m_device = dev;
     ret->m_size = size;
     ret->m_usage_flags = usage;
     ret->m_sharing_mode = sh_mode;
     ret->m_memory_flags = mem_flags;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -2341,7 +2328,7 @@ inline void buffer_t::unmap_data() {
 /* image_t
 ================================================================================================= */
 
-inline vc::ret_t image_t::_init() {
+inline vc::ret_t image_t::init() {
     VkImageCreateInfo image_info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .pNext = nullptr,
@@ -2384,7 +2371,7 @@ inline vc::ret_t image_t::_init() {
     err_scope.disable();
     return VK_SUCCESS;
 }
-inline vc::ret_t image_t::_uninit() {
+inline vc::ret_t image_t::uninit() {
     vkDestroyImage(m_device->vk_dev, vk_img, nullptr);
     vkFreeMemory(m_device->vk_dev, vk_img_mem, nullptr);
     return VK_SUCCESS;
@@ -2396,13 +2383,13 @@ inline ref_t<image_t> image_t::create(
         VkFormat fmt,
         VkImageUsageFlags usage)
 {
-    auto ret = ref_t<image_t>::create_obj_ref(std::make_unique<image_t>(), {dev});
+    auto ret = std::make_shared<image_t>();
     ret->m_device = dev;
     ret->m_width = width;
     ret->m_height = height;
     ret->m_format = fmt;
     ret->m_usage = usage;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -2574,7 +2561,7 @@ inline void image_t::set_data(ref_t<cmdpool_t> cp, void *data, uint32_t sz,
 /* img_view_t
 ================================================================================================= */
 
-inline vc::ret_t img_view_t::_init() {
+inline vc::ret_t img_view_t::init() {
     VkImageViewCreateInfo view_info {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .pNext = nullptr,
@@ -2600,7 +2587,7 @@ inline vc::ret_t img_view_t::_init() {
     VK_ASSERT(vkCreateImageView(m_image->m_device->vk_dev, &view_info, nullptr, &vk_view));
     return VK_SUCCESS;
 }
-inline vc::ret_t img_view_t::_uninit() {
+inline vc::ret_t img_view_t::uninit() {
     vkDestroyImageView(m_image->m_device->vk_dev, vk_view, nullptr);
     return VK_SUCCESS;
 }
@@ -2608,10 +2595,10 @@ inline ref_t<img_view_t> img_view_t::create(
         ref_t<image_t> img,
         VkImageAspectFlags aspect_mask)
 {
-    auto ret = ref_t<img_view_t>::create_obj_ref(std::make_unique<img_view_t>(), {img});
+    auto ret = std::make_shared<img_view_t>();
     ret->m_image = img;
     ret->m_aspect_mask = aspect_mask;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -2623,7 +2610,7 @@ inline std::string img_view_t::to_string() const {
 /* img_sampl_t
 ================================================================================================= */
 
-inline vc::ret_t img_sampl_t::_init() {
+inline vc::ret_t img_sampl_t::init() {
     VkPhysicalDeviceProperties dev_props;
     vkGetPhysicalDeviceProperties(m_device->vk_phy_dev, &dev_props);
 
@@ -2655,7 +2642,7 @@ inline vc::ret_t img_sampl_t::_init() {
     VK_ASSERT(vkCreateSampler(m_device->vk_dev, &sampler_info, nullptr, &vk_sampler));
     return VK_SUCCESS;
 }
-inline vc::ret_t img_sampl_t::_uninit() {
+inline vc::ret_t img_sampl_t::uninit() {
     vkDestroySampler(m_device->vk_dev, vk_sampler, nullptr);
     return VK_SUCCESS;
 }
@@ -2663,10 +2650,10 @@ inline ref_t<img_sampl_t> img_sampl_t::create(
         ref_t<device_t> dev,
         VkFilter filter)
 {
-    auto ret = ref_t<img_sampl_t>::create_obj_ref(std::make_unique<img_sampl_t>(), {dev});
+    auto ret = std::make_shared<img_sampl_t>();
     ret->m_device = dev;
     ret->m_filter = filter;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -2690,7 +2677,7 @@ inline VkDescriptorSetLayoutBinding img_sampl_t::get_desc_set(uint32_t binding,
 /* desc_pool_t
 ================================================================================================= */
 
-inline vc::ret_t desc_pool_t::_init() {
+inline vc::ret_t desc_pool_t::init() {
     std::vector<VkDescriptorPoolSize> pool_sizes;
     std::map<decltype(m_bindings->m_binds[0]->m_desc.descriptorType), uint32_t> type_cnt;
     for (auto &b : m_bindings->m_binds)
@@ -2717,7 +2704,7 @@ inline vc::ret_t desc_pool_t::_init() {
     DBGVV("Allocated pool: %p", vk_descpool);
     return VK_SUCCESS;
 }
-inline vc::ret_t desc_pool_t::_uninit() {
+inline vc::ret_t desc_pool_t::uninit() {
     vkDestroyDescriptorPool(m_device->vk_dev, vk_descpool, nullptr);
     return VK_SUCCESS;
 }
@@ -2726,12 +2713,11 @@ inline ref_t<desc_pool_t> desc_pool_t::create(
         ref_t<binding_desc_set_t> bindings,
         uint32_t cnt)
 {
-    auto ret = ref_t<desc_pool_t>::create_obj_ref(
-            std::make_unique<desc_pool_t>(), {dev, bindings});
+    auto ret = std::make_shared<desc_pool_t>();
     ret->m_device = dev;
     ret->m_bindings = bindings;
     ret->m_cnt = cnt;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -2764,7 +2750,7 @@ Barriers:
         e.g., writing a buffer, reading a texture, writing a color attachment).
  */
 
-inline vc::ret_t desc_set_t::_init() {
+inline vc::ret_t desc_set_t::init() {
     VkDescriptorSetAllocateInfo alloc_info {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .pNext = nullptr,
@@ -2798,7 +2784,7 @@ inline vc::ret_t desc_set_t::_init() {
 
     return VK_SUCCESS;
 }
-inline vc::ret_t desc_set_t::_uninit() {
+inline vc::ret_t desc_set_t::uninit() {
     return VK_SUCCESS;
 }
 inline void desc_set_t::update() {
@@ -2823,12 +2809,11 @@ inline ref_t<desc_set_t> desc_set_t::create(
         ref_t<pipeline_t> pl,
         ref_t<binding_desc_set_t> bindings)
 {
-    auto ret = ref_t<desc_set_t>::create_obj_ref(
-            std::make_unique<desc_set_t>(), {desc_pool, bindings});
+    auto ret = std::make_shared<desc_set_t>();
     ret->m_descriptor_pool = desc_pool;
     ret->m_pipeline = pl;
     ret->m_bindings = bindings;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -2846,10 +2831,10 @@ inline ref_t<binding_desc_set_t::buff_binding_t> binding_desc_set_t::buff_bindin
         ref_t<buffer_t> buff)
 {
     using bd_t = binding_desc_set_t::buff_binding_t;
-    ref_t<bd_t> ret = ref_t<bd_t>::create_obj_ref(std::make_unique<bd_t>(), {buff});
+    ref_t<bd_t> ret = std::make_shared<bd_t>();
     ret->m_desc = desc;
     ret->m_buffer = buff;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -2858,7 +2843,7 @@ inline std::string binding_desc_set_t::buff_binding_t::to_string() const {
             (void*)this, vulkan_utils::to_string(m_desc), (void*)m_buffer.get());
 }
 
-inline vc::ret_t binding_desc_set_t::buff_binding_t::_init() {
+inline vc::ret_t binding_desc_set_t::buff_binding_t::init() {
     if (m_buffer) {
         desc_buff_info = VkDescriptorBufferInfo {
             .buffer = m_buffer->vk_buff,
@@ -2893,11 +2878,11 @@ inline ref_t<binding_desc_set_t::sampl_binding_t> binding_desc_set_t::sampl_bind
         ref_t<img_sampl_t> sampl)
 {
     using sb_t = binding_desc_set_t::sampl_binding_t;
-    ref_t<sb_t> ret = ref_t<sb_t>::create_obj_ref(std::make_unique<sb_t>(), {view, sampl});
+    ref_t<sb_t> ret = std::make_shared<sb_t>();
     ret->m_desc = desc;
     ret->m_view = view;
     ret->m_sampler = sampl;
-    VK_ASSERT(ret->_call_init()); /* init does nothing */
+    VK_ASSERT(ret->init()); /* init does nothing */
     return ret;
 }
 
@@ -2907,7 +2892,7 @@ inline std::string binding_desc_set_t::sampl_binding_t::to_string() const {
             (void*)this, vulkan_utils::to_string(m_desc), (void*)m_view.get(), (void*)m_sampler.get());
 }
 
-inline vc::ret_t binding_desc_set_t::sampl_binding_t::_init() {
+inline vc::ret_t binding_desc_set_t::sampl_binding_t::init() {
     if (m_view && m_sampler) {
         imag_info = VkDescriptorImageInfo {
             .sampler = m_sampler->vk_sampler,
@@ -2935,10 +2920,10 @@ inline VkWriteDescriptorSet binding_desc_set_t::sampl_binding_t::get_write() con
     return desc_write;
 }
 
-inline vc::ret_t binding_desc_set_t::_init() {
+inline vc::ret_t binding_desc_set_t::init() {
     return VK_SUCCESS;
 }
-inline vc::ret_t binding_desc_set_t::_uninit() {
+inline vc::ret_t binding_desc_set_t::uninit() {
     return VK_SUCCESS;
 }
 inline ref_t<binding_desc_set_t> binding_desc_set_t::create(
@@ -2947,10 +2932,9 @@ inline ref_t<binding_desc_set_t> binding_desc_set_t::create(
     std::vector<vo::ref_base_t<vc::virt_traits_t>> deps;
     for (auto b : binds)
         deps.push_back(b);
-    auto ret = ref_t<binding_desc_set_t>::create_obj_ref(
-            std::make_unique<binding_desc_set_t>(), deps);
+    auto ret = std::make_shared<binding_desc_set_t>();
     ret->m_binds = binds;
-    VK_ASSERT(ret->_call_init());
+    VK_ASSERT(ret->init());
     return ret;
 }
 
