@@ -58,8 +58,6 @@ public:
 
     template <class T, class... Args>
     friend constexpr std::shared_ptr<T> std::make_shared(Args&&... args);
-
-    std::shared_ptr<void> storage;
 };
 
 /*!
