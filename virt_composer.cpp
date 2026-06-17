@@ -28,54 +28,6 @@ struct luaw_member_t {
     luaw_member_e member_type;
 };
 
-/*! This holds the objects reference such that lua can use them */
-struct object_ref_t {
-    /*! The actual virtual object that this reference points to is held by this vc::ref_t. */
-    vc::ref_t<vc::object_t> obj;
-
-    /*! this is required such that when this object gets removed it also gets removed from
-    objects_map */
-    std::string name;
-};
-
-/*!
- * This object holds all the cpp-backed objects with their associated names. This object also holds
- * the currently required objects by other coroutine object builders. It practically holds the
- * required state to split the parsing process, if needed, in multiple steps. It also is the main
- * holder of objects after parsing is done and can be used to further append objects via lua for
- * example.
- */
-struct parser_state_t {
-    /*! This contains a table with the objects, for implementation reasons, it was best to create
-     * a table with the maximum number of user objects (if you don't want this to be slow, keep the
-     * lua side objects in a resonable number) As such, inside lua, the light user data objects
-     * stored are actually indexes in this array.
-     */
-    std::vector<object_ref_t> objects;
-
-    /*! This holds an name-index map for all the objects above. It is used to find the objects by
-     * their name.
-     */
-    std::map<std::string, int> objects_map;
-
-    /*! Parser object: during parsing multiple coroutine will want an named object. This map
-     * stores those coroutines states. Once the object is resolved the coroutines will be moved
-     * back into the running queue. If after parsing this map is not empty we will know that there
-     * where unresolved references and error out.
-     */
-    std::map<std::string, std::vector<co::state_t *>> wanted_objects;
-
-    /*! A stack of free indexes inside the objects table, this is used to keep track of what slots
-     * can be used to store objects.
-     */
-    std::vector<int> free_objects;
-
-    parser_state_t(int table_size) : objects(table_size) {
-        for (int i = table_size-1; i >= 1; i--)
-            free_objects.push_back(i);
-    }
-};
-
 /*! This holds the state of the  */
 struct virt_state_t {
     co::pool_p pool;
@@ -139,8 +91,21 @@ struct virt_state_t {
     > build_psudo_object_cbks; ///< Callbacks for pseudo-objects (structure-based).
     /*! @} */
 
-    /*! Holds the objects as named references and parser info, @see parser_state_t */
-    parser_state_t ps = parser_state_t(MAX_NUMBER_OF_OBJECTS);
+    /*! Keeps all the objects that are curently alive in Lua */
+    std::set<vc::ref_t<vc::object_t>> obj_keepalive;
+
+    /*! This holds an name-index map for some of the objects above. It is used to find the objects by
+     * their name.
+     */
+    std::map<std::string, vc::object_t *> name_to_object;
+    std::map<vc::object_t *, std::string> object_to_name;
+
+    /*! Parser object: during parsing multiple coroutine will want an named object. This map
+     * stores those coroutines states. Once the object is resolved the coroutines will be moved
+     * back into the running queue. If after parsing this map is not empty we will know that there
+     * where unresolved references and error out.
+     */
+    std::map<std::string, std::vector<co::state_t *>> wanted_objects;
 
     /*! Holds a list of constants that can be used inside  */
     std::map<std::string, double> constants = {
@@ -223,35 +188,31 @@ std::shared_ptr<virt_state_t> create_state() {
 }
 
 ref_t<vc::object_t> get_ref_base(virt_state_t *vs, const std::string& name) {
-    if (!has(vs->ps.objects_map, name))
+    if (!has(vs->name_to_object, name))
         return nullptr;
-    return vs->ps.objects[vs->ps.objects_map[name]].obj;
+    return vs->name_to_object[name]->shared_this();
 }
 
 bool depend_resolver_internal_t::internal_check_depend(const std::string &dep_name) {
-     return has(vs->ps.objects_map, dep_name);
+     return has(vs->name_to_object, dep_name);
 }
 
 void depend_resolver_internal_t::internal_mark_wait(const std::string &dep_name, co::state_t *state) {
-    vs->ps.wanted_objects[dep_name].push_back(state);
+    vs->wanted_objects[dep_name].push_back(state);
 }
 
 vc::ref_t<vc::object_t> depend_resolver_internal_t::internal_get_dep_object(
         const std::string &dep_name)
 {
-    if (!has(vs->ps.objects_map, dep_name)) {
+    if (!has(vs->name_to_object, dep_name)) {
         DBG("Object not found");
         throw vc::except_t(std::format("Object not found, {}", dep_name));
     }
-    if (!vs->ps.objects[vs->ps.objects_map[dep_name]].obj) {
-        DBG("For some reason this object now holds a nullptr...");
-        throw vc::except_t("nullptr object");
-    }
-    return vs->ps.objects[vs->ps.objects_map[dep_name]].obj;
+    return vs->name_to_object[dep_name]->shared_this();
 }
 
 std::string depend_resolver_internal_t::internal_get_obj_type_name(const std::string &dep_name) {
-    return demangle<4>(typeid(vs->ps.objects[vs->ps.objects_map[dep_name]].obj.get()).name()).c_str();
+    return demangle<4>(typeid(vs->name_to_object[dep_name]).name()).c_str();
 }
 
 
@@ -300,30 +261,26 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
         DBG("Object into nullptr");
         throw vc::except_t{std::format("Object turned into nullptr: {}", depend_name)};
     }
-    if (has(vs->ps.objects_map, depend_name)) {
+    if (has(vs->name_to_object, depend_name)) {
         DBG("Name taken");
         throw vc::except_t{std::format("Tag name already exists: {}", depend_name)};
     }
-    int new_id = vs->ps.free_objects.back();
-    vs->ps.free_objects.pop_back();
+    vs->obj_keepalive.insert(depend);
 
-    // DBG("Adding object: %s [%d]", depend_name.c_str(), new_id);
-    vs->ps.objects_map[depend_name] = new_id;
-    depend->storage = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
-    vs->ps.objects[new_id].obj = depend;
-    vs->ps.objects[new_id].name = depend_name;
+    vs->name_to_object[depend_name] = depend.get();
+    vs->object_to_name[depend.get()] = depend_name;
 
     lua_rawgeti(vs->L, LUA_REGISTRYINDEX, vs->lua_table_idx);
-    lua_pushlightuserdata(vs->L, luaw_to_user_data(new_id));
+    lua_pushlightuserdata(vs->L, depend.get());
     luaL_setmetatable(vs->L, "__vc_metatable");
     lua_setfield(vs->L, -2, depend_name.c_str());
     lua_pop(vs->L, 1);
 
     /* Second, awake all the ones waiting for the respective dependency */
-    if (::has(vs->ps.wanted_objects, depend_name)) {
-        for (auto s : vs->ps.wanted_objects[depend_name])
+    if (::has(vs->wanted_objects, depend_name)) {
+        for (auto s : vs->wanted_objects[depend_name])
             co::external_sched_resume(s);
-        vs->ps.wanted_objects.erase(depend_name);
+        vs->wanted_objects.erase(depend_name);
     }
 }
 
@@ -570,8 +527,8 @@ err_e parse_config(vc::virt_state_t *vs, const char *path) {
             return VC_ERROR_GENERIC;
         }
 
-        if (vs->ps.wanted_objects.size()) {
-            for (auto &[k, v]: vs->ps.wanted_objects) {
+        if (vs->wanted_objects.size()) {
+            for (auto &[k, v]: vs->wanted_objects) {
                 DBG("WARNING: Unknown Object: %s", k.c_str());
             }
         }
@@ -602,13 +559,9 @@ static int luaopen_vc(lua_State *L) {
         luaL_newmetatable(L, "__vc_metatable");
 
         lua_pushcfunction(L, [](lua_State *L) {
-            int id = luaw_from_user_data(lua_touserdata(L, -1)); /* an int, ok on unwind */
+            auto obj = (vc::object_t *)lua_touserdata(L, -1);
             auto vs = luaw_get_virt_state(L);
-            auto &o = vs->ps.objects[id]; /* a reference, ok on unwind? (if err) */
-            if (!o.obj) {
-                luaw_push_error(L, std::format("invalid object id: {}", id));
-            }
-            lua_pushstring(L, o.obj->to_string().c_str());
+            lua_pushstring(L, obj->to_string().c_str());
             return 1;
         });
         lua_setfield(L, -2, "__tostring");
@@ -616,18 +569,11 @@ static int luaopen_vc(lua_State *L) {
         /* params: 1.usrptr, 2.key -> returns: 1.value */
         lua_pushcfunction(L, [](lua_State *L) {
             // DBG("__index: %d", lua_gettop(L));
-            int id = luaw_from_user_data(lua_touserdata(L, -2)); /* an int, ok on unwind */
+            auto obj = (vc::object_t *)lua_touserdata(L, -2);
             const char *member_name = lua_tostring(L, -1); /* an const char *, ok on unwind */
 
-            // DBG("usr_id: %d", id);
-            // DBG("member_name: %s", member_name);
-
             auto vs = luaw_get_virt_state(L);
-            auto &o = vs->ps.objects[id]; /* a reference, ok on unwind? (if err) */
-            if (!o.obj) {
-                luaw_push_error(L, std::format("invalid object id: {}", id));
-            }
-            vc::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
+            vc::object_type_e class_id = obj->type_id(); /* an int, still ok on unwind */
             if (class_id < 0 || class_id >= (int)VIRT_TYPE_CNT) {
                 luaw_push_error(L, std::format("invalid class id: {}", vc::to_string(class_id)));
             }
@@ -652,19 +598,11 @@ static int luaopen_vc(lua_State *L) {
 
         /* params: 1.usrptr, 2.key, 3.value  */
         lua_pushcfunction(L, [](lua_State *L) {
-            // DBG("__newindex: %d", lua_gettop(L));
-            int id = luaw_from_user_data(lua_touserdata(L, -3)); /* an int, ok on unwind */
+            auto obj = (vc::object_t *)lua_touserdata(L, -3);
             const char *member_name = lua_tostring(L, -2); /* an const char *, ok on unwind */
 
-            // DBG("usr_id: %d", id);
-            // DBG("member_name: %s", member_name);
-
             auto vs = luaw_get_virt_state(L);
-            auto &o = vs->ps.objects[id]; /* a reference, ok on unwind? (if err) */
-            if (!o.obj) {
-                luaw_push_error(L, std::format("invalid object id: {}", id));
-            }
-            vc::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
+            vc::object_type_e class_id = obj->type_id(); /* an int, still ok on unwind */
             if (class_id < 0 || class_id >= (int)VIRT_TYPE_CNT) {
                 luaw_push_error(L, std::format("invalid class id: {}", vc::to_string(class_id)));
             }
@@ -680,23 +618,15 @@ static int luaopen_vc(lua_State *L) {
         /* params: 1.usrptr [... rest of params] */
         lua_pushcfunction(L, [](lua_State *L) {
             // DBG("__call: %d", lua_gettop(L));
-            int id = luaw_from_user_data(lua_touserdata(L, 1)); /* an int, ok on unwind */
-
-            // DBG("usr_id: %d", id);
-
+            auto obj = (vc::object_t *)lua_touserdata(L, -1);
             auto vs = luaw_get_virt_state(L);
-            auto &o = vs->ps.objects[id]; /* a reference, ok on unwind? (if err) */
-            if (!o.obj) {
-                luaw_push_error(L, std::format("invalid object id: {}", id));
-            }
-            // DBG("tostr: %s", o.obj->to_string().c_str());
-            vc::object_type_e class_id = o.obj->type_id(); /* an int, still ok on unwind */
+            vc::object_type_e class_id = obj->type_id(); /* an int, still ok on unwind */
             if (class_id != VC_TYPE_LUA_FUNCTION) {
                 luaw_push_error(L, std::format("invalid class id: {} is not VC_TYPE_LUA_FUNCTION",
                         vc::to_string(class_id)));
             }
             lua_remove(L, 1); /* We don't want the function itself as an parameter */
-            return o.obj->to_related<lua_function_t>()->call(L);
+            return obj->to_related<lua_function_t>()->call(L);
         });
         lua_setfield(L, -2, "__call");
 
@@ -704,22 +634,18 @@ static int luaopen_vc(lua_State *L) {
         lua_pushcfunction(L, [](lua_State *L) {
             DBG("__gc");
 
-            int id = luaw_from_user_data(lua_touserdata(L, -1)); /* an int, ok on unwind */
+            auto obj = ((vc::object_t *)lua_touserdata(L, -1))->shared_this();
             auto vs = luaw_get_virt_state(L);
-            auto &o = vs->ps.objects[id]; /* a reference, ok on unwind? (if err) */
-            if (!o.obj) {
-                return 0;
-            }
 
             /* The object is no longer known to lua, as such we also delete it's slot. Obs: It may
             still be alive, meaning, it is known by the c++ side, just not by the lua side.
             !!! It will also loose it's name with this operation (Is that really ok?) */
-            o.obj->storage = nullptr;
+            if (has(vs->object_to_name, obj.get())) {
+                vs->name_to_object.erase(vs->object_to_name[obj.get()]);
+                vs->object_to_name.erase(obj.get());
+            }
+            vs->obj_keepalive.erase(obj);
 
-            /* we clean it's name mapping, it's reference and free it's id */
-            vs->ps.objects_map.erase(o.name);
-            o = vc::object_ref_t{};
-            vs->ps.free_objects.push_back(id);
             return 0;
         });
         lua_setfield(L, -2, "__gc");
@@ -826,13 +752,6 @@ lua_State *luaw_get_lua_state(vc::virt_state_t *vs) {
     return vs->L;
 }
 
-vc::ref_t<vc::object_t> luaw_get_object_at_index(vc::virt_state_t *vs, ssize_t index) {
-    if (index <= 0 || index >= (ssize_t)vs->ps.objects.size()) {
-        return nullptr; /* 0 is also invalid from our point of view */
-    }
-    return vs->ps.objects[index].obj;
-}
-
 void set_lua_class_member(virt_state_t *vs, object_type_e type, const char *member_name,
         lua_CFunction fn, luaw_member_e member_type)
 {
@@ -869,41 +788,28 @@ void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type
 int push_vc_object(lua_State *L, ref_t<object_t> object) {
     auto vs = luaw_get_virt_state(L);
 
-    if (!object->storage) {
-        /* So this object was no longer known by the lua side, we must resurect it */
+    if (!has(vs->obj_keepalive, object)) {
+        vs->obj_keepalive.insert(object);
 
-        /* We first get it a new id */
-        int new_id = vs->ps.free_objects.back();
-        vs->ps.free_objects.pop_back();
-
-        /* make it reference it's own id */
-        object->storage = std::shared_ptr<void>((void *)(intptr_t)new_id, [](void *){});
-
-        /* add it's lua-name-mapping and it's lua-id-mapping */
         std::string name = new_anon_name(vs);
-        vs->ps.objects_map[name] = new_id;
-        vs->ps.objects[new_id].obj = object;
-        vs->ps.objects[new_id].name = name;
+        vs->name_to_object[name] = object.get();
+        vs->object_to_name[object.get()] = name;
 
         lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_table_idx);
-        lua_pushlightuserdata(L, luaw_to_user_data(new_id));
+        lua_pushlightuserdata(L, object.get());
         luaL_setmetatable(L, "__vc_metatable");
         lua_setfield(L, -2, name.c_str());
         lua_pop(L, 1);
     }
-    int obj_id = (intptr_t)object->storage.get();
-    if (obj_id >= (int)vs->ps.objects.size() || obj_id < 0) {
-        DBG("internal_error: Integrity check failed");
-        return -1;
-    }
-    lua_pushlightuserdata(L, luaw_to_user_data(obj_id));
+    lua_pushlightuserdata(L, object.get());
     luaL_setmetatable(L, "__vc_metatable");
     return 0;
 }
 
 
-void luaw_push_error(lua_State *L, const std::string& err_str) {
-    DBG("Throwing error: %s", err_str.c_str());
+void luaw_push_error(lua_State *L, const std::string& err_str, const std::source_location sloc) {
+    DBG("Throwing error: %s SRC_LOC[%s:%d %s]",
+            err_str.c_str(), sloc.file_name(), sloc.line(), sloc.function_name());
     lua_Debug ar;
     std::string context;
     int i = 2;
@@ -1079,13 +985,13 @@ static int internal_create_object(lua_State *L) {
         lua_error(L);
     }
 
-    if (vs->ps.wanted_objects.size()) {
-        for (auto &[k, v]: vs->ps.wanted_objects) {
+    if (vs->wanted_objects.size()) {
+        for (auto &[k, v]: vs->wanted_objects) {
             DBG("WARNING: Unknown Object: %s", k.c_str());
         }
     }
 
-    if (!has(vs->ps.objects_map, name)) {
+    if (!has(vs->name_to_object, name)) {
         luaw_push_error(L, "internal_error: Object is not found after creation");
         lua_error(L);
     }

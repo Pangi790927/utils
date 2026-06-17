@@ -902,12 +902,6 @@ co::task_t build_pseudo_object(virt_state_t *vs, const std::string& name, fkyaml
  */
 std::string new_anon_name(virt_state_t *vs);
 
-/*! [INTERNAL] We use an array to keep the members */
-inline void* luaw_to_user_data(int index) { return (void*)(intptr_t)(index); }
-
-/*! [INTERNAL] We use an array to keep the members */
-inline int luaw_from_user_data(void *val) { return (int)(intptr_t)(val); }
-
 /*!
  * [INTERNAL] Pushes a formatted error message with stack trace context to Lua and raises a Lua
  * error.
@@ -930,7 +924,8 @@ inline int luaw_from_user_data(void *val) { return (int)(intptr_t)(val); }
  *
  * @see lua_Debug, lua_getstack, lua_getinfo, lua_error
  */
-void luaw_push_error(lua_State *L, const std::string& err_str);
+void luaw_push_error(lua_State *L, const std::string& err_str,
+        const std::source_location sloc = std::source_location::current());
 
 /*!
  * [INTERNAL] Catches C++ exceptions and propagates them as Lua errors.
@@ -975,15 +970,6 @@ virt_state_t *luaw_get_virt_state(lua_State *L);
  *
  */
 lua_State *luaw_get_lua_state(virt_state_t *vs);
-
-/**
- * [INTERNAL] Gets the object at the given index from the virtual state.
- * @param vs                        Virtual state containing the object list.
- * @param index                     Index of the object to retrieve.
- * @return vc::ref_t<vc::object_t>  Object reference, contains `nullptr` if the index is invalid.
- */
-vc::ref_t<vc::object_t> luaw_get_object_at_index(virt_state_t *vs, ssize_t index);
-
 
 /*!
  * [INTERNAL] Registers a Lua-accessible member (function or object) for a C++ class type.
@@ -1197,14 +1183,7 @@ struct luaw_param_t<vc::ref_t<T>, index> {
         // DBG("Ref at index: %zd", index);
         if (lua_isnil(L, index))
             return vc::ref_t<T>{}; /* if the user intended to pass a nill, we give it as a nullptr */
-        int obj_index = luaw_from_user_data(lua_touserdata(L, index));
-        if (obj_index == 0) {
-            luaw_push_error(L, std::format("Invalid parameter at index {} of expected type {} but "
-                    "got [{}] instead",
-                    index, demangle<T>(), lua_typename(L, lua_type(L, index))));
-        }
-        auto vs = luaw_get_virt_state(L);
-        return luaw_get_object_at_index(vs, obj_index)->to_related<T>();
+        return ((vc::object_t *)lua_touserdata(L, index))->shared_this();
     }
 };
 
@@ -1527,12 +1506,7 @@ inline int luaw_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
 
 template <typename T, auto member_ptr, typename ...Params, size_t ...I>
 int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
-    int index = luaw_from_user_data(lua_touserdata(L, 1));
-    if (index == 0) {
-        luaw_push_error(L, "Nil user object can't call member function! (check if : used)");
-    }
-    auto vs = luaw_get_virt_state(L);
-    auto o = luaw_get_object_at_index(vs, index);
+    auto o = (vc::object_t *)lua_touserdata(L, 1);
     if (!o)
         luaw_push_error(L, "internal_error: Nil user object can't call member function!");
     auto obj = o->to_related<T>();
@@ -1716,12 +1690,7 @@ int luaw_push_cpp_object(lua_State *L, const T &object) {
 template <typename T, auto member_ptr>
 int luaw_member_object_wrapper(lua_State *L) {
     try {
-        int index = luaw_from_user_data(lua_touserdata(L, -2)); /* an int, ok on unwind */
-        if (index == 0) {
-            luaw_push_error(L, "Nil user object can't get member!");
-        }
-        auto vs = luaw_get_virt_state(L);
-        auto o = luaw_get_object_at_index(vs, index);
+        auto o = (vc::object_t *)lua_touserdata(L, -2);
         if (!o) {
             luaw_push_error(L, "internal_error: Nil user object can't get member!");
         }
@@ -1823,14 +1792,7 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
         return 0;
     }
     else if constexpr (is_vc_ref_t<Type>::value) {
-        int id = luaw_from_user_data(lua_touserdata(L, index)); /* an int, ok on unwind */
-        if (id == 0) {
-            object = nullptr;
-            return 0;
-        }
-        auto vs = luaw_get_virt_state(L);
-        object = luaw_get_object_at_index(vs, id);
-        return 0;
+        object = ((vc::object_t *)lua_touserdata(L, index))->to_related<Type::element_type>();
     }
     else {
         demangle_static_assert<false, decltype(object)>(" - Is not a valid object type");
@@ -1840,14 +1802,9 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
 
 template <typename T, auto member_ptr>
 int luaw_member_setter_object_wrapper(lua_State *L) {
-    int index = luaw_from_user_data(lua_touserdata(L, -3)); /* an int, ok on unwind */
-    if (index == 0) {
-        luaw_push_error(L, "Nil user object can't set member!");
-    }
-    auto vs = luaw_get_virt_state(L);
-    auto o = luaw_get_object_at_index(vs, index);
+    auto o = (vc::object_t *)lua_touserdata(L, -3);
     if (!o) {
-        luaw_push_error(L, "internal_error: Nil user object can't set member!");
+        luaw_push_error(L, "Invalid userdata");
     }
     auto obj = o->to_related<T>();
     auto &member = obj.get()->*member_ptr;
