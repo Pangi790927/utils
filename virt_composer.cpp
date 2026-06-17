@@ -496,7 +496,7 @@ co::task_t build_pseudo_object(vc::virt_state_t *vs, const std::string& name, fk
 }
 
 std::string new_anon_name(virt_state_t *vs) {
-    return "anonymous_" + std::to_string(vs->anonymous_increment++);
+    return "__" + std::to_string(vs->anonymous_increment++);
 }
 
 static co::task_t build_schema(vc::virt_state_t *vs, fkyaml::node& root) {
