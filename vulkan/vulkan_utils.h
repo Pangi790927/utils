@@ -3771,7 +3771,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
     DBG("NEW GLSLANG COMPILE");
 
     glslang_stage_t gs_stage;
-    switch (stage) {
+    switch (vku_stage) {
         case VKU_SPIRV_VERTEX:    gs_stage = GLSLANG_STAGE_VERTEX;         break;
         case VKU_SPIRV_TESS_CTRL: gs_stage = GLSLANG_STAGE_TESSCONTROL;    break;
         case VKU_SPIRV_TESS_EVAL: gs_stage = GLSLANG_STAGE_TESSEVALUATION; break;
@@ -3779,7 +3779,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
         case VKU_SPIRV_FRAGMENT:  gs_stage = GLSLANG_STAGE_FRAGMENT;       break;
         case VKU_SPIRV_COMPUTE:   gs_stage = GLSLANG_STAGE_COMPUTE;        break;
         default:
-            DBG("Unknown shader stage type: %d", (uint32_t)stage);
+            DBG("Unknown shader stage type: %d", (uint32_t)vku_stage);
             throw vku::except_t(VK_ERROR_UNKNOWN);
     }
 
