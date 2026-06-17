@@ -453,11 +453,6 @@ static co::task<vc::ref_t<vc::object_t>> init_lua_script(vc::virt_state_t *vs,
     co_return nullptr;
 }
 
-/* TODO: So, this must be dependent on ps not vs, and also a lot of functions that call lua scripts
-must be changed to directly accept an ps instead of a vs. Or maybe not, all we need in fact is a
-way to create a snapshot and in case of error, to retreive the old status of the objects.
-    OF Course this invites UB if destructors/constructors are called. Maybe we need just to live
-with it? */
 co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
         const std::string& name, fkyaml::node& node)
 {
@@ -476,7 +471,6 @@ co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
 
     if (node["m_type"] == "vc::lua_script_t")
         co_return co_await init_lua_script(vs, name, node);
-    /* TODO: also add here integer_t, float_t, string_t */
 
     if (node["m_type"] == "vc::integer_t") {
         auto obj = integer_t::create(co_await resolve_int(vs, node["value"]));
@@ -739,9 +733,6 @@ static int luaopen_vc(lua_State *L) {
     ASSERT_FN(CHK_BOOL(top == lua_gettop(L))); /* sanity check */
 
     {
-        /* TODO: recheck the old registration functions */
-        /* Registers the vulkan_utils library and some standalone functions from vku(vulkan utils)
-        or vkc(vulkan composer) */
         vs->tab_funcs.push_back({NULL, NULL});
         luaL_checkversion(L);
         lua_createtable(L, 0, vs->tab_funcs.size() - 1);
@@ -822,7 +813,6 @@ int luaw_catch_exception(lua_State *L) {
 }
 
 vc::virt_state_t *luaw_get_virt_state(lua_State *L) {
-    /* TODO: set/get lua_vs from a named entry inside the registry index */
     lua_pushstring(L, "virt_state");
     lua_gettable(L, LUA_REGISTRYINDEX);
     auto ptr = (vc::virt_state_t *)lua_touserdata(L, -1);
