@@ -148,8 +148,8 @@ struct virt_state_t {
         {"SIZEOF_INT32", (double)sizeof(int32_t)},
         {"SIZEOF_INT64", (double)sizeof(int64_t)},
         {"SIZEOF_UINT16", (double)sizeof(uint16_t)},
-        {"SIZEOF_UINT32", (double)sizeof(int32_t)},
-        {"SIZEOF_UINT64", (double)sizeof(int64_t)},
+        {"SIZEOF_UINT32", (double)sizeof(uint32_t)},
+        {"SIZEOF_UINT64", (double)sizeof(uint64_t)},
         {"SIZEOF_FLOAT", (double)sizeof(float)},
         {"SIZEOF_DOUBLE", (double)sizeof(double)},
         {"SIZEOF_VEC_2F", (double)sizeof(float)*2},
@@ -825,7 +825,7 @@ lua_State *luaw_get_lua_state(vc::virt_state_t *vs) {
 }
 
 vc::ref_t<vc::object_t> luaw_get_object_at_index(vc::virt_state_t *vs, ssize_t index) {
-    if (index <= 0 && index >= (ssize_t)vs->ps.objects.size()) {
+    if (index <= 0 || index >= (ssize_t)vs->ps.objects.size()) {
         return nullptr; /* 0 is also invalid from our point of view */
     }
     return vs->ps.objects[index].obj;

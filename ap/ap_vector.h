@@ -153,7 +153,7 @@ public:
         auto p_data = ap_malloc_ptr(ctx, datap);
 
         for (uint64_t i = 0; i < cnt; i++) {
-            void *loc = (void *)((uint8_t *)p_data + cnt * sizeof(T));
+            void *loc = (void *)((uint8_t *)p_data + i * sizeof(T));
             FNS_T::delete_obj(loc);
         }
 
