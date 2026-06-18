@@ -821,14 +821,29 @@ void luaw_register_inheritance(virt_state_t *vs);
 
 /* TODO: add the functions to add the exception callbacks */
 
-/*! pushes the reference as a light user data on the lua stack (returns 0 if ok, ie allways, usefull
- * for lightweight data that is not meant to be tracked by name) */
-int luaw_push_unnamed(lua_State *L, ref_t<object_t> object);
+/*! 
+ * @brief Pushes the reference as a light user data on the lua stack (returns 0 if ok, ie allways,
+ * useful for lightweight data that is not meant to be tracked by name)
+ * 
+ * @param L      Lua state
+ * @param object The virt composer object to push
+ */
+int push_vc_object(lua_State *L, ref_t<object_t> object);
 
 /*!
- * Ret is the type that lua returned, can be a std::tupple
- * Args is the arguments that will be passed to lua
- * if the call errors out, it will return an apropriate vc error in err_e  */
+ * @brief Calls a lua function from inside the lua state.
+ * 
+ * @tparam R            Type of the return value of the called function.
+ * @tparam Args         The types of the function parameters
+ * 
+ * @param vs            The virtual state that contains the function
+ * @param function_name The name of the lua function
+ * @param args...       The params to be passed to the respective function, they will be pushed on
+ *                      the lua stack apriory of the function call
+ * 
+ * @return A pair consisting of the return value from the lua function and the return status of
+ *         the virtual composer system
+ */
 template <typename R, typename ...Args>
 std::pair<std::conditional_t<!std::is_void_v<R>, R, int>, err_e>
 call_lua(virt_state_t *vs, const char *function_name,
@@ -1008,9 +1023,6 @@ void set_class_member_setter(virt_state_t *vs, object_type_e type, const char *m
 
 /*! TODO: desc */
 void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type_e derived);
-
-/*! TODO: desc */
-int push_vc_object(lua_State *L, ref_t<object_t> object);
 
 /*! TODO: desc */
 ref_t<vc::object_t> get_ref_base(virt_state_t *vs, const std::string& name);

@@ -787,33 +787,11 @@ void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type
 
 int push_vc_object(lua_State *L, ref_t<object_t> object) {
     auto vs = luaw_get_virt_state(L);
-
-    if (!has(vs->obj_keepalive, object)) {
-        vs->obj_keepalive.insert(object);
-
-        std::string name = new_anon_name(vs);
-        vs->name_to_object[name] = object.get();
-        vs->object_to_name[object.get()] = name;
-
-        lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_table_idx);
-        lua_pushlightuserdata(L, object.get());
-        luaL_setmetatable(L, "__vc_metatable");
-        lua_setfield(L, -2, name.c_str());
-        lua_pop(L, 1);
-    }
-    lua_pushlightuserdata(L, object.get());
-    luaL_setmetatable(L, "__vc_metatable");
-    return 0;
-}
-
-int luaw_push_unnamed(lua_State *L, ref_t<object_t> object) {
-    auto vs = luaw_get_virt_state(L);
     vs->obj_keepalive.insert(object);
     lua_pushlightuserdata(L, object.get());
     luaL_setmetatable(L, "__vc_metatable");
     return 0;
 }
-
 
 void luaw_push_error(lua_State *L, const std::string& err_str, const std::source_location sloc) {
     DBG("Throwing error: %s SRC_LOC[%s:%d %s]",
