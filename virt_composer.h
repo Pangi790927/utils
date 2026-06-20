@@ -42,6 +42,8 @@
 
 /* TODO: Check the docs of composer, so that I can make sure the documentation still makes sense */
 
+#include  <typeindex>
+
 #include "virt_object.h"
 #include "co_utils.h"
 #include "yaml.h"
@@ -125,6 +127,13 @@ compiling is done, you also know how many types where defined, so relocation is 
 virt_composer::luaw_register_member_object<             \
 /* self        */   obj_type,                           \
 /* member      */   &obj_type::memb>                    \
+/* member name */   (vs, #memb)
+
+/*! TODO: doc like above */
+#define VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER(vs, obj_type, memb)   \
+virt_composer::register_trivially_copyable_member<                  \
+/* self        */   obj_type,                                       \
+/* member      */   &obj_type::memb>                                \
 /* member name */   (vs, #memb)
 
 /*!
@@ -507,13 +516,15 @@ inline std::string to_string(const object_t& ref);
  */
 std::shared_ptr<virt_state_t> create_state();
 
-/*! TODO: Explain*/
+/*! TODO: DOC (in short, it finds the object witht the name "name" and type "T") */
 template <typename T>
 ref_t<T> get_ref(virt_state_t *vs, const std::string& name);
 
+/*! TODO: DOC */
 template <typename T>
 inline T get_enum_val(fkyaml::node &node, const std::unordered_map<std::string, T>& enum_vals);
 
+/*! TODO: DOC */
 template <typename T>
 inline T get_enum_val(fkyaml::node &n);
 
@@ -697,6 +708,16 @@ co::task<double> resolve_float(virt_state_t *vs, fkyaml::node& node);
 template <typename T>
 co::task<vc::ref_t<T>> resolve_obj(virt_state_t *vs, fkyaml::node& node);
 
+/*! TODO: documentation like above
+ * short: you give it the type of the member, the name of the object and the name of the member
+ * and it returns the value from the member object. Usefull for opaque (trivially copiable) member
+ * that are copied from other objects inside yaml
+ * 
+ * obj name and memb name are taken from inside the node and the node must have the !copy tag
+ */
+template <typename T>
+co::task<T> resolve_memb(virt_state_t *vs, fkyaml::node& node);
+
 /* Virt Composer - LUA API
 ------------------------------------------------------------------------------------------------- */
 
@@ -780,7 +801,7 @@ void luaw_register_member_function(virt_state_t *vs, const char *function_name);
  *
  * This template function registers a member variable of a C++ class (which must inherit from
  * `virt_composer::object_t`) so that it can be accessed and modified from Lua. It bridges the C++
- * member variable to Lua, allowing Lua scripts to get/set its value.
+ * member variable to Lua, allowing Lua scripts and yaml config to get/set its value.
  *
  * @tparam T            The C++ class type (must inherit from `virt_composer::object_t`).
  * @tparam member_ptr   Pointer to the member variable to register.
@@ -817,7 +838,7 @@ void luaw_register_member_object(virt_state_t *vs, const char *member_name);
 /*! TODO: describe */
 template <typename T, typename U>
 requires std::is_base_of_v<vc::object_t, T> && std::is_base_of_v<vc::object_t, U>
-void luaw_register_inheritance(virt_state_t *vs);
+void register_inheritance(virt_state_t *vs);
 
 /* TODO: add the functions to add the exception callbacks */
 
@@ -990,6 +1011,10 @@ virt_state_t *luaw_get_virt_state(lua_State *L);
  */
 lua_State *luaw_get_lua_state(virt_state_t *vs);
 
+/*! [INTERNAL] TODO: doc */
+void set_trivial_copy_member(virt_state_t *vs, object_type_e type, const char *member_name,
+        std::type_index tid, std::function<void(vc::object_t *, void *, size_t)> copy_fn);
+
 /*!
  * [INTERNAL] Registers a Lua-accessible member (function or object) for a C++ class type.
  *
@@ -1030,6 +1055,10 @@ ref_t<vc::object_t> get_ref_base(virt_state_t *vs, const std::string& name);
 template <typename T>
 ref_t<T> get_ref(virt_state_t *vs, const std::string& name) {
         return get_ref_base(vs, name)->to_related<T>(); }
+
+/*! TODO: internal desc */
+co::task_t resolve_memb_data(virt_state_t *vs, const std::string &obj_name,
+        const std::string& memb_name, void *dst, size_t sz, std::type_index tid);
 
 /*!
  * [INTERNAL] Non-templated core of the dependency resolver.
@@ -1140,6 +1169,18 @@ co::task<vc::ref_t<T>> resolve_obj(virt_state_t *vs, fkyaml::node& node) {
             fkyaml::node::serialize(node))};
 }
 
+template <typename T>
+co::task<T> resolve_memb(virt_state_t *vs, fkyaml::node& node) {
+    T ret;
+    if (!node.has_tag_name() || node.get_tag_name() != "!copy")
+        throw vc::except_t{std::format("node: {} must have the tag !copy for this operation",
+                node.as_str())};
+    std::string obj_name = node["object"].as_str();
+    std::string memb_name = node["member"].as_str();
+    co_await resolve_memb_data(vs, obj_name, memb_name, &ret, sizeof(T), typeid(T));
+    co_return ret;
+}
+
 template <bool B, typename T>
 inline consteval void luaw_static_assert(const char *description) {
     if constexpr (!B)
@@ -1206,8 +1247,6 @@ struct luaw_param_t<vc::ref_t<T>, index> {
 /* This resolves bitmasks received from lua to an vc parameter */
 template <typename T, ssize_t index>
 struct luaw_param_t<bm_t<T>, index> {
-    std::function<void (lua_State *, const std::string&)> throw_error = luaw_push_error;
-
     T luaw_single_param(lua_State *L) {
         // DBG("BitMap at index: %zd", index);
         /* There are 2 options here (maybe later we will also add numbers, but not for now):
@@ -1217,7 +1256,7 @@ struct luaw_param_t<bm_t<T>, index> {
         auto from_string = [this](lua_State *L, int idx) -> T {
             const char *val = lua_tostring(L, idx);
             if (!val) {
-                throw_error(L, std::format(
+                luaw_push_error(L, std::format(
                         "Invalid parameter at index {}, failed conversion to [vc-bitmask] "
                         "object is an invalid string: [{}]",
                         idx, lua_typename(L, lua_type(L, idx))));
@@ -1229,7 +1268,7 @@ struct luaw_param_t<bm_t<T>, index> {
             int valid = 0;
             uint32_t val = lua_tointegerx(L, idx, &valid);
             if (!valid) {
-                throw_error(L, std::format(
+                luaw_push_error(L, std::format(
                         "Invalid parameter at index {}, failed conversion to [vc-bitmask] "
                         "object is an invalid integer: [{}]",
                         idx, lua_typename(L, lua_type(L, idx))));
@@ -1252,7 +1291,7 @@ struct luaw_param_t<bm_t<T>, index> {
                 else if (lua_isstring(L, -1))
                     ret = (T)(ret | from_string(L, -1));
                 else {
-                    throw_error(L, std::format(
+                    luaw_push_error(L, std::format(
                             "Invalid parameter at index {}, failed conversion to [vc-bitmask] "
                             "object is an invalid string or integer: [{}]",
                             index, lua_typename(L, lua_type(L, index))));
@@ -1262,7 +1301,7 @@ struct luaw_param_t<bm_t<T>, index> {
             return ret;
         }
         else {
-            throw_error(L, std::format(
+            luaw_push_error(L, std::format(
                     "Invalid parameter at index {}, failed conversion to [vc-bitmask] "
                     "object is neither table, integer or string: [{}]",
                     index, lua_typename(L, lua_type(L, index))));
@@ -1831,7 +1870,6 @@ int luaw_member_setter_object_wrapper(lua_State *L) {
     return 0;
 }
 
-
 template <typename T, auto member_ptr, typename ...Params>
 void luaw_register_member_function(virt_state_t *vs, const char *function_name) {
     set_lua_class_member(vs, T::type_id_static(), function_name,
@@ -1846,9 +1884,24 @@ void luaw_register_member_object(virt_state_t *vs, const char *member_name) {
             &luaw_member_setter_object_wrapper<T, member_ptr>);
 }
 
+template <typename T, auto member_ptr>
+void register_trivially_copyable_member(virt_state_t *vs, const char *member_name) {
+    using member_type = std::decay_t<decltype(((T *)NULL)->*member_ptr)>;
+    auto typeid_of_member = std::type_index(typeid(member_type));
+    static_assert(std::is_trivially_copyable_v<member_type>,
+            "The member object must be trivially copiable to be registered");
+
+    set_trivial_copy_member(vs, T::type_id_static(), member_name, typeid_of_member,
+        [](object_t *obj, void *dst, size_t sz) {
+            auto tobj = (T *)obj;
+            memcpy(dst, &(tobj->*member_ptr), sz);
+        }
+    );
+}
+
 template <typename T, typename U>
 requires std::is_base_of_v<vc::object_t, T> && std::is_base_of_v<vc::object_t, U>
-void luaw_register_inheritance(virt_state_t *vs) {
+void register_inheritance(virt_state_t *vs) {
     if constexpr (std::is_base_of_v<U, T>)
         set_base_derived_relation(vs, U::type_id_static(), T::type_id_static());
     else if constexpr (std::is_base_of_v<T, U>)
@@ -1889,7 +1942,7 @@ call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
         return {0, VC_ERROR_OK};
     }
     else {
-        R result;
+        R result = {};
         if (lua_pcall(L, argc, 1, 0) != LUA_OK) {
             DBG("LUA call_lua[%s([%d])] Failed: \n%s", function_name, argc, lua_tostring(L, -1));
             lua_pop(L, 1);

@@ -214,7 +214,7 @@ int main(int argc, char const *argv[])
     auto ibuff = create_ibuff(dev, cp, indices);
 
     auto desc_pool = vku::desc_pool_t::create(dev, bindings, 1);
-    auto desc_set = vku::desc_set_t::create(desc_pool, pl, bindings);
+    auto desc_set = vku::desc_set_t::create(desc_pool, pl->vk_desc_set_layout, bindings);
 
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
@@ -250,12 +250,13 @@ int main(int argc, char const *argv[])
             cbuff->begin_rpass(fbs, img_idx);
             cbuff->bind_vert_buffs(0, {{vbuff, 0}});
             cbuff->bind_idx_buff(ibuff, 0, VK_INDEX_TYPE_UINT16);
-            cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_GRAPHICS, pl, desc_set);
+            cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_GRAPHICS, pl->vk_layout, desc_set);
             cbuff->draw_idx(pl, indices.size());
             cbuff->end_rpass();
             cbuff->end();
 
-            vku::submit_cmdbuff({{img_sem, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
+            vku::submit_cmdbuff(
+                    {{img_sem, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
                     cbuff, fence, {draw_sem});
             vku::present(swc, {draw_sem}, img_idx);
 
@@ -266,6 +267,7 @@ int main(int argc, char const *argv[])
             if (e.vk_err == VK_SUBOPTIMAL_KHR) {
                 vkDeviceWaitIdle(dev->vk_dev);
 
+                /* TODO: this must be rethought */
                 fbs->uninit();
                 pl->uninit();
                 rp->uninit();

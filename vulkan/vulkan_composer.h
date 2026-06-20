@@ -786,6 +786,18 @@ enum vkc_error_e : int32_t {
     VKC_ERROR_FAILED_LUA_EXEC = -8,
 };
 
+#define VC_LUA_ASSERT(call) do {\
+    auto [ret, err] = (call);\
+    if (intptr_t(ret) < 0) {\
+        DBGE("FAILED[ret]: " #call);\
+        return -1;\
+    }\
+    if (intptr_t(err) < 0) {\
+        DBGE("FAILED[err]: " #call);\
+        return -1;\
+    }\
+} while (0)
+
 namespace virt_composer {
 
 extern inline std::unordered_map<std::string, VkBufferUsageFlagBits>
@@ -1332,8 +1344,9 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, begin_rpass, vku::ref_t<vku::framebuffs_t>, uint32_t);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_vert_buffs,
             uint32_t, std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>>);
-    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_desc_set,
-            vc::bm_t<VkPipelineBindPoint>, vku::ref_t<vku::pipeline_t>, vku::ref_t<vku::desc_set_t>);
+    /* TODO: */
+    // VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_desc_set,
+    //         vc::bm_t<VkPipelineBindPoint>, vku::ref_t<vku::pipeline_t>, vku::ref_t<vku::desc_set_t>);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_idx_buff,
             vc::ref_t<vku::buffer_t>, uint64_t, vc::bm_t<VkIndexType>);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, draw, vku::ref_t<vku::pipeline_t>, uint64_t);
@@ -1349,6 +1362,16 @@ inline int register_meta(vc::virt_state_t *vs) {
     // ----------------------------------------------------------------------------------------- */
     VC_REGISTER_MEMBER_FUNCTION(vs, vkc::cpu_buffer_t, data);
     VC_REGISTER_MEMBER_FUNCTION(vs, vkc::cpu_buffer_t, size);
+
+    // /* vku::pipeline_t
+    // ----------------------------------------------------------------------------------------- */
+    VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER(vs, vku::pipeline_t, vk_layout);
+    VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER(vs, vku::pipeline_t, vk_desc_set_layout);
+
+    // /* vku::compute_pipeline_t
+    // ----------------------------------------------------------------------------------------- */
+    VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER(vs, vku::compute_pipeline_t, vk_layout);
+    VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER(vs, vku::compute_pipeline_t, vk_desc_set_layout);
 
     /* Done objects
     ----------------------------------------------------------------------------------------- */
@@ -1530,7 +1553,7 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto inst = co_await resolve_obj<vku::instance_t>(vs, node["m_instance"]);
             auto surf = co_await resolve_obj<vku::surface_t>(vs, node["m_surface"]);
-            auto obj = vku::device_t::create(surf);
+            auto obj = vku::device_t::create(inst, surf);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -1734,9 +1757,9 @@ inline int register_meta(vc::virt_state_t *vs) {
             -> co::task<vc::ref_t<vc::object_t>>
         {
             auto descriptor_pool = co_await resolve_obj<vku::desc_pool_t>(vs, node["m_descriptor_pool"]);
-            auto pipeline = co_await resolve_obj<vku::pipeline_t>(vs, node["m_pipeline"]);
+            auto desc_layout = co_await resolve_memb<VkDescriptorSetLayout>(vs, node["m_layout"]);
             auto bindings = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
-            auto obj = vku::desc_set_t::create(descriptor_pool, pipeline, bindings);
+            auto obj = vku::desc_set_t::create(descriptor_pool, desc_layout, bindings);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }

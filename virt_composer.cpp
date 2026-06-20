@@ -28,6 +28,13 @@ struct luaw_member_t {
     luaw_member_e member_type;
 };
 
+/*! Holds a function that will copy from that respective member, also holds the type_index of the
+ * member to check at runtime that the copy doesn't come from  */
+struct trivial_copy_member_t {
+    std::type_index tid{typeid(void)};
+    std::function<void(vc::object_t *, void *, size_t)> copy_fn;
+};
+
 /*! This holds the state of the  */
 struct virt_state_t {
     co::pool_p pool;
@@ -133,6 +140,11 @@ struct virt_state_t {
 
     /*! Holds free functions */
     std::vector<luaL_Reg> tab_funcs;
+
+    /*! Holds functions to memcpy from member objects, helps when needing to transfer exact data
+     * inside yaml config files, member must be a trivially copiable type */
+    std::vector<std::unordered_map<std::string, vc::trivial_copy_member_t>> trivial_copy_member =
+            std::vector<std::unordered_map<std::string, vc::trivial_copy_member_t>> {VIRT_TYPE_CNT};
 
     /*! This holds member functions and member objects getters */
     std::vector<std::unordered_map<std::string, vc::luaw_member_t>> lua_class_members =
@@ -344,6 +356,28 @@ co::task<std::string> resolve_str(vc::virt_state_t *vs, fkyaml::node& node) {
     co_return node.as_str();
 }
 
+/*! used inside resolve_memb */
+co::task_t resolve_memb_data(virt_state_t *vs, const std::string &obj_name,
+        const std::string& memb_name, void *dst, size_t sz, std::type_index tid)
+{
+
+    auto obj = co_await vc::depend_resolver_t<object_t>(vs, obj_name);
+    auto type = obj->type_id();
+
+    if (!has(vs->trivial_copy_member[type], memb_name))
+        throw vc::except_t(std::format(
+                "This member[{}] from object[{}] was not registered for copy typeid[{}]",
+                memb_name, obj_name, (int64_t)type));
+
+    auto &copy_info = vs->trivial_copy_member[type][memb_name];
+    if (tid != copy_info.tid)
+        throw vc::except_t(std::format("For member[{}] from object[{}] type mismatch {} vs {}",
+                memb_name, obj_name, tid.name(), copy_info.tid.name()));
+
+    copy_info.copy_fn(obj.get(), dst, sz);
+    co_return 0;
+}
+
 static bool starts_with(const std::string& a, const std::string& b) {
     return a.size() >= b.size() && a.compare(0, b.size(), b) == 0;
 }
@@ -395,8 +429,9 @@ static co::task<vc::ref_t<vc::object_t>> init_lua_script(vc::virt_state_t *vs,
 
     if (node.contains("m_source")) {
         auto obj = lua_script_t::create(node["m_source"].as_str());
-        if (exec_lua_src(vs, obj->content) != VC_ERROR_OK)
-            co_return nullptr;
+        if (exec_lua_src(vs, obj->content) != VC_ERROR_OK) {
+            throw vc::except_t{"Failed to execute loaded script"};
+        }
         mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
         co_return obj;
     }
@@ -404,8 +439,9 @@ static co::task<vc::ref_t<vc::object_t>> init_lua_script(vc::virt_state_t *vs,
     if (node.contains("m_source_path")) {
         std::string source = get_file_string_content(node["m_source_path"].as_str());
         auto obj = lua_script_t::create(source);
-        if (exec_lua_src(vs, obj->content) != VC_ERROR_OK)
-            co_return nullptr;
+        if (exec_lua_src(vs, obj->content) != VC_ERROR_OK) {
+            throw vc::except_t{"Failed to execute loaded script"};
+        }
         mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
         co_return obj;
     }
@@ -417,6 +453,8 @@ static co::task<vc::ref_t<vc::object_t>> init_lua_script(vc::virt_state_t *vs,
 co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
         const std::string& name, fkyaml::node& node)
 {
+    DBG("Building: %s", name.c_str());
+
     if (!node.is_mapping()) {
         DBG("Error node: %s not a mapping", fkyaml::node::serialize(node).c_str());
         co_return nullptr;
@@ -452,19 +490,31 @@ co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
     }
 
     for (auto &[match, cbk] : vs->build_object_cbks)
-        if (match == node["m_type"].as_str())
+        if (match == node["m_type"].as_str()) try {
             co_return co_await cbk(vs, name, node);
+        }
+        catch (...) {
+            DBG("Excepted IN {Name %s Type: %s}", name.c_str(), match.c_str());
+            throw;
+        }
 
     DBG("Object m_type is not known: %s", node["m_type"].as_str().c_str());
     throw vc::except_t{std::format("Invalid object type: {}", node["m_type"].as_str())};
 }
 
 co::task_t build_pseudo_object(vc::virt_state_t *vs, const std::string& name, fkyaml::node& node) {
+    DBG("PseBuilding: %s", name.c_str());
+
     for (auto &[match, cbk] : vs->build_psudo_object_cbks)
-        if (match(name, node)) {
+        if (match(name, node)) try {
             int ret = co_await cbk(vs, name, node);
+            /* TODO: this ecofn here seems suspicious */
             ASSERT_ECOFN(ret);
             co_return 0;
+        }
+        catch(...) {
+            DBG("Excepted for %s", name.c_str());
+            throw;
         }
 
     /* builtin integer resolution */
@@ -748,6 +798,17 @@ vc::virt_state_t *luaw_get_virt_state(lua_State *L) {
 
 lua_State *luaw_get_lua_state(vc::virt_state_t *vs) {
     return vs->L;
+}
+
+void set_trivial_copy_member(virt_state_t *vs, object_type_e type, const char *member_name,
+        std::type_index tid, std::function<void(vc::object_t *, void *, size_t)> copy_fn)
+{
+    DBG("set_pod_member_read: %s type: %s[%d] memb_type: %s vs[%p] member_name[%s]",
+            member_name, type.name(), type.value(),
+            tid.name(), vs, member_name);
+    vs->inheritance_table[type].insert(type);
+    for (auto &d : vs->inheritance_table[type])
+        vs->trivial_copy_member[d][member_name] = { .tid = tid, .copy_fn = copy_fn };
 }
 
 void set_lua_class_member(virt_state_t *vs, object_type_e type, const char *member_name,

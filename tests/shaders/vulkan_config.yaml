@@ -57,12 +57,12 @@ height: 600
 
 # Those are examples of user provided functions, the name must match the one inside the plugin and
 # the calling convention is that of lua (i.e. read the manual and prototype is int fn(lua_State *))
-fill_buffer_with_triangles_vertices:
-  m_type: vkc::lua_function_t
-  m_source: libuserplugin.so
-fill_buffer_with_triangles_indexes:
-  m_type: vkc::lua_function_t
-  m_source: libuserplugin.so
+# fill_buffer_with_triangles_vertices:
+#   m_type: vc::lua_function_t
+#   m_source: libuserplugin.so
+# fill_buffer_with_triangles_indexes:
+#   m_type: vc::lua_function_t
+#   m_source: libuserplugin.so
 
 staging_buffer:
   m_type: vkc::cpu_buffer_t
@@ -72,13 +72,16 @@ window:
   m_width: !ref width
   m_height: !ref height
   m_name: "Window Name Goes Here"
+inst:
+  m_type: vku::instance_t
+surf:
+  m_type: vku::surface_t
+  m_window: !ref window
+  m_instance: !ref inst
 dev:
   m_type: vku::device_t
-  m_surface:
-    m_type: vku::surface_t
-    m_window: !ref window
-    m_instance:
-      m_type: vku::instance_t
+  m_instance: !ref inst
+  m_surface: !ref surf
 cp:
   m_type: vku::cmdpool_t
   m_device: !ref dev
@@ -120,6 +123,7 @@ bindings:
 swc:
   m_type: vku::swapchain_t
   m_device: !ref dev
+  m_surface: !ref surf
 rp:
   m_type: vku::renderpass_t
   m_swapchain: !ref swc
@@ -193,53 +197,48 @@ desc_pool:
 desc_set:
   m_type: vku::desc_set_t
   m_descriptor_pool: !ref desc_pool
-  m_pipeline: !ref pl
+  m_layout: !copy
+    object: pl
+    member: vk_desc_set_layout
   m_bindings: !ref bindings
 
 lua_script:
   m_source: |
-    vku = require("vulkan_utils")
+    vc = require("virt_composer")
 
-    vku.fill_buffer_with_triangles_vertices(vku.staging_buffer.data(), vku.staging_buffer.size())
-    vku.copy_from_cpu_to_gpu(vku.staging_buffer, vku.vbuff, vku.staging_buffer.size(), 0)
+    function vku_init()
+      print("ok")
+      -- vc.fill_buffer_with_triangles_vertices(vc.staging_buffer.data(), vc.staging_buffer.size())
+      -- vc.copy_from_cpu_to_gpu(vc.staging_buffer, vc.vbuff, vc.staging_buffer.size(), 0)
 
-    vku.fill_buffer_with_triangles_indexes(vku.staging_buffer.data(), vku.staging_buffer.size())
-    vku.copy_from_cpu_to_gpu(vku.staging_buffer, vku.ibuff, vku.SIZEOF_INT*3, 0)
+      -- vc.fill_buffer_with_triangles_indexes(vc.staging_buffer.data(), vc.staging_buffer.size())
+      -- vc.copy_from_cpu_to_gpu(vc.staging_buffer, vc.ibuff, vc.SIZEOF_INT*3, 0)
+    end
 
     function on_loop_run()
-      vku.glfw_pool_events() -- needed for keys to be available
-      if vku.get_key(vku.window, vku.GLFW_KEY_ESCAPE) == vku.GLFW_PRESS then
-        vku.signal_close() -- this will close the loop
+      vc.glfw_pool_events() -- needed for keys to be available
+      if vc.get_key(vc.window, vc.GLFW_KEY_ESCAPE) == vc.GLFW_PRESS then
+        vc.signal_close() -- this will close the loop
       end
 
-      img_idx = vku.aquire_next_img(vku.swc, vku.img_sem)
+      img_idx = vc.aquire_next_img(vc.swc, vc.img_sem)
 
       -- do mvp update somehow?
 
-      vku.cbuff.begin()
-      vku.cbuff.begin_rpass(vku.fbs, img_idx)
-      vku.cbuff.bind_vert_buffs(0, {{vku.vbuff, 0}});
-      vku.cbuff.bind_idx_buff(vku.ibuff, 0, vku.VK_INDEX_TYPE_UINT16);
-      vku.cbuff.bind_desc_set(vku.VK_PIPELINE_BIND_POINT_GRAPHICS, vku.pl, vku.desc_set);
-      vku.cbuff.draw_idx(vku.pl, indices.size());
-      vku.cbuff.end_rpass();
-      vku.cbuff.end();
+      vc.cbuff:begin()
+      vc.cbuff:begin_rpass(vc.fbs, img_idx)
+      vc.cbuff:bind_vert_buffs(0, {{vc.vbuff, 0}});
+      vc.cbuff:bind_idx_buff(vc.ibuff, 0, vc.VK_INDEX_TYPE_UINT16);
+      vc.cbuff:bind_desc_set(vc.VK_PIPELINE_BIND_POINT_GRAPHICS, vc.pl, vc.desc_set);
+      vc.cbuff:draw_idx(vc.pl, indices.size());
+      vc.cbuff:end_rpass();
+      vc.cbuff:end_begin();
 
-      vku.submit_cmdbuff({{vku.img_sem, vku.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
-          vku.cbuff, vku.fence, {vku.draw_sem})
-      vku.present(vku.swc, {vku.draw_sem}, img_idx)
+      vc.submit_cmdbuff({{vc.img_sem, vc.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
+          vc.cbuff, vc.fence, {vc.draw_sem})
+      vc.present(vc.swc, {vc.draw_sem}, img_idx)
 
-      vku.wait_fences({vku.fence})
-      vku.reset_fences({vku.fence})
+      vc.wait_fences({vc.fence})
+      vc.reset_fences({vc.fence})
     end
-
-    function on_window_resize(w, h)
-      vku.device_wait_handle(vku.dev)
-
-      vku.window.m_width = w
-      vku.window.m_height = h
-
-      -- this will recurse and rebuild all dependees on window
-      vku.window.rebuild()
-
 

@@ -1,6 +1,19 @@
 #ifndef VULKAN_UTILS_H
 #define VULKAN_UTILS_H
 
+/*! TODO:
+ * 
+ * - the descriptor mess must be handled somehow
+ * + composer must get the changes
+ * - composer must be able to pass around vk_layout as parameter in lua, somehow
+ * - some structs must be added to composer, as such it will make things easyer (all those things
+ * that have more than one handle are suspicious, in particular pipeline_t)
+ * - some structs must be added to yaml parser of composer (not sure how or if I really should)
+ * - sync primitives must be added to vku and vkc
+ * - some way to rebuild the resize window would be nice
+ * - search for all "TODO:" in virt_composer.h/cpp vulkan_composer.h vulkan_utils.h
+ */
+
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -312,7 +325,6 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
-/* VkSurfaceKHR */
 struct surface_t : public object_t {
     VkSurfaceKHR        vk_surface = NULL;
 
@@ -419,8 +431,8 @@ struct renderpass_t : public object_t {
 
 struct pipeline_t : public object_t {
     VkPipeline                      vk_pipeline;
-    VkPipelineLayout                vk_layout;
-    VkDescriptorSetLayout           vk_desc_set_layout;
+    VkPipelineLayout                vk_layout;              /* needs separate object pipeline_layout_t */
+    VkDescriptorSetLayout           vk_desc_set_layout;     /* needs separate object desc_set_layout_t */
 
     int                             m_width;
     int                             m_height;
@@ -472,7 +484,7 @@ private:
 
 /*engine_create_framebuffs*/
 struct framebuffs_t : public object_t {
-    std::vector<VkFramebuffer>  vk_fbuffs;
+    std::vector<VkFramebuffer>  vk_fbuffs;      /* needs separate object framebuffer_t */
 
     ref_t<renderpass_t>         m_renderpass;
 
@@ -519,7 +531,7 @@ struct cmdbuff_t : public object_t {
     void begin_rpass(ref_t<framebuffs_t> fbs, uint32_t img_idx);
     void bind_vert_buffs(uint32_t first_bind,
             std::vector<std::pair<ref_t<buffer_t>, VkDeviceSize>> buffs);
-    void bind_desc_set(VkPipelineBindPoint bind_point, ref_t<pipeline_t> pl,
+    void bind_desc_set(VkPipelineBindPoint bind_point, VkPipelineLayout pipeline_layout,
             ref_t<desc_set_t> desc_set);
     void bind_idx_buff(ref_t<buffer_t> ibuff, uint64_t off, VkIndexType idx_type);
     void draw(ref_t<pipeline_t> pl, uint64_t vert_cnt);
@@ -571,7 +583,7 @@ private:
 
 struct buffer_t : public object_t {
     VkBuffer                vk_buff;
-    VkDeviceMemory          vk_mem;
+    VkDeviceMemory          vk_mem; /* needs separate object memory_t */
     void                    *m_map_ptr = nullptr;
 
     ref_t<device_t>         m_device;
@@ -701,8 +713,8 @@ struct desc_set_t : public object_t {
     VkDescriptorSet             vk_desc_set;
 
     ref_t<desc_pool_t>          m_descriptor_pool;
-    ref_t<pipeline_t>           m_pipeline;
     ref_t<binding_desc_set_t>   m_bindings;
+    VkDescriptorSetLayout       m_desc_set_layout;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET; }
     virtual std::string to_string() const override;
@@ -712,7 +724,7 @@ struct desc_set_t : public object_t {
     static object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET; }
     static ref_t<desc_set_t> create(
             ref_t<desc_pool_t>          dp,
-            ref_t<pipeline_t>           pl,
+            VkDescriptorSetLayout       desc_set_layout,
             ref_t<binding_desc_set_t>   bindings);
 
 private:
@@ -991,7 +1003,6 @@ inline ref_t<window_t> window_t::create(int width, int height, std::string name)
     ret->m_height = height;
 
     VK_ASSERT(ret->init());
-    DBG("Done post init");
     return ret;
 }
 
@@ -2122,11 +2133,11 @@ inline void cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
 }
 
 inline void cmdbuff_t::bind_desc_set(VkPipelineBindPoint bind_point,
-        ref_t<pipeline_t> pl, ref_t<desc_set_t> desc_set)
+        VkPipelineLayout pipeline_layout, ref_t<desc_set_t> desc_set)
 {
     DBGVVV("bind desc_set: %p with layout: %p bind_point: %d",
-            desc_set->vk_desc_set, pl->vk_layout, bind_point);
-    vkCmdBindDescriptorSets(vk_buff, bind_point, pl->vk_layout, 0, 1,
+            desc_set->vk_desc_set, pipeline_layout, bind_point);
+    vkCmdBindDescriptorSets(vk_buff, bind_point, pipeline_layout, 0, 1,
             &desc_set->vk_desc_set, 0, nullptr);
 }
 
@@ -2766,13 +2777,13 @@ Barriers:
 
 inline ref_t<desc_set_t> desc_set_t::create(
         ref_t<desc_pool_t> desc_pool,
-        ref_t<pipeline_t> pl,
+        VkDescriptorSetLayout desc_set_layout,
         ref_t<binding_desc_set_t> bindings)
 {
     auto ret = std::make_shared<desc_set_t>();
     ret->m_descriptor_pool = desc_pool;
-    ret->m_pipeline = pl;
     ret->m_bindings = bindings;
+    ret->m_desc_set_layout = desc_set_layout;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -2783,13 +2794,13 @@ inline vc::ret_t desc_set_t::init() {
         .pNext = nullptr,
         .descriptorPool = m_descriptor_pool->vk_descpool,
         .descriptorSetCount = 1,
-        .pSetLayouts = &m_pipeline->vk_desc_set_layout,
+        .pSetLayouts = &m_desc_set_layout,
     };
 
     VK_ASSERT(vkAllocateDescriptorSets(m_descriptor_pool->m_device->vk_dev, &alloc_info,
             &vk_desc_set));
     DBGVV("Allocated descriptor set: %p from pool: %p with layout: %p",
-            vk_desc_set, m_descriptor_pool->vk_descpool, m_pipeline->vk_desc_set_layout);
+            vk_desc_set, m_descriptor_pool->vk_descpool, m_desc_set_layout);
 
     /* TODO: this sucks, it references the buffer, but doesn't have a mechanism to do something
     if the buffer is freed without it's knowledge. So the buffer and descriptor set must
@@ -2820,8 +2831,8 @@ inline void desc_set_t::update() {
 }
 
 inline std::string desc_set_t::to_string() const {
-    return std::format("vku::desc_set[{}]: m_desc_pool={} m_pipeline={} m_binding_desc_set={}",
-            (void*)this, (void*)m_descriptor_pool.get(), (void*)m_pipeline.get(),
+    return std::format("vku::desc_set[{}]: m_desc_pool={} m_desc_set_layout={} m_binding_desc_set={}",
+            (void*)this, (void*)m_descriptor_pool.get(), (void*)m_desc_set_layout,
             (void*)m_bindings.get());
 }
 

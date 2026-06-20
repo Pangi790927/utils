@@ -8,6 +8,8 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+namespace vku = vulkan_utils;
+
 struct compute_ubo_t {
     float dt;
     float ang;
@@ -18,12 +20,12 @@ struct part_t {
     glm::vec2 vel;
     glm::vec4 color;
 
-    static vku_vertex_input_desc_t get_input_desc() {
-        return {
+    static vku::vertex_input_desc_t get_input_desc() {
+        return vku::vertex_input_desc_t {
             .bind_desc = {
                 .binding = 0,
                 .stride = sizeof(part_t),
-                .input_rate = VK_VERTEX_INPUT_RATE_VERTEX
+                .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
             },
             .attr_desc = {
                 {
@@ -43,17 +45,15 @@ struct part_t {
     }
 };
 
-int main(int argc, char const *argv[])
+int main()
 {
     DBG_SCOPE();
 
-    vku_mvp_t mvp;
     compute_ubo_t comp_ubo;
 
-    vku_opts_t opts;
-    auto inst = new vku_instance_t(opts);
+    auto inst = vku::instance_t::create();
 
-    auto vert = vku_spirv_compile(inst, VKU_SPIRV_VERTEX, R"___(
+    auto vert = vku::spirv_compile(VKU_SPIRV_VERTEX, R"___(
         #version 450
 
         layout(location = 0) in vec2 in_pos;    // those are referenced by
@@ -69,7 +69,7 @@ int main(int argc, char const *argv[])
 
     )___");
 
-    auto frag = vku_spirv_compile(inst, VKU_SPIRV_FRAGMENT, R"___(
+    auto frag = vku::spirv_compile(VKU_SPIRV_FRAGMENT, R"___(
         #version 450
 
         layout(location = 0) in vec4 in_color;      // this is referenced by the vert shader
@@ -82,7 +82,7 @@ int main(int argc, char const *argv[])
         }
     )___");
 
-    auto comp = vku_spirv_compile(inst, VKU_SPIRV_COMPUTE, R"___(
+    auto comp = vku::spirv_compile(VKU_SPIRV_COMPUTE, R"___(
         #version 450
 
         layout (binding = 0) uniform params_ubo_t {
@@ -134,11 +134,14 @@ int main(int argc, char const *argv[])
         }
     )___");
 
-    auto surf =     new vku_surface_t(inst);
-    auto dev =      new vku_device_t(surf);
-    auto cp =       new vku_cmdpool_t(dev);
+    int width = 800, height = 600;
 
-    auto comp_ubo_buff = new vku_buffer_t(
+    auto window =   vku::window_t::create(width, height);
+    auto surf =     vku::surface_t::create(window, inst);
+    auto dev =      vku::device_t::create(inst, surf);
+    auto cp =       vku::cmdpool_t::create(dev);
+
+    auto comp_ubo_buff = vku::buffer_t::create(
         dev,
         sizeof(compute_ubo_t),
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -173,7 +176,7 @@ int main(int argc, char const *argv[])
 
     /* TODO: initialize particle data here */
 
-    auto staging_pbuff = new vku_buffer_t(
+    auto staging_pbuff = vku::buffer_t::create(
         dev,
         part_sz,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -183,7 +186,7 @@ int main(int argc, char const *argv[])
     memcpy(staging_pbuff->map_data(0, part_sz), particles.data(), part_sz);
     staging_pbuff->unmap_data();
 
-    auto comp_in = new vku_buffer_t(
+    auto comp_in = vku::buffer_t::create(
         dev,
         part_sz,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
@@ -191,10 +194,9 @@ int main(int argc, char const *argv[])
         VK_SHARING_MODE_EXCLUSIVE,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     );
-    vku_copy_buff(cp, comp_in, staging_pbuff, part_sz);
-    // delete staging_pbuff;
+    vku::copy_buff(cp, comp_in, staging_pbuff, part_sz, nullptr);
 
-    auto comp_out = new vku_buffer_t(
+    auto comp_out = vku::buffer_t::create(
         dev,
         part_sz,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
@@ -203,76 +205,78 @@ int main(int argc, char const *argv[])
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     );
 
-    vku_binding_desc_t comp_bindings = {
-        .binds = {
-            vku_binding_desc_t::buff_binding_t::make_bind(
-                vku_ubo_t::get_desc_set(0, VK_SHADER_STAGE_COMPUTE_BIT),
-                comp_ubo_buff
-            ),
-            vku_binding_desc_t::buff_binding_t::make_bind(
-                vku_ssbo_t::get_desc_set(1, VK_SHADER_STAGE_COMPUTE_BIT),
-                comp_in
-            ),
-            vku_binding_desc_t::buff_binding_t::make_bind(
-                vku_ssbo_t::get_desc_set(2, VK_SHADER_STAGE_COMPUTE_BIT),
-                comp_out
-            ),
-        }
-    };
+    DBG("predesc sets create");
 
-    vku_binding_desc_t comp_bindings2 = {
-        .binds = {
-            vku_binding_desc_t::buff_binding_t::make_bind(
-                vku_ubo_t::get_desc_set(0, VK_SHADER_STAGE_COMPUTE_BIT),
-                comp_ubo_buff
-            ),
-            vku_binding_desc_t::buff_binding_t::make_bind(
-                vku_ssbo_t::get_desc_set(1, VK_SHADER_STAGE_COMPUTE_BIT),
-                comp_out
-            ),
-            vku_binding_desc_t::buff_binding_t::make_bind(
-                vku_ssbo_t::get_desc_set(2, VK_SHADER_STAGE_COMPUTE_BIT),
-                comp_in
-            ),
-        }
-    };
+    auto comp_bindings = vku::binding_desc_set_t::create({
+        vku::binding_desc_set_t::buff_binding_t::create(
+            vku::ubo_t::get_desc_set(0, VK_SHADER_STAGE_COMPUTE_BIT),
+            comp_ubo_buff
+        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
+        vku::binding_desc_set_t::buff_binding_t::create(
+            vku::ssbo_t::get_desc_set(1, VK_SHADER_STAGE_COMPUTE_BIT),
+            comp_in
+        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
+        vku::binding_desc_set_t::buff_binding_t::create(
+            vku::ssbo_t::get_desc_set(2, VK_SHADER_STAGE_COMPUTE_BIT),
+            comp_out
+        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
+    });
 
-    auto sh_comp =  new vku_shader_t(dev, comp);
-    auto comp_pl =  new vku_compute_pipeline_t(opts, dev, sh_comp, comp_bindings);
+    auto comp_bindings2 = vku::binding_desc_set_t::create({
+        vku::binding_desc_set_t::buff_binding_t::create(
+            vku::ubo_t::get_desc_set(0, VK_SHADER_STAGE_COMPUTE_BIT),
+            comp_ubo_buff
+        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
+        vku::binding_desc_set_t::buff_binding_t::create(
+            vku::ssbo_t::get_desc_set(1, VK_SHADER_STAGE_COMPUTE_BIT),
+            comp_in
+        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
+        vku::binding_desc_set_t::buff_binding_t::create(
+            vku::ssbo_t::get_desc_set(2, VK_SHADER_STAGE_COMPUTE_BIT),
+            comp_out
+        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
+    });
+
+    DBG("posts sets create");
+
+    auto sh_comp =  vku::shader_t::create(dev, comp);
+    auto comp_pl =  vku::compute_pipeline_t::create(dev, sh_comp, comp_bindings);
 
     /* here we have the compute pipeline created and ready to do stuff */
 
-    vku_binding_desc_t bindings = {
-        .binds = {},
-    };
+    auto bindings = vku::binding_desc_set_t::create({});
 
-    auto sh_vert =  new vku_shader_t(dev, vert);
-    auto sh_frag =  new vku_shader_t(dev, frag);
-    auto swc =      new vku_swapchain_t(dev);
-    auto rp =       new vku_renderpass_t(swc);
-    auto pl =       new vku_pipeline_t(
-        opts,
+    auto sh_vert =  vku::shader_t::create(dev, vert);
+    auto sh_frag =  vku::shader_t::create(dev, frag);
+    auto swc =      vku::swapchain_t::create(dev, surf);
+    auto rp =       vku::renderpass_t::create(swc);
+    auto pl =       vku::pipeline_t::create(
+        width, height,
         rp,
         {sh_vert, sh_frag},
-        VK_PRIMITIVE_TOPOLOGY_POINT_LIST,
+        VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         part_t::get_input_desc(),
         bindings
     );
-    auto fbs =      new vku_framebuffs_t(rp);
+    auto fbs =      vku::framebuffs_t::create(rp);
+    DBG("fbs done");
 
-    auto img_sem =  new vku_sem_t(dev);
-    auto draw_sem = new vku_sem_t(dev);
-    auto comp_sem = new vku_sem_t(dev);
-    auto fence =    new vku_fence_t(dev);
+    auto img_sem =  vku::sem_t::create(dev);
+    auto draw_sem = vku::sem_t::create(dev);
+    auto comp_sem = vku::sem_t::create(dev);
+    auto fence =    vku::fence_t::create(dev);
 
-    auto cbuff =      new vku_cmdbuff_t(cp);
-    auto comp_cbuff = new vku_cmdbuff_t(cp);
+    DBG("done sync create");
 
-    auto comp_desc_pool = new vku_desc_pool_t(dev, comp_bindings, 2);
-    vku_desc_set_t *comp_desc_set[] = {
-        new vku_desc_set_t(comp_desc_pool, comp_pl->vk_desc_set_layout, comp_bindings),
-        new vku_desc_set_t(comp_desc_pool, comp_pl->vk_desc_set_layout, comp_bindings2),
+    auto cbuff =      vku::cmdbuff_t::create(cp);
+    auto comp_cbuff = vku::cmdbuff_t::create(cp);
+
+    auto comp_desc_pool = vku::desc_pool_t::create(dev, comp_bindings, 2);
+    vku::ref_t<vku::desc_set_t> comp_desc_set[2] = {
+        vku::desc_set_t::create(comp_desc_pool, comp_pl->vk_desc_set_layout, comp_bindings),
+        vku::desc_set_t::create(comp_desc_pool, comp_pl->vk_desc_set_layout, comp_bindings2),
     };
+    DBG("done descpool/desc_sets");
 
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
@@ -281,30 +285,29 @@ int main(int argc, char const *argv[])
     // std::map<uint32_t, vku_sem_t *> img_sems;
     // std::map<uint32_t, vku_sem_t *> draw_sems;
     // std::map<uint32_t, vku_fence_t *> fences;
-    double start_time = get_time_ms();
    
     uint64_t last_time_ms = get_time_ms();
     DBG("Starting main loop");
-    while (!glfwWindowShouldClose(inst->window)) {
-        if (glfwGetKey(inst->window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+    while (!glfwWindowShouldClose(window->get_window())) {
+        if (glfwGetKey(window->get_window(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
             break;
         glfwPollEvents();
 
         try {
-            if (glfwGetKey(inst->window, GLFW_KEY_R) == GLFW_PRESS) {
-                vku_copy_buff(cp, comp_in, staging_pbuff, part_sz);
+            if (glfwGetKey(window->get_window(), GLFW_KEY_R) == GLFW_PRESS) {
+                vku::copy_buff(cp, comp_in, staging_pbuff, part_sz, nullptr);
             }
             static bool is_stopped = false;
             static bool space_pressed = false;
-            if (glfwGetKey(inst->window, GLFW_KEY_SPACE) == GLFW_PRESS && !space_pressed) {
+            if (glfwGetKey(window->get_window(), GLFW_KEY_SPACE) == GLFW_PRESS && !space_pressed) {
                 space_pressed = true;
                 is_stopped = !is_stopped;
             }
-            else if (glfwGetKey(inst->window, GLFW_KEY_SPACE) == GLFW_RELEASE) {
+            else if (glfwGetKey(window->get_window(), GLFW_KEY_SPACE) == GLFW_RELEASE) {
                 space_pressed = false;
             }
             uint32_t img_idx;
-            vku_aquire_next_img(swc, img_sem, &img_idx);
+            vku::aquire_next_img(swc, img_sem, &img_idx);
 
             if (!is_stopped) {
                 uint64_t curr_time = get_time_ms();
@@ -321,14 +324,14 @@ int main(int argc, char const *argv[])
                 comp_cbuff->end();
 
                 /* start particle computation and signal comp_sem when done */
-                vku_submit_cmdbuff({}, comp_cbuff, nullptr, {comp_sem});
+                vku::submit_cmdbuff({}, comp_cbuff, nullptr, {comp_sem});
             }
             else {
                 comp_cbuff->begin(0);
                 comp_cbuff->end();
 
                 /* start particle computation and signal comp_sem when done */
-                vku_submit_cmdbuff({}, comp_cbuff, nullptr, {comp_sem});
+                vku::submit_cmdbuff({}, comp_cbuff, nullptr, {comp_sem});
 
                 last_time_ms = get_time_ms();
             }
@@ -342,7 +345,7 @@ int main(int argc, char const *argv[])
 
             /* start drawing when the image is ready and the compute is done
             signal draw_sem when drawing is done so that the image can be drawn on screen */
-            vku_submit_cmdbuff(
+            vku::submit_cmdbuff(
                 {
                     {comp_sem, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT},         /* wait for points */
                     {img_sem, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}/* wait for image */
@@ -351,34 +354,29 @@ int main(int argc, char const *argv[])
                 fence,
                 {draw_sem}
             );
-            vku_present(swc, {draw_sem}, img_idx);
+            vku::present(swc, {draw_sem}, img_idx);
 
-            vku_wait_fences({fence});
-            vku_reset_fences({fence});
+            vku::wait_fences({fence});
+            vku::reset_fences({fence});
         }
-        catch (vku_err_t &e) {
-            /* TODO: fix this (next time write what's wrong with it) */
+        catch (vku::except_t &e) {
             if (e.vk_err == VK_SUBOPTIMAL_KHR) {
-                vk_device_wait_idle(dev->vk_dev);
+                vkDeviceWaitIdle(dev->vk_dev);
 
-                delete swc;
-                swc = new vku_swapchain_t(dev);
-                rp = new vku_renderpass_t(swc);
-                pl = new vku_pipeline_t(
-                    opts,
-                    rp,
-                    {sh_vert, sh_frag},
-                    VK_PRIMITIVE_TOPOLOGY_POINT_LIST,
-                    part_t::get_input_desc(),
-                    bindings
-                );
-                fbs = new vku_framebuffs_t(rp);
+                /* TODO: this must be rethought */
+                fbs->uninit();
+                pl->uninit();
+                rp->uninit();
+                swc->uninit();
+                swc->init();
+                rp->init();
+                pl->init();
+                fbs->init();
             }
             else
                 throw e;
         }
     }
 
-    delete inst;
     return 0;
 }
