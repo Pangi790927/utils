@@ -11,8 +11,9 @@ else
 endif
 
 LIBS      += -Wl,--start-group
-LIBS 	  += -lglslang -lOGLCompiler -lSPIRV -lOSDependent 
-LIBS 	  += -lSPIRV-Tools -lSPIRV-Tools-opt -lSPVRemapper -lHLSL 
+# https://github.com/google/shaderc
+LIBS 	  += -lglslang -lshaderc_shared  -lSPIRV -lOSDependent 
+LIBS 	  += -lSPIRV-Tools -lSPIRV-Tools-opt -lSPVRemapper
 LIBS 	  += ${GLSL_ADDITIONAL_LIB}
 LIBS 	  += -Wl,--end-group
 LIBS      += -lpthread

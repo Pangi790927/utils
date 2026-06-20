@@ -560,7 +560,6 @@ static int luaopen_vc(lua_State *L) {
 
         lua_pushcfunction(L, [](lua_State *L) {
             auto obj = (vc::object_t *)lua_touserdata(L, -1);
-            auto vs = luaw_get_virt_state(L);
             lua_pushstring(L, obj->to_string().c_str());
             return 1;
         });
@@ -619,7 +618,6 @@ static int luaopen_vc(lua_State *L) {
         lua_pushcfunction(L, [](lua_State *L) {
             // DBG("__call: %d", lua_gettop(L));
             auto obj = (vc::object_t *)lua_touserdata(L, -1);
-            auto vs = luaw_get_virt_state(L);
             vc::object_type_e class_id = obj->type_id(); /* an int, still ok on unwind */
             if (class_id != VC_TYPE_LUA_FUNCTION) {
                 luaw_push_error(L, std::format("invalid class id: {} is not VC_TYPE_LUA_FUNCTION",

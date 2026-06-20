@@ -1528,6 +1528,7 @@ inline int register_meta(vc::virt_state_t *vs) {
         [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
             -> co::task<vc::ref_t<vc::object_t>>
         {
+            auto inst = co_await resolve_obj<vku::instance_t>(vs, node["m_instance"]);
             auto surf = co_await resolve_obj<vku::surface_t>(vs, node["m_surface"]);
             auto obj = vku::device_t::create(surf);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
@@ -1666,7 +1667,8 @@ inline int register_meta(vc::virt_state_t *vs) {
             -> co::task<vc::ref_t<vc::object_t>>
         {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-            auto obj = vku::swapchain_t::create(dev);
+            auto surf = co_await resolve_obj<vku::surface_t>(vs, node["m_surface"]);
+            auto obj = vku::swapchain_t::create(dev, surf);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }

@@ -51,7 +51,7 @@ do {                                                                            
     VkResult vk_err = VkResult(fn_call);                                                           \
     if (vk_err != VK_SUCCESS) {                                                                    \
         DBG("Failed vk assert: [%s: %d]", vk_err_cstr(vk_err), vk_err);                            \
-        throw vulkan_utils::except_t(vk_err_str(vk_err));                                          \
+        throw vulkan_utils::except_t(vk_err);                                                      \
     }                                                                                              \
 } while (false);
 
@@ -338,13 +338,14 @@ struct device_t : public object_t {
     std::set<int>       m_que_ids;
     gpu_family_ids_t    m_que_fams;
 
+    ref_t<instance_t>   m_instance;
     ref_t<surface_t>    m_surface;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_DEVICE; }
     virtual std::string to_string() const override;
 
     static  object_type_e type_id_static() { return VKU_TYPE_DEVICE; }
-    static ref_t<device_t> create(ref_t<surface_t> surf);
+    static ref_t<device_t> create(ref_t<instance_t> inst, ref_t<surface_t> surf = nullptr);
 
 private:
     virtual vc::ret_t init() override;
@@ -363,14 +364,14 @@ struct swapchain_t : public object_t {
     ref_t<img_view_t>           m_depth_view;
 
     ref_t<device_t>             m_device;
+    ref_t<surface_t>            m_surface;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_SWAPCHAIN; }
     virtual std::string to_string() const override;
 
     static  object_type_e type_id_static() { return VKU_TYPE_SWAPCHAIN; }
-    static ref_t<swapchain_t> create(ref_t<device_t> dev);
+    static ref_t<swapchain_t> create(ref_t<device_t> dev, ref_t<surface_t> surf);
 
-private:
     virtual vc::ret_t init() override;
     virtual vc::ret_t uninit() override;
 };
@@ -412,7 +413,6 @@ struct renderpass_t : public object_t {
     static  object_type_e type_id_static() { return VKU_TYPE_RENDERPASS; }
     static ref_t<renderpass_t> create(ref_t<swapchain_t> swc);
 
-private:
     virtual vc::ret_t init() override;
     virtual vc::ret_t uninit() override;
 };
@@ -443,7 +443,6 @@ struct pipeline_t : public object_t {
             vertex_input_desc_t                 input_desc,
             ref_t<binding_desc_set_t>           bd);
 
-private:
     virtual vc::ret_t init() override;
     virtual vc::ret_t uninit() override;
 };
@@ -483,7 +482,6 @@ struct framebuffs_t : public object_t {
     static  object_type_e type_id_static() { return VKU_TYPE_FRAMEBUFFERS; }
     static ref_t<framebuffs_t> create(ref_t<renderpass_t> rp);
 
-private:
     virtual vc::ret_t init() override;
     virtual vc::ret_t uninit() override;
 };
@@ -709,7 +707,7 @@ struct desc_set_t : public object_t {
     virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET; }
     virtual std::string to_string() const override;
 
-    virtual void update() override;
+    void update();
 
     static object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET; }
     static ref_t<desc_set_t> create(
@@ -977,7 +975,7 @@ inline vc::ret_t window_t::uninit() {
 }
 
 inline vc::ret_t window_t::init() {
-    VK_ASSERT(init());
+    VK_ASSERT(vulkan_utils::init());
     _window = glfwCreateWindow(m_width, m_height, m_name.c_str(), NULL, NULL);
     if (!_window) {
         DBG("Failed to create a glfw window: %s", glfw_err().c_str());
@@ -1005,12 +1003,28 @@ inline std::string window_t::to_string() const {
 /* instance_t
 ================================================================================================= */
 
+inline ref_t<instance_t> instance_t::create(
+        const std::string app_name,
+        const std::string engine_name,
+        const std::vector<std::string>& extensions,
+        const std::vector<std::string>& layers)
+{
+    auto ret = std::make_shared<instance_t>();
+    ret->m_app_name = app_name;
+    ret->m_engine_name = engine_name;
+    ret->m_extensions = extensions;
+    ret->m_layers = layers;
+
+    VK_ASSERT(ret->init());
+    return ret;
+}
+
 inline vc::ret_t instance_t::init() {
     FnScope err_scope;
 
     /* The instance can be used without a window, so it must also init vku if it was not already
     initialized */
-    VK_ASSERT(init());
+    VK_ASSERT(vulkan_utils::init());
 
     /* get version: */
     uint32_t ver;
@@ -1136,22 +1150,6 @@ inline vc::ret_t instance_t::uninit() {
     return VK_SUCCESS;
 }
 
-inline ref_t<instance_t> instance_t::create(
-        const std::string app_name,
-        const std::string engine_name,
-        const std::vector<std::string>& extensions,
-        const std::vector<std::string>& layers)
-{
-    auto ret = std::make_shared<instance_t>();
-    ret->m_app_name = app_name;
-    ret->m_engine_name = engine_name;
-    ret->m_extensions = extensions;
-    ret->m_layers = layers;
-
-    VK_ASSERT(ret->init());
-    return ret;
-}
-
 inline std::string instance_t::to_string() const {
     std::string exts = "[";
     std::string lays;
@@ -1169,19 +1167,6 @@ inline std::string instance_t::to_string() const {
 /* surface_t
 ================================================================================================= */
 
-inline vc::ret_t surface_t::init() {
-    if (glfwCreateWindowSurface(m_instance->vk_instance, m_window->get_window(),
-            NULL, &vk_surface) != VK_SUCCESS)
-    {
-        DBG("Failed to get vk_surface: %s", glfw_err().c_str());
-        return VK_ERROR_UNKNOWN;
-    }
-    return VK_SUCCESS;
-}
-inline vc::ret_t surface_t::uninit() {
-    vkDestroySurfaceKHR(m_instance->vk_instance, vk_surface, NULL);
-    return VK_SUCCESS;
-}
 inline ref_t<surface_t> surface_t::create(
         ref_t<window_t> window,
         ref_t<instance_t> inst)
@@ -1193,6 +1178,21 @@ inline ref_t<surface_t> surface_t::create(
     return ret;
 }
 
+inline vc::ret_t surface_t::init() {
+    if (glfwCreateWindowSurface(m_instance->vk_instance, m_window->get_window(),
+            NULL, &vk_surface) != VK_SUCCESS)
+    {
+        DBG("Failed to get vk_surface: %s", glfw_err().c_str());
+        return VK_ERROR_UNKNOWN;
+    }
+    return VK_SUCCESS;
+}
+
+inline vc::ret_t surface_t::uninit() {
+    vkDestroySurfaceKHR(m_instance->vk_instance, vk_surface, NULL);
+    return VK_SUCCESS;
+}
+
 inline std::string surface_t::to_string() const {
     return std::format("vku::surface[{}]: m_window={}, m_instance={}",
             (void*)this, (void*)m_instance.get(), (void*)m_window.get());
@@ -1201,9 +1201,18 @@ inline std::string surface_t::to_string() const {
 /* device_t
 ================================================================================================= */
 
+/* TODO: device_t should only depend on instance, not on surface */
+inline ref_t<device_t> device_t::create(ref_t<instance_t> inst, ref_t<surface_t> surf) {
+    auto ret = std::make_shared<device_t>();
+    ret->m_instance = inst;
+    ret->m_surface = surf;
+    VK_ASSERT(ret->init());
+    return ret;
+}
+
 inline vc::ret_t device_t::init() {
     uint32_t dev_cnt = 0;
-    VK_ASSERT(vkEnumeratePhysicalDevices(m_surface->m_instance->vk_instance, &dev_cnt, NULL));
+    VK_ASSERT(vkEnumeratePhysicalDevices(m_instance->vk_instance, &dev_cnt, NULL));
 
     if (dev_cnt == 0) {
         DBG("Failed to find a GPU with Vulkan support!")
@@ -1211,13 +1220,12 @@ inline vc::ret_t device_t::init() {
     }
 
     std::vector<VkPhysicalDevice> devices(dev_cnt);
-    VK_ASSERT(vkEnumeratePhysicalDevices(
-            m_surface->m_instance->vk_instance, &dev_cnt, devices.data()));
+    VK_ASSERT(vkEnumeratePhysicalDevices(m_instance->vk_instance, &dev_cnt, devices.data()));
 
     vk_phy_dev = VK_NULL_HANDLE;
     int max_score = -1;
     for (const auto &dev : devices) {
-        int score = score_phydev(dev, m_surface->vk_surface);
+        int score = score_phydev(dev, m_surface ? m_surface->vk_surface : nullptr);
         if (score < 0)
             continue;
         if (score > max_score) {
@@ -1233,7 +1241,7 @@ inline vc::ret_t device_t::init() {
     vkGetPhysicalDeviceProperties(vk_phy_dev, &dev_prop);
     DBG("Selected GPU Name: %s", dev_prop.deviceName);
 
-    m_que_fams = find_queue_families(vk_phy_dev, m_surface->vk_surface);
+    m_que_fams = find_queue_families(vk_phy_dev, m_surface ? m_surface->vk_surface : nullptr);
     m_que_ids = { m_que_fams.graphics_id, m_que_fams.present_id };
     std::vector<VkDeviceQueueCreateInfo> dev_ques;
 
@@ -1276,15 +1284,10 @@ inline vc::ret_t device_t::init() {
     DBG("Created Vulkan Logical Device");
     return VK_SUCCESS;
 }
+
 inline vc::ret_t device_t::uninit() {
     vkDestroyDevice(vk_dev, NULL);
     return VK_SUCCESS;
-}
-inline ref_t<device_t> device_t::create(ref_t<surface_t> surf) {
-    auto ret = std::make_shared<device_t>();
-    ret->m_surface = surf;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string device_t::to_string() const {
@@ -1294,10 +1297,17 @@ inline std::string device_t::to_string() const {
 /* swapchain_t
 ================================================================================================= */
 
+inline ref_t<swapchain_t> swapchain_t::create(ref_t<device_t> dev, ref_t<surface_t> surf) {
+    auto ret = std::make_shared<swapchain_t>();
+    ret->m_device = dev;
+    ret->m_surface = surf;
+    VK_ASSERT(ret->init());
+    return ret;
+}
+
 inline vc::ret_t swapchain_t::init() {
     FnScope err_scope;
-    auto sc_detail = get_swapchain_details(m_device->vk_phy_dev,
-            m_device->m_surface->vk_surface);
+    auto sc_detail = get_swapchain_details(m_device->vk_phy_dev, m_surface->vk_surface);
 
     /* choose format */
     vk_surf_fmt = sc_detail.formats[0];
@@ -1315,8 +1325,7 @@ inline vc::ret_t swapchain_t::init() {
             vk_present_mode = pm;
 
     /* choose swap extent */
-    vk_extent = choose_extent(m_device->m_surface->m_window->get_window(),
-            sc_detail.capab);
+    vk_extent = choose_extent(m_surface->m_window->get_window(), sc_detail.capab);
 
     /* choose image count */
     uint32_t img_cnt = sc_detail.capab.minImageCount + 1;
@@ -1329,7 +1338,7 @@ inline vc::ret_t swapchain_t::init() {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .pNext = nullptr,
         .flags = 0,
-        .surface = m_device->m_surface->vk_surface,
+        .surface = m_surface->vk_surface,
         .minImageCount = img_cnt,
         .imageFormat = vk_surf_fmt.format,
         .imageColorSpace = vk_surf_fmt.colorSpace,
@@ -1399,17 +1408,12 @@ inline vc::ret_t swapchain_t::init() {
     err_scope.disable();
     return VK_SUCCESS;
 }
+
 inline vc::ret_t swapchain_t::uninit() {
     for (auto &iv : vk_sc_image_views)
         vkDestroyImageView(m_device->vk_dev, iv, NULL);
     vkDestroySwapchainKHR(m_device->vk_dev, vk_swapchain, NULL);
     return VK_SUCCESS;
-}
-inline ref_t<swapchain_t> swapchain_t::create(ref_t<device_t> dev) {
-    auto ret = std::make_shared<swapchain_t>();
-    ret->m_device = dev;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string swapchain_t::to_string() const {
@@ -1418,6 +1422,27 @@ inline std::string swapchain_t::to_string() const {
 
 /* shader_t
 ================================================================================================= */
+
+inline ref_t<shader_t> shader_t::create(ref_t<device_t> dev, const spirv_t& spirv) {
+    auto ret = std::make_shared<shader_t>();
+    ret->m_init_from_path = false;
+    ret->m_device = dev;
+    ret->m_spirv = spirv;
+    VK_ASSERT(ret->init());
+    return ret;
+}
+
+inline ref_t<shader_t> shader_t::create(ref_t<device_t> dev, const char *path,
+        vku_shader_stage_e type)
+{
+    auto ret = std::make_shared<shader_t>();
+    ret->m_init_from_path = true;
+    ret->m_path = path;
+    ret->m_type = type;
+    ret->m_device = dev;
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t shader_t::init() {
     if (m_init_from_path) {
@@ -1456,33 +1481,10 @@ inline vc::ret_t shader_t::init() {
     }
     return VK_SUCCESS;
 }
+
 inline vc::ret_t shader_t::uninit() {
     vkDestroyShaderModule(m_device->vk_dev, vk_shader, NULL);
     return VK_SUCCESS;
-}
-inline ref_t<shader_t> shader_t::create(
-        ref_t<device_t> dev,
-        const spirv_t& spirv)
-{
-    auto ret = std::make_shared<shader_t>();
-    ret->m_init_from_path = false;
-    ret->m_device = dev;
-    ret->m_spirv = spirv;
-    VK_ASSERT(ret->init());
-    return ret;
-}
-inline ref_t<shader_t> shader_t::create(
-        ref_t<device_t> dev,
-        const char *path,
-        vku_shader_stage_e type)
-{
-    auto ret = std::make_shared<shader_t>();
-    ret->m_init_from_path = true;
-    ret->m_path = path;
-    ret->m_type = type;
-    ret->m_device = dev;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string shader_t::to_string() const {
@@ -1493,6 +1495,13 @@ inline std::string shader_t::to_string() const {
 
 /* renderpass_t
 ================================================================================================= */
+
+inline ref_t<renderpass_t> renderpass_t::create(ref_t<swapchain_t> swc) {
+    auto ret = std::make_shared<renderpass_t>();
+    ret->m_swapchain = swc;
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t renderpass_t::init() {
     VkAttachmentDescription color_attach {
@@ -1577,15 +1586,10 @@ inline vc::ret_t renderpass_t::init() {
 
     return VK_SUCCESS;
 }
+
 inline vc::ret_t renderpass_t::uninit() {
     vkDestroyRenderPass(m_swapchain->m_device->vk_dev, vk_render_pass, NULL);
     return VK_SUCCESS;
-}
-inline ref_t<renderpass_t> renderpass_t::create(ref_t<swapchain_t> swc) {
-    auto ret = std::make_shared<renderpass_t>()
-    ret->m_swapchain = swc;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string renderpass_t::to_string() const {
@@ -1594,6 +1598,27 @@ inline std::string renderpass_t::to_string() const {
 
 /* pipeline_t
 ================================================================================================= */
+
+inline ref_t<pipeline_t> pipeline_t::create(
+        int width,
+        int height,
+        ref_t<renderpass_t> rp,
+        const std::vector<ref_t<shader_t>> &shaders,
+        VkPrimitiveTopology topology,
+        vertex_input_desc_t input_desc,
+        ref_t<binding_desc_set_t> bindings)
+{
+    auto ret = std::make_shared<pipeline_t>();
+    ret->m_width = width;
+    ret->m_height = height;
+    ret->m_renderpass = rp;
+    ret->m_shaders = shaders;
+    ret->m_topology = topology;
+    ret->m_input_desc = input_desc;
+    ret->m_bindings = bindings;
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t pipeline_t::init() {
     FnScope err_scope;
@@ -1804,6 +1829,7 @@ inline vc::ret_t pipeline_t::init() {
     DBGVV("Allocated pipeline: %p", vk_pipeline);
     return VK_SUCCESS;
 }
+
 inline vc::ret_t pipeline_t::uninit() {
     DBGVV("Dealocating pipeline: %p", vk_pipeline);
 
@@ -1812,31 +1838,6 @@ inline vc::ret_t pipeline_t::uninit() {
     vkDestroyDescriptorSetLayout(m_renderpass->m_swapchain->m_device->vk_dev,
             vk_desc_set_layout, nullptr);
     return VK_SUCCESS;
-}
-inline ref_t<pipeline_t> pipeline_t::create(
-        int width,
-        int height,
-        ref_t<renderpass_t> rp,
-        const std::vector<ref_t<shader_t>> &shaders,
-        VkPrimitiveTopology topology,
-        vertex_input_desc_t input_desc,
-        ref_t<binding_desc_set_t> bindings)
-{
-    std::vector<vo::ref_base_t<vc::virt_traits_t>> deps;
-    for (auto sh : shaders)
-        deps.push_back(sh);
-    deps.push_back(rp);
-    deps.push_back(bindings);
-    auto ret = std::make_shared<pipeline_t>();
-    ret->m_width = width;
-    ret->m_height = height;
-    ret->m_renderpass = rp;
-    ret->m_shaders = shaders;
-    ret->m_topology = topology;
-    ret->m_input_desc = input_desc;
-    ret->m_bindings = bindings;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string pipeline_t::to_string() const {
@@ -1853,6 +1854,19 @@ inline std::string pipeline_t::to_string() const {
 
 /* compute_pipeline_t
 ================================================================================================= */
+
+inline ref_t<compute_pipeline_t> compute_pipeline_t::create(
+        ref_t<device_t> dev,
+        ref_t<shader_t> shader,
+        ref_t<binding_desc_set_t> bindings)
+{
+    auto ret = std::make_shared<compute_pipeline_t>();
+    ret->m_device = dev;
+    ret->m_shader = shader;
+    ret->m_bindings = bindings;
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t compute_pipeline_t::init() {
     FnScope err_scope;
@@ -1921,6 +1935,7 @@ inline vc::ret_t compute_pipeline_t::init() {
     err_scope.disable();
     return VK_SUCCESS;
 }
+
 inline vc::ret_t compute_pipeline_t::uninit() {
     DBGVV("Dealocating pipeline: %p", vk_pipeline);
 
@@ -1928,18 +1943,6 @@ inline vc::ret_t compute_pipeline_t::uninit() {
     vkDestroyPipelineLayout(m_device->vk_dev, vk_layout, NULL);
     vkDestroyDescriptorSetLayout(m_device->vk_dev, vk_desc_set_layout, nullptr);
     return VK_SUCCESS;
-}
-inline ref_t<compute_pipeline_t> compute_pipeline_t::create(
-        ref_t<device_t> dev,
-        ref_t<shader_t> shader,
-        ref_t<binding_desc_set_t> bindings)
-{
-    auto ret = std::make_shared<compute_pipeline_t>()
-    ret->m_device = dev;
-    ret->m_shader = shader;
-    ret->m_bindings = bindings;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string compute_pipeline_t::to_string() const {
@@ -1949,6 +1952,13 @@ inline std::string compute_pipeline_t::to_string() const {
 
 /* framebuffs_t
 ================================================================================================= */
+
+inline ref_t<framebuffs_t> framebuffs_t::create(ref_t<renderpass_t> rp){
+    auto ret = std::make_shared<framebuffs_t>();
+    ret->m_renderpass = rp;
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t framebuffs_t::init() {
     vk_fbuffs.resize(m_renderpass->m_swapchain->vk_sc_image_views.size());
@@ -1982,16 +1992,11 @@ inline vc::ret_t framebuffs_t::init() {
     err_scope.disable();
     return VK_SUCCESS;
 }
+
 inline vc::ret_t framebuffs_t::uninit() {
     for (auto fbuff : vk_fbuffs)
         vkDestroyFramebuffer(m_renderpass->m_swapchain->m_device->vk_dev, fbuff, NULL);
     return VK_SUCCESS;
-}
-inline ref_t<framebuffs_t> framebuffs_t::create(ref_t<renderpass_t> rp){
-    auto ret = std::make_shared<framebuffs_t>();
-    ret->m_renderpass = rp;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string framebuffs_t::to_string() const {
@@ -2001,6 +2006,13 @@ inline std::string framebuffs_t::to_string() const {
 
 /* cmdpool_t
 ================================================================================================= */
+
+inline ref_t<cmdpool_t> cmdpool_t::create(ref_t<device_t> dev) {
+    auto ret = std::make_shared<cmdpool_t>();
+    ret->m_device = dev;
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t cmdpool_t::init() {
     VkCommandPoolCreateInfo pool_info{
@@ -2013,15 +2025,10 @@ inline vc::ret_t cmdpool_t::init() {
     VK_ASSERT(vkCreateCommandPool(m_device->vk_dev, &pool_info, NULL, &vk_pool));
     return VK_SUCCESS;
 }
+
 inline vc::ret_t cmdpool_t::uninit() {
     vkDestroyCommandPool(m_device->vk_dev, vk_pool, NULL);
     return VK_SUCCESS;
-}
-inline ref_t<cmdpool_t> cmdpool_t::create(ref_t<device_t> dev) {
-    auto ret = std::make_shared<cmdpool_t>();
-    ret->m_device = dev;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string cmdpool_t::to_string() const {
@@ -2030,6 +2037,14 @@ inline std::string cmdpool_t::to_string() const {
 
 /* cmdbuff_t
 ================================================================================================= */
+
+inline ref_t<cmdbuff_t> cmdbuff_t::create(ref_t<cmdpool_t> cp, bool host_free) {
+    auto ret = std::make_shared<cmdbuff_t>();
+    ret->m_cmdpool = cp;
+    ret->m_host_free = host_free;
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t cmdbuff_t::init() {
     VkCommandBufferAllocateInfo buff_info {
@@ -2043,20 +2058,12 @@ inline vc::ret_t cmdbuff_t::init() {
     VK_ASSERT(vkAllocateCommandBuffers(m_cmdpool->m_device->vk_dev, &buff_info, &vk_buff));
     return VK_SUCCESS;
 }
+
 inline vc::ret_t cmdbuff_t::uninit() {
     if (m_host_free) {
         vkFreeCommandBuffers(m_cmdpool->m_device->vk_dev, m_cmdpool->vk_pool, 1, &vk_buff);
     }
     return VK_SUCCESS;
-}
-inline ref_t<cmdbuff_t> cmdbuff_t::create(
-        ref_t<cmdpool_t> cp, bool host_free)
-{
-    auto ret = std::make_shared<cmdbuff_t>();
-    ret->m_cmdpool = cp;
-    ret->m_host_free = host_free;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string cmdbuff_t::to_string() const {
@@ -2184,6 +2191,13 @@ inline void cmdbuff_t::dispatch_compute(uint32_t x, uint32_t y, uint32_t z) {
 /* sem_t
 ================================================================================================= */
 
+inline ref_t<sem_t> sem_t::create(ref_t<device_t> dev) {
+    auto ret = std::make_shared<sem_t>();
+    ret->m_device = dev;
+    VK_ASSERT(ret->init());
+    return ret;
+}
+
 inline vc::ret_t sem_t::init() {
     VkSemaphoreCreateInfo sem_info {
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
@@ -2194,15 +2208,10 @@ inline vc::ret_t sem_t::init() {
     VK_ASSERT(vkCreateSemaphore(m_device->vk_dev, &sem_info, NULL, &vk_sem));
     return VK_SUCCESS;
 }
+
 inline vc::ret_t sem_t::uninit() {
     vkDestroySemaphore(m_device->vk_dev, vk_sem, NULL);
     return VK_SUCCESS;
-}
-inline ref_t<sem_t> sem_t::create(ref_t<device_t> dev) {
-    auto ret = std::make_shared<sem_t>();
-    ret->m_device = dev;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string sem_t::to_string() const {
@@ -2211,6 +2220,17 @@ inline std::string sem_t::to_string() const {
 
 /* fence_t
 ================================================================================================= */
+
+inline ref_t<fence_t> fence_t::create(
+        ref_t<device_t> dev,
+        VkFenceCreateFlags flags)
+{
+    auto ret = std::make_shared<fence_t>();
+    ret->m_device = dev;
+    ret->m_flags = flags;
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t fence_t::init() {
     VkFenceCreateInfo fence_info {
@@ -2222,19 +2242,10 @@ inline vc::ret_t fence_t::init() {
     VK_ASSERT(vkCreateFence(m_device->vk_dev, &fence_info, NULL, &vk_fence));
     return VK_SUCCESS;
 }
+
 inline vc::ret_t fence_t::uninit() {
     vkDestroyFence(m_device->vk_dev, vk_fence, NULL);
     return VK_SUCCESS;
-}
-inline ref_t<fence_t> fence_t::create(
-        ref_t<device_t> dev,
-        VkFenceCreateFlags flags)
-{
-    auto ret = std::make_shared<fence_t>()
-    ret->m_device = dev;
-    ret->m_flags = flags;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string fence_t::to_string() const {
@@ -2245,6 +2256,23 @@ inline std::string fence_t::to_string() const {
 
 /* buffer_t
 ================================================================================================= */
+
+inline ref_t<buffer_t> buffer_t::create(
+        ref_t<device_t> dev,
+        size_t size,
+        VkBufferUsageFlags usage,
+        VkSharingMode sh_mode,
+        VkMemoryPropertyFlags mem_flags)
+{
+    auto ret = std::make_shared<buffer_t>();
+    ret->m_device = dev;
+    ret->m_size = size;
+    ret->m_usage_flags = usage;
+    ret->m_sharing_mode = sh_mode;
+    ret->m_memory_flags = mem_flags;
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t buffer_t::init() {
     VkBufferCreateInfo buff_info{
@@ -2274,28 +2302,13 @@ inline vc::ret_t buffer_t::init() {
     VK_ASSERT(vkBindBufferMemory(m_device->vk_dev, vk_buff, vk_mem, 0));
     return VK_SUCCESS;
 }
+
 inline vc::ret_t buffer_t::uninit() {
     if (m_map_ptr)
         unmap_data();
     vkDestroyBuffer(m_device->vk_dev, vk_buff, nullptr);
     vkFreeMemory(m_device->vk_dev, vk_mem, nullptr);
     return VK_SUCCESS;
-}
-inline ref_t<buffer_t> buffer_t::create(
-        ref_t<device_t> dev,
-        size_t size,
-        VkBufferUsageFlags usage,
-        VkSharingMode sh_mode,
-        VkMemoryPropertyFlags mem_flags)
-{
-    auto ret = std::make_shared<buffer_t>();
-    ret->m_device = dev;
-    ret->m_size = size;
-    ret->m_usage_flags = usage;
-    ret->m_sharing_mode = sh_mode;
-    ret->m_memory_flags = mem_flags;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string buffer_t::to_string() const {
@@ -2327,6 +2340,23 @@ inline void buffer_t::unmap_data() {
 
 /* image_t
 ================================================================================================= */
+
+inline ref_t<image_t> image_t::create(
+        ref_t<device_t> dev,
+        uint32_t width,
+        uint32_t height,
+        VkFormat fmt,
+        VkImageUsageFlags usage)
+{
+    auto ret = std::make_shared<image_t>();
+    ret->m_device = dev;
+    ret->m_width = width;
+    ret->m_height = height;
+    ret->m_format = fmt;
+    ret->m_usage = usage;
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t image_t::init() {
     VkImageCreateInfo image_info{
@@ -2371,26 +2401,11 @@ inline vc::ret_t image_t::init() {
     err_scope.disable();
     return VK_SUCCESS;
 }
+
 inline vc::ret_t image_t::uninit() {
     vkDestroyImage(m_device->vk_dev, vk_img, nullptr);
     vkFreeMemory(m_device->vk_dev, vk_img_mem, nullptr);
     return VK_SUCCESS;
-}
-inline ref_t<image_t> image_t::create(
-        ref_t<device_t> dev,
-        uint32_t width,
-        uint32_t height,
-        VkFormat fmt,
-        VkImageUsageFlags usage)
-{
-    auto ret = std::make_shared<image_t>();
-    ret->m_device = dev;
-    ret->m_width = width;
-    ret->m_height = height;
-    ret->m_format = fmt;
-    ret->m_usage = usage;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string image_t::to_string() const {
@@ -2561,6 +2576,14 @@ inline void image_t::set_data(ref_t<cmdpool_t> cp, void *data, uint32_t sz,
 /* img_view_t
 ================================================================================================= */
 
+inline ref_t<img_view_t> img_view_t::create(ref_t<image_t> img, VkImageAspectFlags aspect_mask) {
+    auto ret = std::make_shared<img_view_t>();
+    ret->m_image = img;
+    ret->m_aspect_mask = aspect_mask;
+    VK_ASSERT(ret->init());
+    return ret;
+}
+
 inline vc::ret_t img_view_t::init() {
     VkImageViewCreateInfo view_info {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -2591,16 +2614,6 @@ inline vc::ret_t img_view_t::uninit() {
     vkDestroyImageView(m_image->m_device->vk_dev, vk_view, nullptr);
     return VK_SUCCESS;
 }
-inline ref_t<img_view_t> img_view_t::create(
-        ref_t<image_t> img,
-        VkImageAspectFlags aspect_mask)
-{
-    auto ret = std::make_shared<img_view_t>();
-    ret->m_image = img;
-    ret->m_aspect_mask = aspect_mask;
-    VK_ASSERT(ret->init());
-    return ret;
-}
 
 inline std::string img_view_t::to_string() const {
     return std::format("vku::img_view_t[{}]: m_image={}", (void*)this, (void*)m_image.get(),
@@ -2609,6 +2622,14 @@ inline std::string img_view_t::to_string() const {
 
 /* img_sampl_t
 ================================================================================================= */
+
+inline ref_t<img_sampl_t> img_sampl_t::create(ref_t<device_t> dev, VkFilter filter) {
+    auto ret = std::make_shared<img_sampl_t>();
+    ret->m_device = dev;
+    ret->m_filter = filter;
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t img_sampl_t::init() {
     VkPhysicalDeviceProperties dev_props;
@@ -2642,19 +2663,10 @@ inline vc::ret_t img_sampl_t::init() {
     VK_ASSERT(vkCreateSampler(m_device->vk_dev, &sampler_info, nullptr, &vk_sampler));
     return VK_SUCCESS;
 }
+
 inline vc::ret_t img_sampl_t::uninit() {
     vkDestroySampler(m_device->vk_dev, vk_sampler, nullptr);
     return VK_SUCCESS;
-}
-inline ref_t<img_sampl_t> img_sampl_t::create(
-        ref_t<device_t> dev,
-        VkFilter filter)
-{
-    auto ret = std::make_shared<img_sampl_t>();
-    ret->m_device = dev;
-    ret->m_filter = filter;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string img_sampl_t::to_string() const {
@@ -2676,6 +2688,19 @@ inline VkDescriptorSetLayoutBinding img_sampl_t::get_desc_set(uint32_t binding,
 
 /* desc_pool_t
 ================================================================================================= */
+
+inline ref_t<desc_pool_t> desc_pool_t::create(
+        ref_t<device_t> dev,
+        ref_t<binding_desc_set_t> bindings,
+        uint32_t cnt)
+{
+    auto ret = std::make_shared<desc_pool_t>();
+    ret->m_device = dev;
+    ret->m_bindings = bindings;
+    ret->m_cnt = cnt;
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t desc_pool_t::init() {
     std::vector<VkDescriptorPoolSize> pool_sizes;
@@ -2704,21 +2729,10 @@ inline vc::ret_t desc_pool_t::init() {
     DBGVV("Allocated pool: %p", vk_descpool);
     return VK_SUCCESS;
 }
+
 inline vc::ret_t desc_pool_t::uninit() {
     vkDestroyDescriptorPool(m_device->vk_dev, vk_descpool, nullptr);
     return VK_SUCCESS;
-}
-inline ref_t<desc_pool_t> desc_pool_t::create(
-        ref_t<device_t> dev,
-        ref_t<binding_desc_set_t> bindings,
-        uint32_t cnt)
-{
-    auto ret = std::make_shared<desc_pool_t>();
-    ret->m_device = dev;
-    ret->m_bindings = bindings;
-    ret->m_cnt = cnt;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string desc_pool_t::to_string() const {
@@ -2750,6 +2764,19 @@ Barriers:
         e.g., writing a buffer, reading a texture, writing a color attachment).
  */
 
+inline ref_t<desc_set_t> desc_set_t::create(
+        ref_t<desc_pool_t> desc_pool,
+        ref_t<pipeline_t> pl,
+        ref_t<binding_desc_set_t> bindings)
+{
+    auto ret = std::make_shared<desc_set_t>();
+    ret->m_descriptor_pool = desc_pool;
+    ret->m_pipeline = pl;
+    ret->m_bindings = bindings;
+    VK_ASSERT(ret->init());
+    return ret;
+}
+
 inline vc::ret_t desc_set_t::init() {
     VkDescriptorSetAllocateInfo alloc_info {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -2768,25 +2795,14 @@ inline vc::ret_t desc_set_t::init() {
     if the buffer is freed without it's knowledge. So the buffer and descriptor set must
     match in size, but the buffer doesn't know that, that's not ok. */
 
-    auto desc_writes = m_bindings->get_writes();
-    for (auto &dw : desc_writes)
-        dw.dstSet = vk_desc_set;
-
-    DBG("writes: %zu", desc_writes.size());
-    for (auto &w : desc_writes) {
-        DBG("write: type: %s, bind: %d, dst_set: %p .pBufferInfo: %p",
-                vulkan_utils::to_string(w.descriptorType).c_str(), w.dstBinding, w.dstSet,
-                w.pBufferInfo);
-    }
-
-    vkUpdateDescriptorSets(m_descriptor_pool->m_device->vk_dev, (uint32_t)desc_writes.size(),
-            desc_writes.data(), 0, nullptr);
-
+    update();
     return VK_SUCCESS;
 }
+
 inline vc::ret_t desc_set_t::uninit() {
     return VK_SUCCESS;
 }
+
 inline void desc_set_t::update() {
     auto desc_writes = m_bindings->get_writes();
     for (auto &dw : desc_writes)
@@ -2801,20 +2817,6 @@ inline void desc_set_t::update() {
 
     vkUpdateDescriptorSets(m_descriptor_pool->m_device->vk_dev, (uint32_t)desc_writes.size(),
             desc_writes.data(), 0, nullptr);
-
-    object_t::update();
-}
-inline ref_t<desc_set_t> desc_set_t::create(
-        ref_t<desc_pool_t> desc_pool,
-        ref_t<pipeline_t> pl,
-        ref_t<binding_desc_set_t> bindings)
-{
-    auto ret = std::make_shared<desc_set_t>();
-    ret->m_descriptor_pool = desc_pool;
-    ret->m_pipeline = pl;
-    ret->m_bindings = bindings;
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string desc_set_t::to_string() const {
@@ -2920,22 +2922,21 @@ inline VkWriteDescriptorSet binding_desc_set_t::sampl_binding_t::get_write() con
     return desc_write;
 }
 
-inline vc::ret_t binding_desc_set_t::init() {
-    return VK_SUCCESS;
-}
-inline vc::ret_t binding_desc_set_t::uninit() {
-    return VK_SUCCESS;
-}
 inline ref_t<binding_desc_set_t> binding_desc_set_t::create(
         std::vector<ref_t<binding_desc_t>> binds)
 {
-    std::vector<vo::ref_base_t<vc::virt_traits_t>> deps;
-    for (auto b : binds)
-        deps.push_back(b);
     auto ret = std::make_shared<binding_desc_set_t>();
     ret->m_binds = binds;
     VK_ASSERT(ret->init());
     return ret;
+}
+
+inline vc::ret_t binding_desc_set_t::init() {
+    return VK_SUCCESS;
+}
+
+inline vc::ret_t binding_desc_set_t::uninit() {
+    return VK_SUCCESS;
 }
 
 inline std::string binding_desc_set_t::to_string() const {
@@ -3650,7 +3651,8 @@ inline gpu_family_ids_t find_queue_families(VkPhysicalDevice dev,
         if ((qf.queueFlags & VK_QUEUE_GRAPHICS_BIT) && (qf.queueFlags & VK_QUEUE_COMPUTE_BIT))
             ret.graphics_id = i;
         VkBool32 res = 0;
-        vkGetPhysicalDeviceSurfaceSupportKHR(dev, i, surface, &res);
+        if (surface)
+            vkGetPhysicalDeviceSurfaceSupportKHR(dev, i, surface, &res);
         if (res)
             ret.present_id = i;
         i++;

@@ -162,7 +162,7 @@ int main(int argc, char const *argv[])
 
     auto window =   vku::window_t::create(width, height);
     auto surf =     vku::surface_t::create(window, inst);
-    auto dev =      vku::device_t::create(surf);
+    auto dev =      vku::device_t::create(inst, surf);
     auto cp =       vku::cmdpool_t::create(dev);
 
     auto img = load_image(cp, "test_image.png");
@@ -182,17 +182,17 @@ int main(int argc, char const *argv[])
         vku::binding_desc_set_t::buff_binding_t::create(
             vku::ubo_t::get_desc_set(0, VK_SHADER_STAGE_VERTEX_BIT),
             mvp_buff
-        ).to_related<vku::binding_desc_set_t::binding_desc_t>(),
+        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
         vku::binding_desc_set_t::sampl_binding_t::create(
             vku::img_sampl_t::get_desc_set(1, VK_SHADER_STAGE_FRAGMENT_BIT),
             view,
             sampl
-        ).to_related<vku::binding_desc_set_t::binding_desc_t>(),
+        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
     });
 
     auto sh_vert =  vku::shader_t::create(dev, vert);
     auto sh_frag =  vku::shader_t::create(dev, frag);
-    auto swc =      vku::swapchain_t::create(dev);
+    auto swc =      vku::swapchain_t::create(dev, surf);
     auto rp =       vku::renderpass_t::create(swc);
     auto pl =       vku::pipeline_t::create(
         width, height,
@@ -263,13 +263,17 @@ int main(int argc, char const *argv[])
             vku::reset_fences({fence});
         }
         catch (vku::except_t &e) {
-            /* TODO: fix this (next time write what's wrong with it) */
-            DBG("resize?");
             if (e.vk_err == VK_SUBOPTIMAL_KHR) {
                 vkDeviceWaitIdle(dev->vk_dev);
 
-                /* This will rebuild the entire tree following from window */
-                window.rebuild();
+                fbs->uninit();
+                pl->uninit();
+                rp->uninit();
+                swc->uninit();
+                swc->init();
+                rp->init();
+                pl->init();
+                fbs->init();
             }
             else
                 throw e;
