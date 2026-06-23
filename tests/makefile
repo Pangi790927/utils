@@ -5,7 +5,7 @@ LIBS      := -lpthread -ldl -lglfw -lcurl -lvulkan
 
 LIBS += -Wl,--start-group
 	# https://github.com/google/shaderc
-	LIBS += -lglslang -lSPIRV -lOSDependent 
+	LIBS += -lglslang -lSPIRV -lOSDependent
 	LIBS += -lSPIRV-Tools -lSPIRV-Tools-opt -lSPVRemapper
 
 	SHADERC_ERR := $(shell g++ -lshaderc_shared 2>&1)

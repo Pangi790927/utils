@@ -204,56 +204,49 @@ int main()
 
     DBG("predesc sets create");
 
-    auto comp_bindings = vku::desc_set_initializer_t::create({
-        vku::desc_set_initializer_t::buff_binding_t::create(
-            vku::ubo_t::get_desc_set(0, VK_SHADER_STAGE_COMPUTE_BIT),
-            comp_ubo_buff
-        )->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
-        vku::desc_set_initializer_t::buff_binding_t::create(
-            vku::ssbo_t::get_desc_set(1, VK_SHADER_STAGE_COMPUTE_BIT),
-            comp_in
-        )->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
-        vku::desc_set_initializer_t::buff_binding_t::create(
-            vku::ssbo_t::get_desc_set(2, VK_SHADER_STAGE_COMPUTE_BIT),
-            comp_out
-        )->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
-    });
+    auto b1 = vku::desc_set_initializer_t::buff_binding_t::create(
+        vku::ssbo_t::get_desc_set(1, VK_SHADER_STAGE_COMPUTE_BIT),
+        comp_in
+    );
+    auto b2 = vku::desc_set_initializer_t::buff_binding_t::create(
+        vku::ssbo_t::get_desc_set(2, VK_SHADER_STAGE_COMPUTE_BIT),
+        comp_out
+    );
 
-    auto comp_bindings2 = vku::desc_set_initializer_t::create({
+    auto comp_bindings_initer = vku::desc_set_initializer_t::create({
         vku::desc_set_initializer_t::buff_binding_t::create(
             vku::ubo_t::get_desc_set(0, VK_SHADER_STAGE_COMPUTE_BIT),
             comp_ubo_buff
         )->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
-        vku::desc_set_initializer_t::buff_binding_t::create(
-            vku::ssbo_t::get_desc_set(1, VK_SHADER_STAGE_COMPUTE_BIT),
-            comp_in
-        )->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
-        vku::desc_set_initializer_t::buff_binding_t::create(
-            vku::ssbo_t::get_desc_set(2, VK_SHADER_STAGE_COMPUTE_BIT),
-            comp_out
-        )->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
+        b1->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
+        b2->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
     });
 
     DBG("posts sets create");
 
     auto sh_comp =  vku::shader_t::create(dev, comp);
-    auto comp_pl =  vku::compute_pipeline_t::create(dev, sh_comp, comp_bindings);
+
+    auto comp_ds_lay =   vku::desc_set_layout_t::create(dev, comp_bindings_initer);
+    auto comp_pl_lay =   vku::pipeline_layout_t::create(comp_ds_lay);
+    auto comp_pl =  vku::compute_pipeline_t::create(dev, sh_comp, comp_pl_lay);
 
     /* here we have the compute pipeline created and ready to do stuff */
 
-    auto bindings = vku::desc_set_initializer_t::create({});
+    auto bindings_initer = vku::desc_set_initializer_t::create({});
 
     auto sh_vert =  vku::shader_t::create(dev, vert);
     auto sh_frag =  vku::shader_t::create(dev, frag);
     auto swc =      vku::swapchain_t::create(dev, surf);
     auto rp =       vku::renderpass_t::create(swc);
+    auto ds_lay =   vku::desc_set_layout_t::create(dev, bindings_initer);
+    auto pl_lay =   vku::pipeline_layout_t::create(ds_lay);
     auto pl =       vku::pipeline_t::create(
         width, height,
         rp,
         {sh_vert, sh_frag},
         VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         part_t::get_input_desc(),
-        bindings
+        pl_lay
     );
     auto fbs =      vku::framebuffs_t::create(rp);
     DBG("fbs done");
@@ -268,11 +261,13 @@ int main()
     auto cbuff =      vku::cmdbuff_t::create(cp);
     auto comp_cbuff = vku::cmdbuff_t::create(cp);
 
-    auto comp_desc_pool = vku::desc_pool_t::create(dev, comp_bindings, 2);
-    vku::ref_t<vku::desc_set_t> comp_desc_set[2] = {
-        vku::desc_set_t::create(comp_desc_pool, comp_pl->vk_desc_set_layout, comp_bindings),
-        vku::desc_set_t::create(comp_desc_pool, comp_pl->vk_desc_set_layout, comp_bindings2),
-    };
+    auto comp_desc_pool = vku::desc_pool_t::create(dev, comp_bindings_initer, 2);
+    vku::ref_t<vku::desc_set_t> comp_desc_set[2];
+
+    comp_desc_set[0] = vku::desc_set_t::create(comp_desc_pool, comp_ds_lay, comp_bindings_initer);
+    std::swap(b1->desc_buff_info.buffer, b2->desc_buff_info.buffer);
+    comp_desc_set[1] = vku::desc_set_t::create(comp_desc_pool, comp_ds_lay, comp_bindings_initer);
+
     DBG("done descpool/desc_sets");
 
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
@@ -315,7 +310,7 @@ int main()
 
                 comp_cbuff->begin(0);
                 comp_cbuff->bind_compute(comp_pl);
-                comp_cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_COMPUTE, comp_pl->vk_layout,
+                comp_cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_COMPUTE, comp_pl_lay,
                         comp_desc_set[img_idx % 2]);
                 comp_cbuff->dispatch_compute(particles.size() / 1024);
                 comp_cbuff->end();

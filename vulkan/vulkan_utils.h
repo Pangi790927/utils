@@ -110,7 +110,9 @@ VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_BUFFER);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_IMAGE);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_IMAGE_VIEW);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_IMAGE_SAMPLER);
+VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_PIPELINE_LAYOUT);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_DESCRIPTOR_SET);
+VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_DESCRIPTOR_SET_LAYOUT);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_DESCRIPTOR_POOL);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_SAMPLER_BINDING);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_BUFFER_BINDING);
@@ -140,24 +142,26 @@ using object_t = vc::object_t;
 template <typename VkuT>
 using ref_t = vc::ref_t<VkuT>;
 
-struct instance_t;      /* uses (opts) */
-struct surface_t;       /* uses (instance) */
-struct device_t;        /* uses (surface) */
-struct swapchain_t;     /* uses (device) */
-struct shader_t;        /* uses (device, shader_data) */
-struct renderpass_t;    /* uses (swapchain) */
-struct pipeline_t;      /* uses (opts, renderpass, shaders, vertex_input_desc)*/
-struct framebuffs_t;    /* uses (renderpass) */
-struct cmdpool_t;       /* uses (device) */
-struct cmdbuff_t;       /* uses (cmdpool) */
-struct sem_t;           /* uses (device) */
-struct fence_t;         /* uses (device) */
-struct buffer_t;        /* uses (device) */
-struct image_t;         /* uses (device) */
-struct img_view_t;      /* uses (imag) */
-struct img_sampl_t;     /* uses (device) */
-struct desc_pool_t;     /* uses (device, ?buff?, ?pipeline?) */
-struct desc_set_t;      /* uses (desc_pool) */
+struct instance_t;          /* uses (opts) */
+struct surface_t;           /* uses (instance) */
+struct device_t;            /* uses (surface) */
+struct swapchain_t;         /* uses (device) */
+struct shader_t;            /* uses (device, shader_data) */
+struct renderpass_t;        /* uses (swapchain) */
+struct desc_set_layout_t;   /* uses (desc_set_initializer, device) */
+struct pipeline_layout_t;   /* uses (desc_set_layout) */
+struct pipeline_t;          /* uses (opts, renderpass, shaders, vertex_input_desc, pipeline_layout)*/
+struct framebuffs_t;        /* uses (renderpass) */
+struct cmdpool_t;           /* uses (device) */
+struct cmdbuff_t;           /* uses (cmdpool) */
+struct sem_t;               /* uses (device) */
+struct fence_t;             /* uses (device) */
+struct buffer_t;            /* uses (device) */
+struct image_t;             /* uses (device) */
+struct img_view_t;          /* uses (imag) */
+struct img_sampl_t;         /* uses (device) */
+struct desc_pool_t;         /* uses (device, ?buff?, ?pipeline?) */
+struct desc_set_t;          /* uses (desc_pool) */
 
 inline vc::ret_t init();
 inline vc::ret_t uninit();
@@ -431,8 +435,6 @@ struct renderpass_t : public object_t {
 
 struct pipeline_t : public object_t {
     VkPipeline                      vk_pipeline;
-    VkPipelineLayout                vk_layout;              /* needs separate object pipeline_layout_t */
-    VkDescriptorSetLayout           vk_desc_set_layout;     /* needs separate object desc_set_layout_t */
 
     int                             m_width;
     int                             m_height;
@@ -440,7 +442,7 @@ struct pipeline_t : public object_t {
     std::vector<ref_t<shader_t>>    m_shaders;
     VkPrimitiveTopology             m_topology;
     vertex_input_desc_t             m_input_desc;
-    ref_t<desc_set_initializer_t>   m_bindings_initer;
+    ref_t<pipeline_layout_t>        m_pipeline_layout;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_PIPELINE; }
     virtual std::string to_string() const override;
@@ -453,7 +455,7 @@ struct pipeline_t : public object_t {
             const std::vector<ref_t<shader_t>>& shaders,
             VkPrimitiveTopology                 topology,
             vertex_input_desc_t                 input_desc,
-            ref_t<desc_set_initializer_t>       bd);
+            ref_t<pipeline_layout_t>            pipeline_layout);
 
     virtual vc::ret_t init() override;
     virtual vc::ret_t uninit() override;
@@ -461,12 +463,10 @@ struct pipeline_t : public object_t {
 
 struct compute_pipeline_t : public object_t {
     VkPipeline                      vk_pipeline;
-    VkPipelineLayout                vk_layout;
-    VkDescriptorSetLayout           vk_desc_set_layout;
 
     ref_t<device_t>                 m_device;
     ref_t<shader_t>                 m_shader;
-    ref_t<desc_set_initializer_t>   m_bindings_initer;
+    ref_t<pipeline_layout_t>        m_pipeline_layout;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_COMPUTE_PIPELINE; }
     virtual std::string to_string() const override;
@@ -475,7 +475,7 @@ struct compute_pipeline_t : public object_t {
     static ref_t<compute_pipeline_t> create(
             ref_t<device_t>                 dev,
             ref_t<shader_t>                 shader,
-            ref_t<desc_set_initializer_t>   bindings_initer);
+            ref_t<pipeline_layout_t>        pipeline_layout);
 
 private:
     virtual vc::ret_t init() override;
@@ -531,7 +531,7 @@ struct cmdbuff_t : public object_t {
     void begin_rpass(ref_t<framebuffs_t> fbs, uint32_t img_idx);
     void bind_vert_buffs(uint32_t first_bind,
             std::vector<std::pair<ref_t<buffer_t>, VkDeviceSize>> buffs);
-    void bind_desc_set(VkPipelineBindPoint bind_point, VkPipelineLayout pipeline_layout,
+    void bind_desc_set(VkPipelineBindPoint bind_point, ref_t<pipeline_layout_t> pl,
             ref_t<desc_set_t> desc_set);
     void bind_idx_buff(ref_t<buffer_t> ibuff, uint64_t off, VkIndexType idx_type);
     void draw(ref_t<pipeline_t> pl, uint64_t vert_cnt);
@@ -710,21 +710,19 @@ private:
 };
 
 struct desc_set_t : public object_t {
-    VkDescriptorSet             vk_desc_set;
+    VkDescriptorSet                 vk_desc_set;
 
     ref_t<desc_pool_t>              m_descriptor_pool;
+    ref_t<desc_set_layout_t>        m_desc_set_layout;
     ref_t<desc_set_initializer_t>   m_bindings_initer;
-    VkDescriptorSetLayout           m_desc_set_layout;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET; }
     virtual std::string to_string() const override;
 
-    void update();
-
     static object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET; }
     static ref_t<desc_set_t> create(
             ref_t<desc_pool_t>              dp,
-            VkDescriptorSetLayout           desc_set_layout,
+            ref_t<desc_set_layout_t>        desc_set_layout,
             ref_t<desc_set_initializer_t>   bindings_initer);
 
 private:
@@ -732,6 +730,39 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
+struct desc_set_layout_t : public object_t {
+    VkDescriptorSetLayout           vk_desc_set_layout;
+
+    ref_t<device_t>                 m_device;
+    ref_t<desc_set_initializer_t>   m_bindings_initer;
+
+    virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET_LAYOUT; }
+    static object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET_LAYOUT; }
+    virtual std::string to_string() const override;
+
+    static ref_t<desc_set_layout_t> create(
+            ref_t<device_t> dev, ref_t<desc_set_initializer_t> bindings_initer);
+
+private:
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
+};
+
+struct pipeline_layout_t : public object_t {
+    VkPipelineLayout            vk_pipeline_layout;
+
+    ref_t<desc_set_layout_t>    m_desc_set_layout;
+
+    virtual object_type_e type_id() const override { return VKU_TYPE_PIPELINE_LAYOUT; }
+    static object_type_e type_id_static() { return VKU_TYPE_PIPELINE_LAYOUT; }
+    virtual std::string to_string() const override;
+
+    static ref_t<pipeline_layout_t> create(ref_t<desc_set_layout_t> bindings_initer);
+
+private:
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
+};
 
 /*!
  * 
@@ -838,6 +869,7 @@ struct desc_set_initializer_t : public object_t {
 
     std::vector<ref_t<binding_desc_t>> m_binds;
 
+    void update_set(ref_t<desc_set_t> ds);
     std::vector<VkWriteDescriptorSet> get_writes(VkDescriptorSet dst_set) const;
     std::vector<VkDescriptorSetLayoutBinding> get_descriptors() const;
 
@@ -1041,6 +1073,7 @@ inline vc::ret_t window_t::init() {
         DBG("Failed to create a glfw window: %s", glfw_err().c_str());
         return VK_ERROR_UNKNOWN;
     }
+    DBG("Created Window %p", this);
     return VK_SUCCESS;
 }
 
@@ -1174,7 +1207,7 @@ inline vc::ret_t instance_t::init() {
     VK_ASSERT(vkCreateInstance(&inst_info, NULL, &vk_instance));
     err_scope([&]{ vkDestroyInstance(vk_instance, NULL); });
 
-    DBG("Created a vulkan instance!");
+    DBG("Created a vulkan instance! %p", this);
 
     /* Create Vulkan Debug Messenger
     ============================================================================================= */
@@ -1199,7 +1232,7 @@ inline vc::ret_t instance_t::init() {
     err_scope([&]{ destroy_dbg_messenger(vk_instance, vk_dbg_messenger, NULL); });
 
     err_scope.disable();
-    DBG("Created vulkan messenger! %p", this);
+    DBG("Created vulkan messenger for instance %p", this);
     return VK_SUCCESS;
 }
 
@@ -1244,6 +1277,7 @@ inline vc::ret_t surface_t::init() {
         DBG("Failed to get vk_surface: %s", glfw_err().c_str());
         return VK_ERROR_UNKNOWN;
     }
+    DBG("Created Surface %p", this);
     return VK_SUCCESS;
 }
 
@@ -1340,7 +1374,7 @@ inline vc::ret_t device_t::init() {
     vkGetDeviceQueue(vk_dev, m_que_fams.graphics_id, 0, &vk_graphics_que);
     vkGetDeviceQueue(vk_dev, m_que_fams.present_id, 0, &vk_present_que);
 
-    DBG("Created Vulkan Logical Device");
+    DBG("Created Vulkan Logical Device %p", this);
     return VK_SUCCESS;
 }
 
@@ -1424,7 +1458,7 @@ inline vc::ret_t swapchain_t::init() {
     VK_ASSERT(vkGetSwapchainImagesKHR(m_device->vk_dev, vk_swapchain, &img_cnt,
             vk_sc_images.data()));
 
-    DBG("Created Swapchain!");
+    DBG("Created Swapchain %p", this);
 
     /* Create Swapchain Image Views
     ============================================================================================= */
@@ -1463,6 +1497,8 @@ inline vc::ret_t swapchain_t::init() {
     m_depth_imag = image_t::create(m_device, vk_extent.width, vk_extent.height,
             VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
     m_depth_view = img_view_t::create(m_depth_imag, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    DBG("Created Swapchain Images %p", this);
 
     err_scope.disable();
     return VK_SUCCESS;
@@ -1538,6 +1574,7 @@ inline vc::ret_t shader_t::init() {
         DBG("Loaded shader from buffer of size: %zu data: %p -> vk_%p",
                 m_spirv.content.size() * sizeof(uint32_t), m_spirv.content.data(), vk_shader);
     }
+    DBG("Created Shader %p", this);
     return VK_SUCCESS;
 }
 
@@ -1643,6 +1680,8 @@ inline vc::ret_t renderpass_t::init() {
     VK_ASSERT(vkCreateRenderPass(m_swapchain->m_device->vk_dev,
             &render_pass_info, NULL, &vk_render_pass));
 
+    DBG("Created Renderpass %p", this);
+
     return VK_SUCCESS;
 }
 
@@ -1665,7 +1704,7 @@ inline ref_t<pipeline_t> pipeline_t::create(
         const std::vector<ref_t<shader_t>> &shaders,
         VkPrimitiveTopology topology,
         vertex_input_desc_t input_desc,
-        ref_t<desc_set_initializer_t> bindings_initer)
+        ref_t<pipeline_layout_t> pipeline_layout)
 {
     auto ret = std::make_shared<pipeline_t>();
     ret->m_width = width;
@@ -1674,7 +1713,7 @@ inline ref_t<pipeline_t> pipeline_t::create(
     ret->m_shaders = shaders;
     ret->m_topology = topology;
     ret->m_input_desc = input_desc;
-    ret->m_bindings_initer = bindings_initer;
+    ret->m_pipeline_layout = pipeline_layout;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -1823,43 +1862,6 @@ inline vc::ret_t pipeline_t::init() {
         .maxDepthBounds = 1.0,
     };
 
-    auto bind_descriptors = m_bindings_initer->get_descriptors();
-    DBGVV("cnt bind_descriptors: %zu", bind_descriptors.size());
-    for (auto &b : bind_descriptors) {
-        DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
-                b.descriptorType, b.binding, b.stageFlags);
-    }
-
-    VkDescriptorSetLayoutCreateInfo desc_set_layout_info {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .bindingCount = (uint32_t)bind_descriptors.size(),
-        .pBindings = bind_descriptors.data(),
-    };
-
-    VK_ASSERT(vkCreateDescriptorSetLayout(m_renderpass->m_swapchain->m_device->vk_dev,
-            &desc_set_layout_info, nullptr, &vk_desc_set_layout));
-    err_scope([&]{ vkDestroyDescriptorSetLayout(
-            m_renderpass->m_swapchain->m_device->vk_dev, vk_desc_set_layout, nullptr); });
-    DBGVV("Allocated descriptor set layout: %p", vk_desc_set_layout);
-
-    VkPipelineLayoutCreateInfo pipeline_layout_info {
-        .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .pNext                  = nullptr,
-        .flags                  = 0,
-        .setLayoutCount         = 1,
-        .pSetLayouts            = &vk_desc_set_layout,
-        .pushConstantRangeCount = 0,
-        .pPushConstantRanges    = NULL,
-    };
-
-    VK_ASSERT(vkCreatePipelineLayout(
-            m_renderpass->m_swapchain->m_device->vk_dev, &pipeline_layout_info, NULL, &vk_layout));
-    err_scope([&]{ vkDestroyPipelineLayout(m_renderpass->m_swapchain->m_device->vk_dev,
-            vk_layout, NULL); });
-    DBGVV("Allocated pipeline layout: %p", vk_layout);
-
     VkGraphicsPipelineCreateInfo pipeline_info {
         .sType                  = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext                  = nullptr,
@@ -1875,7 +1877,7 @@ inline vc::ret_t pipeline_t::init() {
         .pDepthStencilState     = &depth_stancil,
         .pColorBlendState       = &blend_info,
         .pDynamicState          = &dyn_info,
-        .layout                 = vk_layout,
+        .layout                 = m_pipeline_layout->vk_pipeline_layout,
         .renderPass             = m_renderpass->vk_render_pass,
         .subpass                = 0,
         .basePipelineHandle     = VK_NULL_HANDLE,
@@ -1885,17 +1887,12 @@ inline vc::ret_t pipeline_t::init() {
     VK_ASSERT(vkCreateGraphicsPipelines(m_renderpass->m_swapchain->m_device->vk_dev,
             VK_NULL_HANDLE, 1, &pipeline_info, NULL, &vk_pipeline));
     err_scope.disable();
-    DBGVV("Allocated pipeline: %p", vk_pipeline);
+    DBG("Created Pipeline: %p", this);
     return VK_SUCCESS;
 }
 
 inline vc::ret_t pipeline_t::uninit() {
-    DBGVV("Dealocating pipeline: %p", vk_pipeline);
-
     vkDestroyPipeline(m_renderpass->m_swapchain->m_device->vk_dev, vk_pipeline, NULL);
-    vkDestroyPipelineLayout(m_renderpass->m_swapchain->m_device->vk_dev, vk_layout, NULL);
-    vkDestroyDescriptorSetLayout(m_renderpass->m_swapchain->m_device->vk_dev,
-            vk_desc_set_layout, nullptr);
     return VK_SUCCESS;
 }
 
@@ -1905,10 +1902,10 @@ inline std::string pipeline_t::to_string() const {
         sh_str += std::format("{}, ", (void*)sh.get());
     sh_str += "]";
     return std::format("vku::pipeline[{}]: m_width={} m_height={} m_renderpass={} m_shaders={} "
-            "m_topology={} m_vertex_input_descriptor={} m_binding_desc_set={}",
+            "m_topology={} m_vertex_input_descriptor={} m_pipeline_layout={}",
             (void*)this, m_width, m_height, (void*)m_renderpass.get(), sh_str,
             vulkan_utils::to_string(m_topology), vulkan_utils::to_string(m_input_desc),
-            (void*)m_bindings_initer.get());
+            (void*)m_pipeline_layout.get());
 }
 
 /* compute_pipeline_t
@@ -1917,51 +1914,18 @@ inline std::string pipeline_t::to_string() const {
 inline ref_t<compute_pipeline_t> compute_pipeline_t::create(
         ref_t<device_t> dev,
         ref_t<shader_t> shader,
-        ref_t<desc_set_initializer_t> bindings_initer)
+        ref_t<pipeline_layout_t> pipeline_layout)
 {
     auto ret = std::make_shared<compute_pipeline_t>();
     ret->m_device = dev;
     ret->m_shader = shader;
-    ret->m_bindings_initer = bindings_initer;
+    ret->m_pipeline_layout = pipeline_layout;
     VK_ASSERT(ret->init());
     return ret;
 }
 
 inline vc::ret_t compute_pipeline_t::init() {
     FnScope err_scope;
-
-    auto bind_descriptors = m_bindings_initer->get_descriptors();
-    DBGVV("cnt bind_descriptors: %zu", bind_descriptors.size());
-    for (auto &b : bind_descriptors) {
-        DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
-                b.descriptorType, b.binding, b.stageFlags);
-    }
-    VkDescriptorSetLayoutCreateInfo desc_set_layout_info {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .bindingCount = (uint32_t)bind_descriptors.size(),
-        .pBindings = bind_descriptors.data(),
-    };
-
-    VK_ASSERT(vkCreateDescriptorSetLayout(m_device->vk_dev, &desc_set_layout_info, nullptr,
-            &vk_desc_set_layout));
-    err_scope([&]{ vkDestroyDescriptorSetLayout(m_device->vk_dev, vk_desc_set_layout, nullptr); });
-    DBGVV("Allocated descriptor set layout: %p", vk_desc_set_layout);
-
-    VkPipelineLayoutCreateInfo pipeline_layout_info {
-        .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .pNext                  = nullptr,
-        .flags                  = 0,
-        .setLayoutCount         = 1,
-        .pSetLayouts            = &vk_desc_set_layout,
-        .pushConstantRangeCount = 0,
-        .pPushConstantRanges    = NULL,
-    };
-
-    VK_ASSERT(vkCreatePipelineLayout(m_device->vk_dev, &pipeline_layout_info, NULL, &vk_layout));
-    err_scope([&]{ vkDestroyPipelineLayout(m_device->vk_dev, vk_layout, NULL); });
-    DBGVV("Allocated pipeline layout: %p", vk_layout);
 
     if (get_shader_type(m_shader->m_type) != VK_SHADER_STAGE_COMPUTE_BIT) {
         throw vku::except_t("compute_pipeline needs a compute shader");
@@ -1982,31 +1946,27 @@ inline vc::ret_t compute_pipeline_t::init() {
         .pNext              = nullptr,
         .flags              = 0,
         .stage              = shader_info,
-        .layout             = vk_layout,
+        .layout             = m_pipeline_layout->vk_pipeline_layout,
         .basePipelineHandle = nullptr,
         .basePipelineIndex  = 0,
     };
 
     VK_ASSERT(vkCreateComputePipelines(
             m_device->vk_dev, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &vk_pipeline));
-    DBGVV("Allocated pipeline: %p", vk_pipeline);
+    DBG("Created Compute Pipeline: %p", this);
 
     err_scope.disable();
     return VK_SUCCESS;
 }
 
 inline vc::ret_t compute_pipeline_t::uninit() {
-    DBGVV("Dealocating pipeline: %p", vk_pipeline);
-
     vkDestroyPipeline(m_device->vk_dev, vk_pipeline, NULL);
-    vkDestroyPipelineLayout(m_device->vk_dev, vk_layout, NULL);
-    vkDestroyDescriptorSetLayout(m_device->vk_dev, vk_desc_set_layout, nullptr);
     return VK_SUCCESS;
 }
 
 inline std::string compute_pipeline_t::to_string() const {
-    return std::format("vku::compute_pipeline[{}]: m_device={} m_shader={} m_binding_desc_set={}",
-            (void*)this, (void*)m_device.get(), (void*)m_shader.get(), (void*)m_bindings_initer.get());
+    return std::format("vku::compute_pipeline[{}]: m_device={} m_shader={} m_pipeline_layout={}",
+            (void*)this, (void*)m_device.get(), (void*)m_shader.get(), (void*)m_pipeline_layout.get());
 }
 
 /* framebuffs_t
@@ -2048,6 +2008,8 @@ inline vc::ret_t framebuffs_t::init() {
         });
     }
 
+    DBG("Created Framebuffs %p", this);
+
     err_scope.disable();
     return VK_SUCCESS;
 }
@@ -2082,6 +2044,7 @@ inline vc::ret_t cmdpool_t::init() {
     };
 
     VK_ASSERT(vkCreateCommandPool(m_device->vk_dev, &pool_info, NULL, &vk_pool));
+    DBG("Created Command Pool %p", this);
     return VK_SUCCESS;
 }
 
@@ -2115,6 +2078,7 @@ inline vc::ret_t cmdbuff_t::init() {
     };
 
     VK_ASSERT(vkAllocateCommandBuffers(m_cmdpool->m_device->vk_dev, &buff_info, &vk_buff));
+    DBG("Created Command Buffer %p", this);
     return VK_SUCCESS;
 }
 
@@ -2182,11 +2146,11 @@ inline void cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
 }
 
 inline void cmdbuff_t::bind_desc_set(VkPipelineBindPoint bind_point,
-        VkPipelineLayout pipeline_layout, ref_t<desc_set_t> desc_set)
+        ref_t<pipeline_layout_t> pl, ref_t<desc_set_t> desc_set)
 {
     DBGVVV("bind desc_set: %p with layout: %p bind_point: %d",
-            desc_set->vk_desc_set, pipeline_layout, bind_point);
-    vkCmdBindDescriptorSets(vk_buff, bind_point, pipeline_layout, 0, 1,
+            desc_set->vk_desc_set, pl->vk_pipeline_layout, bind_point);
+    vkCmdBindDescriptorSets(vk_buff, bind_point, pl->vk_pipeline_layout, 0, 1,
             &desc_set->vk_desc_set, 0, nullptr);
 }
 
@@ -2266,6 +2230,7 @@ inline vc::ret_t sem_t::init() {
     };
 
     VK_ASSERT(vkCreateSemaphore(m_device->vk_dev, &sem_info, NULL, &vk_sem));
+    DBG("Created Semaphore %p", this);
     return VK_SUCCESS;
 }
 
@@ -2300,6 +2265,7 @@ inline vc::ret_t fence_t::init() {
     };
 
     VK_ASSERT(vkCreateFence(m_device->vk_dev, &fence_info, NULL, &vk_fence));
+    DBG("Created Fence %p", this);
     return VK_SUCCESS;
 }
 
@@ -2360,6 +2326,7 @@ inline vc::ret_t buffer_t::init() {
 
     VK_ASSERT(vkAllocateMemory(m_device->vk_dev, &alloc_info, nullptr, &vk_mem));
     VK_ASSERT(vkBindBufferMemory(m_device->vk_dev, vk_buff, vk_mem, 0));
+    DBG("Created Buffer %p", this);
     return VK_SUCCESS;
 }
 
@@ -2458,6 +2425,7 @@ inline vc::ret_t image_t::init() {
     VK_ASSERT(vkAllocateMemory(m_device->vk_dev, &alloc_info, nullptr, &vk_img_mem));
     VK_ASSERT(vkBindImageMemory(m_device->vk_dev, vk_img, vk_img_mem, 0));
 
+    DBG("Created Image %p", this);
     err_scope.disable();
     return VK_SUCCESS;
 }
@@ -2668,6 +2636,7 @@ inline vc::ret_t img_view_t::init() {
     };
 
     VK_ASSERT(vkCreateImageView(m_image->m_device->vk_dev, &view_info, nullptr, &vk_view));
+    DBG("Created Image View %p", this);
     return VK_SUCCESS;
 }
 inline vc::ret_t img_view_t::uninit() {
@@ -2721,6 +2690,7 @@ inline vc::ret_t img_sampl_t::init() {
     // samplerInfo.maxAnisotropy = 1.0f;
 
     VK_ASSERT(vkCreateSampler(m_device->vk_dev, &sampler_info, nullptr, &vk_sampler));
+    DBG("Created Image Sampler %p", this);
     return VK_SUCCESS;
 }
 
@@ -2787,6 +2757,7 @@ inline vc::ret_t desc_pool_t::init() {
 
     VK_ASSERT(vkCreateDescriptorPool(m_device->vk_dev, &pool_info, nullptr, &vk_descpool));
     DBGVV("Allocated pool: %p", vk_descpool);
+    DBG("Created Descriptor Pool %p", this);
     return VK_SUCCESS;
 }
 
@@ -2826,13 +2797,13 @@ Barriers:
 
 inline ref_t<desc_set_t> desc_set_t::create(
         ref_t<desc_pool_t> desc_pool,
-        VkDescriptorSetLayout desc_set_layout,
+        ref_t<desc_set_layout_t> desc_set_layout,
         ref_t<desc_set_initializer_t> bindings_initer)
 {
     auto ret = std::make_shared<desc_set_t>();
     ret->m_descriptor_pool = desc_pool;
-    ret->m_bindings_initer = bindings_initer;
     ret->m_desc_set_layout = desc_set_layout;
+    ret->m_bindings_initer = bindings_initer;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -2843,19 +2814,20 @@ inline vc::ret_t desc_set_t::init() {
         .pNext = nullptr,
         .descriptorPool = m_descriptor_pool->vk_descpool,
         .descriptorSetCount = 1,
-        .pSetLayouts = &m_desc_set_layout,
+        .pSetLayouts = &m_desc_set_layout->vk_desc_set_layout,
     };
 
     VK_ASSERT(vkAllocateDescriptorSets(m_descriptor_pool->m_device->vk_dev, &alloc_info,
             &vk_desc_set));
     DBGVV("Allocated descriptor set: %p from pool: %p with layout: %p",
-            vk_desc_set, m_descriptor_pool->vk_descpool, m_desc_set_layout);
+            vk_desc_set, m_descriptor_pool->vk_descpool, m_desc_set_layout->vk_desc_set_layout);
 
     /* TODO: this sucks, it references the buffer, but doesn't have a mechanism to do something
     if the buffer is freed without it's knowledge. So the buffer and descriptor set must
     match in size, but the buffer doesn't know that, that's not ok. */
 
-    update();
+    m_bindings_initer->update_set(this->to_related<desc_set_t>());
+    DBG("Created Descriptor Set %p", this);
     return VK_SUCCESS;
 }
 
@@ -2863,29 +2835,99 @@ inline vc::ret_t desc_set_t::uninit() {
     return VK_SUCCESS;
 }
 
-inline void desc_set_t::update() {
-    auto desc_writes = m_bindings_initer->get_writes(vk_desc_set);
-    for (auto &dw : desc_writes)
-        dw.dstSet = vk_desc_set;
-
-    DBG("writes: %zu", desc_writes.size());
-    for (auto &w : desc_writes) {
-        DBG("write: type: %s, bind: %d, dst_set: %p .pBufferInfo: %p",
-                vulkan_utils::to_string(w.descriptorType).c_str(), w.dstBinding, w.dstSet,
-                w.pBufferInfo);
-    }
-
-    vkUpdateDescriptorSets(m_descriptor_pool->m_device->vk_dev, (uint32_t)desc_writes.size(),
-            desc_writes.data(), 0, nullptr);
-}
-
 inline std::string desc_set_t::to_string() const {
     return std::format("vku::desc_set[{}]: m_desc_pool={} m_desc_set_layout={} m_binding_desc_set={}",
-            (void*)this, (void*)m_descriptor_pool.get(), (void*)m_desc_set_layout,
+            (void*)this, (void*)m_descriptor_pool.get(), (void*)m_desc_set_layout.get(),
             (void*)m_bindings_initer.get());
 }
 
-/* binding_desc_t:
+/* desc_set_layout_t:
+================================================================================================= */
+
+inline ref_t<desc_set_layout_t> desc_set_layout_t::create(ref_t<device_t> dev,
+        ref_t<desc_set_initializer_t> bindings_initer)
+{
+    auto ret = std::make_shared<desc_set_layout_t>();
+    ret->m_device = dev;
+    ret->m_bindings_initer = bindings_initer;
+
+    VK_ASSERT(ret->init());
+    return ret;
+}
+
+inline vc::ret_t desc_set_layout_t::init() {
+    auto bind_descriptors = m_bindings_initer->get_descriptors();
+    DBGVV("cnt bind_descriptors: %zu", bind_descriptors.size());
+    for (auto &b : bind_descriptors) {
+        DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
+                b.descriptorType, b.binding, b.stageFlags);
+    }
+
+    VkDescriptorSetLayoutCreateInfo desc_set_layout_info {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .bindingCount = (uint32_t)bind_descriptors.size(),
+        .pBindings = bind_descriptors.data(),
+    };
+
+    VK_ASSERT(vkCreateDescriptorSetLayout(m_device->vk_dev, &desc_set_layout_info, nullptr,
+            &vk_desc_set_layout));
+    DBGVV("Allocated descriptor set layout: %p", vk_desc_set_layout);
+    DBG("Created Descriptor Set Layout %p", this);
+    return VK_SUCCESS;
+}
+
+inline vc::ret_t desc_set_layout_t::uninit() {
+    vkDestroyDescriptorSetLayout(m_device->vk_dev, vk_desc_set_layout, nullptr);
+    return VK_SUCCESS;
+}
+
+inline std::string desc_set_layout_t::to_string() const {
+    return std::format("vku::desc_set_layout_t[{}]: m_device={} m_bindings_initer={}",
+            (void*)this, (void*)m_device.get(), (void*)m_bindings_initer.get());
+}
+
+/* pipeline_layout_t:
+================================================================================================= */
+
+inline ref_t<pipeline_layout_t> pipeline_layout_t::create(ref_t<desc_set_layout_t> desc_set_layout) {
+    auto ret = std::make_shared<pipeline_layout_t>();
+    ret->m_desc_set_layout = desc_set_layout;
+
+    VK_ASSERT(ret->init());
+    return ret;
+}
+
+inline vc::ret_t pipeline_layout_t::init() {
+    VkPipelineLayoutCreateInfo pipeline_layout_info {
+        .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pNext                  = nullptr,
+        .flags                  = 0,
+        .setLayoutCount         = 1,
+        .pSetLayouts            = &m_desc_set_layout->vk_desc_set_layout,
+        .pushConstantRangeCount = 0,
+        .pPushConstantRanges    = NULL,
+    };
+
+    VK_ASSERT(vkCreatePipelineLayout(m_desc_set_layout->m_device->vk_dev, &pipeline_layout_info,
+            NULL, &vk_pipeline_layout));
+    DBGVV("Allocated pipeline layout: %p", vk_pipeline_layout);
+    DBG("Created Pipeline Layout %p", this);
+    return VK_SUCCESS;
+}
+
+inline vc::ret_t pipeline_layout_t::uninit() {
+    vkDestroyPipelineLayout(m_desc_set_layout->m_device->vk_dev, vk_pipeline_layout, NULL);
+    return VK_SUCCESS;
+}
+
+inline std::string pipeline_layout_t::to_string() const {
+    return std::format("vku::desc_set_layout_t[{}]: m_desc_set_layout={}",
+            (void*)this, (void*)m_desc_set_layout.get());
+}
+
+/* desc_set_initializer_t:
 ================================================================================================= */
 
 inline ref_t<desc_set_initializer_t::buff_binding_t> desc_set_initializer_t::buff_binding_t::create(
@@ -3006,6 +3048,22 @@ inline std::string desc_set_initializer_t::to_string() const {
     binds_str += "]";
     return std::format("vku::desc_set_initializer_t[{}]: m_bindings={} ",
             (void*)this, binds_str);
+}
+
+inline void desc_set_initializer_t::update_set(ref_t<desc_set_t> ds) {
+    /* TODO: maybe make a per-thread arrat of desc writes because this allocates memory for no
+    reason */
+    auto desc_writes = get_writes(ds->vk_desc_set);
+
+    DBG("writes: %zu", desc_writes.size());
+    for (auto &w : desc_writes) {
+        DBG("write: type: %s, bind: %d, dst_set: %p .pBufferInfo: %p",
+                vulkan_utils::to_string(w.descriptorType).c_str(), w.dstBinding, w.dstSet,
+                w.pBufferInfo);
+    }
+
+    vkUpdateDescriptorSets(ds->m_descriptor_pool->m_device->vk_dev,
+            (uint32_t)desc_writes.size(), desc_writes.data(), 0, nullptr);
 }
 
 inline std::vector<VkWriteDescriptorSet> desc_set_initializer_t::get_writes(

@@ -157,7 +157,7 @@ int main(int argc, char const *argv[])
     );
     auto mvp_pbuff = mvp_buff->map_data(0, sizeof(vku::mvp_t));
 
-    auto bindings = vku::desc_set_initializer_t::create({
+    auto bindings_initer = vku::desc_set_initializer_t::create({
         vku::desc_set_initializer_t::buff_binding_t::create(
             vku::ubo_t::get_desc_set(0, VK_SHADER_STAGE_VERTEX_BIT),
             mvp_buff
@@ -173,13 +173,15 @@ int main(int argc, char const *argv[])
     auto sh_frag =  vku::shader_t::create(dev, frag);
     auto swc =      vku::swapchain_t::create(dev, surf);
     auto rp =       vku::renderpass_t::create(swc);
+    auto ds_lay =   vku::desc_set_layout_t::create(dev, bindings_initer);
+    auto pl_lay =   vku::pipeline_layout_t::create(ds_lay);
     auto pl =       vku::pipeline_t::create(
         width, height,
         rp,
         {sh_vert, sh_frag},
         VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         vku::vertex3d_t::get_input_desc(),
-        bindings
+        pl_lay
     );
     auto fbs =      vku::framebuffs_t::create(rp);
 
@@ -192,8 +194,8 @@ int main(int argc, char const *argv[])
     auto vbuff = create_vbuff(dev, cp, vertices);
     auto ibuff = create_ibuff(dev, cp, indices);
 
-    auto desc_pool = vku::desc_pool_t::create(dev, bindings, 1);
-    auto desc_set = vku::desc_set_t::create(desc_pool, pl->vk_desc_set_layout, bindings);
+    auto desc_pool = vku::desc_pool_t::create(dev, bindings_initer, 1);
+    auto desc_set = vku::desc_set_t::create(desc_pool, ds_lay, bindings_initer);
 
     /* TODO: print a lot more info on vulkan, available extensions, size of memory, etc. */
 
@@ -229,7 +231,7 @@ int main(int argc, char const *argv[])
             cbuff->begin_rpass(fbs, img_idx);
             cbuff->bind_vert_buffs(0, {{vbuff, 0}});
             cbuff->bind_idx_buff(ibuff, 0, VK_INDEX_TYPE_UINT16);
-            cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_GRAPHICS, pl->vk_layout, desc_set);
+            cbuff->bind_desc_set(VK_PIPELINE_BIND_POINT_GRAPHICS, pl_lay, desc_set);
             cbuff->draw_idx(pl, indices.size());
             cbuff->end_rpass();
             cbuff->end();

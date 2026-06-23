@@ -100,7 +100,14 @@ mvp_buff:
   m_usage_flags: VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
   m_sharing_mode: VK_SHARING_MODE_EXCLUSIVE
   m_memory_flags: [VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT]
-bindings:
+swc:
+  m_type: vku::swapchain_t
+  m_device: !ref dev
+  m_surface: !ref surf
+rp:
+  m_type: vku::renderpass_t
+  m_swapchain: !ref swc
+bindings_initer:
   m_type: vku::desc_set_initializer_t
   m_descriptors:
     - m_type: vku::desc_set_initializer_t::buff_binding_t
@@ -120,13 +127,12 @@ bindings:
         m_binding: 1
         m_stage: VK_SHADER_STAGE_VERTEX_BIT
         m_desc_type: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-swc:
-  m_type: vku::swapchain_t
-  m_device: !ref dev
-  m_surface: !ref surf
-rp:
-  m_type: vku::renderpass_t
-  m_swapchain: !ref swc
+ds_lay:
+  m_type: vku::desc_set_layout_t
+  m_bindings_initer: bindings_initer
+pl_lay:
+  m_type: vku::pipeline_layout_t
+  m_desc_set_layout: ds_lay
 pl:
   m_type: vku::pipeline_t
   m_width: !ref width
@@ -159,7 +165,7 @@ pl:
     - m_type: vku::shader_t
       m_device: !ref dev
       m_spirv: !ref frag_spirv
-  m_bindings: !ref bindings
+  m_pipeline_layout: !ref pl_lay
 fbs:
   m_type: vku::framebuffs_t
   m_renderpass: !ref rp
@@ -192,15 +198,13 @@ ibuff:
 desc_pool:
   m_type: vku::desc_pool_t
   m_device: !ref dev
-  m_bindings: !ref bindings
+  m_bindings_initer: !ref bindings_initer
   m_cnt: 1
 desc_set:
   m_type: vku::desc_set_t
   m_descriptor_pool: !ref desc_pool
-  m_layout: !copy
-    object: pl
-    member: vk_desc_set_layout
-  m_bindings: !ref bindings
+  m_desc_set_layout: !ref ds_lay
+  m_bindings_initer: !ref bindings_initer
 
 lua_script:
   m_source: |

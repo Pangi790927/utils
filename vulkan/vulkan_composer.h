@@ -333,7 +333,7 @@
  *   pipeline stages.
  * - m_topology: Primitive topology (triangle list, line list, etc.).
  * - m_input_desc: Vertex input description (binding, attributes, stride, input rate).
- * - m_bindings: Reference to a desc_set_initializer_t object. Descriptor sets used 
+ * - m_bindings_initer: Reference to a desc_set_initializer_t object. Descriptor sets used 
  *   by the pipeline.
  * - m_width, m_height: Pipeline viewport dimensions.
  *
@@ -359,7 +359,7 @@
  * Members:
  * - m_device: Reference to a device_t object. The device that owns this compute pipeline.
  * - m_shader: Reference to a shader_t object containing the compute shader.
- * - m_bindings: Reference to a desc_set_initializer_t object describing descriptor sets 
+ * - m_bindings_initer: Reference to a desc_set_initializer_t object describing descriptor sets 
  *   used by the shader.
  *
  * Init: create(device, shader, bindings)
@@ -698,7 +698,7 @@
  *
  * Members:
  * - m_device: Reference to the device_t object that owns this pool.
- * - m_bindings: Reference to a desc_set_initializer_t object describing the types 
+ * - m_bindings_initer: Reference to a desc_set_initializer_t object describing the types 
  *   of bindings this pool can allocate.
  * - m_cnt: Number of descriptor sets this pool can allocate.
  * - vk_descpool: Vulkan descriptor pool handle.
@@ -722,7 +722,7 @@
  * Members:
  * - m_descriptor_pool: Reference to the desc_pool_t object that allocated this set.
  * - m_pipeline: Reference to the pipeline_t object using this descriptor set.
- * - m_bindings: Reference to a desc_set_initializer_t object describing the resources 
+ * - m_bindings_initer: Reference to a desc_set_initializer_t object describing the resources 
  *   bound to this descriptor set.
  * - vk_desc_set: Vulkan descriptor set handle.
  *
@@ -1225,6 +1225,7 @@ inline uint32_t internal_device_wait_handle(vku::ref_t<vku::device_t> dev) {
 inline int copy_from_cpu_to_gpu(vku::ref_t<vku::cmdpool_t> cp, vku::ref_t<vku::buffer_t> dst,
         void *src, size_t len, size_t off)
 {
+    (void)off;
     auto staging_vbuff = vku::buffer_t::create(
         cp->m_device,
         len,
@@ -1344,8 +1345,9 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_vert_buffs,
             uint32_t, std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>>);
     /* TODO: */
-    // VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_desc_set,
-    //         vc::bm_t<VkPipelineBindPoint>, vku::ref_t<vku::pipeline_t>, vku::ref_t<vku::desc_set_t>);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_desc_set,
+            vc::bm_t<VkPipelineBindPoint>, vku::ref_t<vku::pipeline_layout_t>,
+            vku::ref_t<vku::desc_set_t>);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_idx_buff,
             vc::ref_t<vku::buffer_t>, uint64_t, vc::bm_t<VkIndexType>);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, draw, vku::ref_t<vku::pipeline_t>, uint64_t);
@@ -1361,16 +1363,6 @@ inline int register_meta(vc::virt_state_t *vs) {
     // ----------------------------------------------------------------------------------------- */
     VC_REGISTER_MEMBER_FUNCTION(vs, vkc::cpu_buffer_t, data);
     VC_REGISTER_MEMBER_FUNCTION(vs, vkc::cpu_buffer_t, size);
-
-    // /* vku::pipeline_t
-    // ----------------------------------------------------------------------------------------- */
-    VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER(vs, vku::pipeline_t, vk_layout);
-    VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER(vs, vku::pipeline_t, vk_desc_set_layout);
-
-    // /* vku::compute_pipeline_t
-    // ----------------------------------------------------------------------------------------- */
-    VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER(vs, vku::compute_pipeline_t, vk_layout);
-    VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER(vs, vku::compute_pipeline_t, vk_desc_set_layout);
 
     /* Done objects
     ----------------------------------------------------------------------------------------- */
@@ -1662,8 +1654,23 @@ inline int register_meta(vc::virt_state_t *vs) {
                 shaders.push_back(co_await resolve_obj<vku::shader_t>(vs, sh));
             auto topol = vc::get_enum_val<VkPrimitiveTopology>(node["m_topology"]);
             auto indesc = co_await resolve_obj<vkc::vertex_input_desc_t>(vs, node["m_input_desc"]);
-            auto binds = co_await resolve_obj<vku::desc_set_initializer_t>(vs, node["m_bindings"]);
-            auto obj = vku::pipeline_t::create(w, h, rp, shaders, topol, indesc->vid, binds);
+            auto pl = co_await resolve_obj<vku::pipeline_layout_t>(vs, node["m_pipeline_layout"]);
+            auto obj = vku::pipeline_t::create(w, h, rp, shaders, topol, indesc->vid, pl);
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::compute_pipeline_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+            auto shader = co_await resolve_obj<vku::shader_t>(vs, node["m_shader"]);
+            auto pl = co_await resolve_obj<vku::pipeline_layout_t>(vs, node["m_pipeline_layout"]);
+            auto obj = vku::compute_pipeline_t::create(dev, shader, pl);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -1751,13 +1758,44 @@ inline int register_meta(vc::virt_state_t *vs) {
     ASSERT_FN(ret);
 
     ret = add_named_builder_callback(vs,
+        "vku::desc_set_layout_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+            auto bindings_initer = co_await resolve_obj<vku::desc_set_initializer_t>(
+                    vs, node["m_bindings_initer"]);
+            auto obj = vku::desc_set_layout_t::create(dev, bindings_initer);
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::pipeline_layout_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            /* In the future this will not be a simple redirect, but will contain multiple layouts */
+            auto desc_set_layout = co_await resolve_obj<vku::desc_set_layout_t>(
+                    vs, node["m_desc_set_layout"]);
+            auto obj = vku::pipeline_layout_t::create(desc_set_layout);
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+
+    ret = add_named_builder_callback(vs,
         "vku::desc_set_t",
         [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
             -> co::task<vc::ref_t<vc::object_t>>
         {
             auto descriptor_pool = co_await resolve_obj<vku::desc_pool_t>(vs, node["m_descriptor_pool"]);
-            auto desc_layout = co_await resolve_memb<VkDescriptorSetLayout>(vs, node["m_layout"]);
-            auto bindings = co_await resolve_obj<vku::desc_set_initializer_t>(vs, node["m_bindings"]);
+            auto desc_layout = co_await resolve_obj<vku::desc_set_layout_t>(vs, node["m_desc_set_layout"]);
+            auto bindings = co_await resolve_obj<vku::desc_set_initializer_t>(vs, node["m_bindings_initer"]);
             auto obj = vku::desc_set_t::create(descriptor_pool, desc_layout, bindings);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
@@ -1771,7 +1809,7 @@ inline int register_meta(vc::virt_state_t *vs) {
             -> co::task<vc::ref_t<vc::object_t>>
         {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-            auto binds = co_await resolve_obj<vku::desc_set_initializer_t>(vs, node["m_bindings"]);
+            auto binds = co_await resolve_obj<vku::desc_set_initializer_t>(vs, node["m_bindings_initer"]);
             int cnt = co_await resolve_int(vs, node["m_cnt"]);
             auto obj = vku::desc_pool_t::create(dev, binds, cnt);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
