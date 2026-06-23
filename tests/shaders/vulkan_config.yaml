@@ -7,6 +7,7 @@ vert_spirv:
   m_source: |
     #version 450
 
+    // OBSL this isn't used for now
     layout(binding = 0) uniform ubo_t {
       mat4 model;
       mat4 view;
