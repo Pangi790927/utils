@@ -453,6 +453,7 @@ struct lua_function_t : public vc::object_t {
         ret->m_source = source;
         if (ret->init() < 0)
             throw vc::except_t("Failed lua_function_t init");
+        DBG("Created Lua Function: name: %s src: %s", name.c_str(), source.c_str());
         return ret;
     }
 

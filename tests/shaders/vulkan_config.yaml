@@ -18,18 +18,15 @@ vert_spirv:
     // directive (from path or from a known name, not sure how I will decide on the name resplve)
     #define APPLY_ASSIGN(x, y) x = y
 
-    layout(location = 0) in vec3 in_pos;
-
-    // those are referenced by
-    layout(location = 1) in vec3 in_normal; // vku::vertex3d_t::get_input_desc()
-    layout(location = 2) in vec3 in_color;
-    layout(location = 3) in vec2 in_tex;
+    layout(location = 0) in vec2 in_pos;
+    layout(location = 1) in vec3 in_color;
+    layout(location = 2) in vec2 in_tex;
 
     layout(location = 0) out vec3 out_color;
     layout(location = 1) out vec2 out_tex_coord;
 
     void main() {
-      gl_Position = ubo.proj * ubo.view * ubo.model * vec4(in_pos, 1.0);
+      gl_Position = vec4(in_pos, 0.0, 1.0);
 
       APPLY_ASSIGN(out_color, in_color);
       APPLY_ASSIGN(out_tex_coord, in_tex);
@@ -57,16 +54,16 @@ height: 600
 
 # Those are examples of user provided functions, the name must match the one inside the plugin and
 # the calling convention is that of lua (i.e. read the manual and prototype is int fn(lua_State *))
-# fill_buffer_with_triangles_vertices:
-#   m_type: vc::lua_function_t
-#   m_source: libuserplugin.so
-# fill_buffer_with_triangles_indexes:
-#   m_type: vc::lua_function_t
-#   m_source: libuserplugin.so
+fill_buffer_with_quad_vertices:
+  m_type: vc::lua_function_t
+  m_source: "[INTERNAL]"
+fill_buffer_with_quad_indexes:
+  m_type: vc::lua_function_t
+  m_source: "[INTERNAL]"
 
 staging_buffer:
   m_type: vkc::cpu_buffer_t
-  m_size: (SIZEOF_VEC_2F + SIZEOF_VEC_3F + SIZEOF_VEC_2F) * 3
+  m_size: (SIZEOF_VEC_2F + SIZEOF_VEC_3F + SIZEOF_VEC_2F) * 4
 window:
   m_type: vku::window_t
   m_width: !ref width
@@ -129,10 +126,11 @@ bindings_initer:
         m_desc_type: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
 ds_lay:
   m_type: vku::desc_set_layout_t
-  m_bindings_initer: bindings_initer
+  m_device: !ref dev
+  m_bindings_initer: !ref bindings_initer
 pl_lay:
   m_type: vku::pipeline_layout_t
-  m_desc_set_layout: ds_lay
+  m_desc_set_layout: !ref ds_lay
 pl:
   m_type: vku::pipeline_t
   m_width: !ref width
@@ -155,7 +153,7 @@ pl:
         m_offset: SIZEOF_VEC_2F
       - m_location: 2
         m_binding: 0
-        m_format: VK_FORMAT_R32G32B32_SFLOAT
+        m_format: VK_FORMAT_R32G32_SFLOAT
         m_offset: SIZEOF_VEC_2F + SIZEOF_VEC_3F
   m_topology: VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
   m_shaders:
@@ -211,12 +209,12 @@ lua_script:
     vc = require("virt_composer")
 
     function vku_init()
-      print("ok")
-      -- vc.fill_buffer_with_triangles_vertices(vc.staging_buffer.data(), vc.staging_buffer.size())
-      -- vc.copy_from_cpu_to_gpu(vc.staging_buffer, vc.vbuff, vc.staging_buffer.size(), 0)
+      vc.fill_buffer_with_quad_vertices(vc.staging_buffer:data(), vc.staging_buffer:size())
+      vc.copy_from_cpu_to_gpu(vc.cp, vc.vbuff, vc.staging_buffer:data(), vc.staging_buffer:size(), 0)
 
-      -- vc.fill_buffer_with_triangles_indexes(vc.staging_buffer.data(), vc.staging_buffer.size())
-      -- vc.copy_from_cpu_to_gpu(vc.staging_buffer, vc.ibuff, vc.SIZEOF_INT*3, 0)
+      vc.fill_buffer_with_quad_indexes(vc.staging_buffer:data(), vc.staging_buffer:size())
+      -- TODO: add vc.SIZEOF_INT32 to the internal variables
+      vc.copy_from_cpu_to_gpu(vc.cp, vc.ibuff, vc.staging_buffer:data(), 4 * 6, 0)
     end
 
     function on_loop_run()
@@ -229,12 +227,12 @@ lua_script:
 
       -- do mvp update somehow?
 
-      vc.cbuff:begin()
+      vc.cbuff:begin(vc.VK_COMMAND_BUFFER_USAGE_NONE)
       vc.cbuff:begin_rpass(vc.fbs, img_idx)
       vc.cbuff:bind_vert_buffs(0, {{vc.vbuff, 0}});
-      vc.cbuff:bind_idx_buff(vc.ibuff, 0, vc.VK_INDEX_TYPE_UINT16);
-      vc.cbuff:bind_desc_set(vc.VK_PIPELINE_BIND_POINT_GRAPHICS, vc.pl, vc.desc_set);
-      vc.cbuff:draw_idx(vc.pl, indices.size());
+      vc.cbuff:bind_idx_buff(vc.ibuff, 0, vc.VK_INDEX_TYPE_UINT32);
+      vc.cbuff:bind_desc_set(vc.VK_PIPELINE_BIND_POINT_GRAPHICS, vc.pl_lay, vc.desc_set);
+      vc.cbuff:draw_idx(vc.pl, 6);
       vc.cbuff:end_rpass();
       vc.cbuff:end_begin();
 

@@ -667,7 +667,10 @@ static int luaopen_vc(lua_State *L) {
         /* params: 1.usrptr [... rest of params] */
         lua_pushcfunction(L, [](lua_State *L) {
             // DBG("__call: %d", lua_gettop(L));
-            auto obj = (vc::object_t *)lua_touserdata(L, -1);
+            auto obj = (vc::object_t *)lua_touserdata(L, 1);
+            if (!obj) {
+                luaw_push_error(L, "invalid null object, ie called on nil");
+            }
             vc::object_type_e class_id = obj->type_id(); /* an int, still ok on unwind */
             if (class_id != VC_TYPE_LUA_FUNCTION) {
                 luaw_push_error(L, std::format("invalid class id: {} is not VC_TYPE_LUA_FUNCTION",

@@ -3,14 +3,14 @@
 
 /*! TODO:
  * 
- * - the descriptor mess must be handled somehow
+ * + the descriptor mess must be handled somehow
  * + composer must get the changes
- * - composer must be able to pass around vk_layout as parameter in lua, somehow
- * - some structs must be added to composer, as such it will make things easyer (all those things
+ * + composer must be able to pass around vk_layout as parameter in lua, somehow
+ * + some structs must be added to composer, as such it will make things easyer (all those things
  * that have more than one handle are suspicious, in particular pipeline_t)
- * - some structs must be added to yaml parser of composer (not sure how or if I really should)
+ * + some structs must be added to yaml parser of composer (not sure how or if I really should)
  * - sync primitives must be added to vku and vkc
- * - some way to rebuild the resize window would be nice
+ * + some way to rebuild the resize window would be nice
  * - search for all "TODO:" in virt_composer.h/cpp vulkan_composer.h vulkan_utils.h
  */
 

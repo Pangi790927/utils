@@ -9,6 +9,37 @@ int main(int argc, char const *argv[])
 {
     (void)argc, (void)argv;
 
+    /* We can add those functions whenever we want because they are not part of the virtual state,
+    but part of the executable in a sense. */
+    vc::lua_function_t::add_internal_func("fill_buffer_with_quad_vertices",
+        vc::luaw_function_wrapper<[](void *buff, size_t len) -> int {
+            DBG("buff: %p, len: %zu", buff, len);
+
+            struct vertex_t {
+                glm::vec2 a;
+                glm::vec3 b;
+                glm::vec2 c;
+            };
+
+            vertex_t quad_points[] = {
+                {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+                {{-0.5f,  0.5f}, {1.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+                {{ 0.5f,  0.5f}, {1.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+                {{ 0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}},
+            };
+
+            memcpy(buff, &quad_points, len);
+            return 0;
+        }, void *, size_t>);
+
+    vc::lua_function_t::add_internal_func("fill_buffer_with_quad_indexes",
+        vc::luaw_function_wrapper<[](void *buff, size_t len) -> int {
+            DBG("buff: %p, len: %zu", buff, len);
+            uint32_t indexes[] = { 0, 1, 2, 0, 2, 3};
+            memcpy(buff, indexes, sizeof(indexes));
+            return 0;
+        }, void *, size_t>);
+
     /* We first create the state of our composer, that means:
          - the lua state,
          - object storage and naming

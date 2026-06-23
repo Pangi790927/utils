@@ -265,8 +265,10 @@ int main()
     vku::ref_t<vku::desc_set_t> comp_desc_set[2];
 
     comp_desc_set[0] = vku::desc_set_t::create(comp_desc_pool, comp_ds_lay, comp_bindings_initer);
-    std::swap(b1->desc_buff_info.buffer, b2->desc_buff_info.buffer);
     comp_desc_set[1] = vku::desc_set_t::create(comp_desc_pool, comp_ds_lay, comp_bindings_initer);
+    std::swap(b1->desc_buff_info.buffer, b2->desc_buff_info.buffer);
+    comp_bindings_initer->update_set(comp_desc_set[1]);
+
 
     DBG("done descpool/desc_sets");
 
