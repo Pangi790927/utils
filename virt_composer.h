@@ -1247,6 +1247,9 @@ struct luaw_param_t<vc::ref_t<T>, index> {
 /* This resolves bitmasks received from lua to an vc parameter */
 template <typename T, ssize_t index>
 struct luaw_param_t<bm_t<T>, index> {
+    std::function<void (lua_State *, const std::string&, const std::source_location)> throw_error =
+            luaw_push_error;
+
     T luaw_single_param(lua_State *L) {
         // DBG("BitMap at index: %zd", index);
         /* There are 2 options here (maybe later we will also add numbers, but not for now):
@@ -1256,10 +1259,10 @@ struct luaw_param_t<bm_t<T>, index> {
         auto from_string = [this](lua_State *L, int idx) -> T {
             const char *val = lua_tostring(L, idx);
             if (!val) {
-                luaw_push_error(L, std::format(
+                throw_error(L, std::format(
                         "Invalid parameter at index {}, failed conversion to [vc-bitmask] "
                         "object is an invalid string: [{}]",
-                        idx, lua_typename(L, lua_type(L, idx))));
+                        idx, lua_typename(L, lua_type(L, idx))), std::source_location::current());
             }
             fkyaml::node str_enum_val{val};
             return get_enum_val<T>(str_enum_val);
@@ -1268,10 +1271,10 @@ struct luaw_param_t<bm_t<T>, index> {
             int valid = 0;
             uint32_t val = lua_tointegerx(L, idx, &valid);
             if (!valid) {
-                luaw_push_error(L, std::format(
+                throw_error(L, std::format(
                         "Invalid parameter at index {}, failed conversion to [vc-bitmask] "
                         "object is an invalid integer: [{}]",
-                        idx, lua_typename(L, lua_type(L, idx))));
+                        idx, lua_typename(L, lua_type(L, idx))), std::source_location::current());
             }
             return (T)val;
         };
@@ -1291,20 +1294,20 @@ struct luaw_param_t<bm_t<T>, index> {
                 else if (lua_isstring(L, -1))
                     ret = (T)(ret | from_string(L, -1));
                 else {
-                    luaw_push_error(L, std::format(
+                    throw_error(L, std::format(
                             "Invalid parameter at index {}, failed conversion to [vc-bitmask] "
                             "object is an invalid string or integer: [{}]",
-                            index, lua_typename(L, lua_type(L, index))));
+                            index, lua_typename(L, lua_type(L, index))), std::source_location::current());
                 }
                 lua_pop(L, 1);
             }
             return ret;
         }
         else {
-            luaw_push_error(L, std::format(
+            throw_error(L, std::format(
                     "Invalid parameter at index {}, failed conversion to [vc-bitmask] "
                     "object is neither table, integer or string: [{}]",
-                    index, lua_typename(L, lua_type(L, index))));
+                    index, lua_typename(L, lua_type(L, index))), std::source_location::current());
             return (T)0;
         }
     }
@@ -1835,7 +1838,9 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
     else if constexpr (is_vc_enum<Type>) {
         try {
             object = luaw_param_t<bm_t<T>, -1>{
-                [](lua_State *, const std::string& str) -> void {
+                .throw_error = [](lua_State *, const std::string& str,
+                        const std::source_location) -> void
+                {
                     throw std::runtime_error(str);
                 }
             }.luaw_single_param(L);
