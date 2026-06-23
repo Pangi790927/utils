@@ -241,7 +241,7 @@ int main()
 
     /* here we have the compute pipeline created and ready to do stuff */
 
-    auto bindings = vku::binding_desc_set_t::create({});
+    auto bindings = vku::desc_set_initializer_t::create({});
 
     auto sh_vert =  vku::shader_t::create(dev, vert);
     auto sh_frag =  vku::shader_t::create(dev, frag);

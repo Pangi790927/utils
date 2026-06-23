@@ -157,6 +157,7 @@ static chunk_border_t *split_chunk(chunk_border_t *cb, ap_sz_t split_loc) {
 
 /* we assume a, b are free, b is not the last chunk border */
 static chunk_border_t *merge_chunks(ap_ctx_t *ctx, chunk_border_t *a, chunk_border_t *b) {
+    (void)ctx;
     auto next_cb = next_border(b);
     next_cb->prev_sz = a->sz.sz + BOREDR_SZ + b->sz.sz;
     a->sz.sz = next_cb->prev_sz;
@@ -172,7 +173,6 @@ static ap_off_t try_alloc_in_free(ap_ctx_t *ctx, size_t sz) {
     /* first we will try to look in the list of similar sizes  */
     uint32_t l2 = log2_64(sz);
     ap_off_t curr_free = hdr->free_lists[l2];
-    bool found = false;
 
     while (curr_free) {
         auto cb = (chunk_border_t *)get_ptr(ctx, curr_free);
@@ -359,7 +359,6 @@ ap_off_t ap_malloc_alloc(ap_ctx_t *ctx, size_t sz) {
 void ap_malloc_free(ap_ctx_t *ctx, ap_off_t ptroff) {
     /* a user gives us a pointer and we must free it, in case the boundry that gets freed
     is adjiacent to another free boundry, we can merge it to reduce fragmentation */
-    auto hdr = (mem_hdr_t *)ctx->region;
     auto cb = usr2cb(ap_malloc_ptr(ctx, ptroff));
     if (cb->sz.is_free) {
         DBG("Double free");
@@ -379,7 +378,7 @@ void ap_malloc_free(ap_ctx_t *ctx, ap_off_t ptroff) {
 void ap_malloc_dbg_print(ap_ctx_t *ctx) {
     auto hdr = (mem_hdr_t *)ctx->region;
     std::string free_list_str;
-    for (int i = 0; i < sizeof(hdr->free_lists) / sizeof(hdr->free_lists[0]); i++) {
+    for (size_t i = 0; i < sizeof(hdr->free_lists) / sizeof(hdr->free_lists[0]); i++) {
         free_list_str += sformat("[%2d:%16lx]", i, hdr->free_lists[i]);
         if (i % 8 == 0)
             free_list_str += "\n";

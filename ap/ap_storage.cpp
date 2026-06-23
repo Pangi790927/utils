@@ -44,7 +44,7 @@ struct mod_bmap_ctx_t {
     W    get_word_fn(I i) const { return bmap_get_word(i); }
     void set_word_fn(I i, W w)  { bmap_set_word(i, w); }
     SZ   get_sz_fn()      const { return bmap_get_size(); }
-    void resize_fn(SZ sz)       { ; }
+    void resize_fn(SZ)       { ; }
 };
 
 using mod_bmap_t = generic_bitmap_t<mod_bmap_ctx_t>;

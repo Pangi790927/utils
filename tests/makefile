@@ -3,19 +3,24 @@ LIBS      := -lpthread -ldl -lglfw -lcurl -lvulkan
 # LIBS      += -lSPIRV -lSPIRV-Tools -lSPIRV-Tools-opt -lglslang -lOGLCompiler -lOSDependent 
 # LIBS      += -lSPVRemapper -lpthread -lHLSL
 
-MACHINE_INDEPENDENT := $(shell g++ -lMachineIndependent 2>&1)
-ifneq (,$(findstring cannot find -lMachineIndependent,$(MACHINE_INDEPENDENT)))
-	GLSL_ADDITIONAL_LIB :=
-else
-	GLSL_ADDITIONAL_LIB := -lMachineIndependent -lGenericCodeGen
-endif
+LIBS += -Wl,--start-group
+	# https://github.com/google/shaderc
+	LIBS += -lglslang -lSPIRV -lOSDependent 
+	LIBS += -lSPIRV-Tools -lSPIRV-Tools-opt -lSPVRemapper
 
-LIBS      += -Wl,--start-group
-# https://github.com/google/shaderc
-LIBS 	  += -lglslang -lshaderc_shared  -lSPIRV -lOSDependent 
-LIBS 	  += -lSPIRV-Tools -lSPIRV-Tools-opt -lSPVRemapper
-LIBS 	  += ${GLSL_ADDITIONAL_LIB}
-LIBS 	  += -Wl,--end-group
+	SHADERC_ERR := $(shell g++ -lshaderc_shared 2>&1)
+	ifneq (,$(findstring cannot find -lshaderc_shared,$(SHADERC_ERR)))
+		LIBS += -lOGLCompiler -lHLSL
+	else
+		LIBS += -lshaderc_shared
+	endif
+
+	MACHINE_INDEPENDENT_ERR := $(shell g++ -lMachineIndependent 2>&1)
+	ifeq (,$(findstring cannot find -lMachineIndependent,$(MACHINE_INDEPENDENT_ERR)))
+		LIBS += -lMachineIndependent -lGenericCodeGen
+	endif
+LIBS += -Wl,--end-group
+
 LIBS      += -lpthread
 LIBS      += -lbacktrace
 
