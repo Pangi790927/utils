@@ -6,9 +6,6 @@
 #include "time_utils.h"
 #include "vulkan_config.h"
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
-
 using namespace vulkan_utils;
 
 struct part_t {
@@ -61,25 +58,6 @@ static auto create_ibuff(auto dev, auto cp, const std::vector<uint16_t>& indices
     );
     vku_copy_buff(cp, ibuff, staging_ibuff, idxs_sz);
     return ibuff;
-}
-
-static auto load_image(auto cp, std::string path) {
-    int w, h, chans;
-    stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &chans, STBI_rgb_alpha);
-
-    /* TODO: some more logs around here */
-    VkDeviceSize imag_sz = w*h*4;
-    if (!pixels) {
-        DBG("Bad pixels...");
-        throw vku_err_t("Failed to load image");
-    }
-
-    auto img = vku_image_t::create(cp->get()->dev, w, h, VK_FORMAT_R8G8B8A8_SRGB);
-    img->get()->set_data(cp, pixels, imag_sz);
-
-    stbi_image_free(pixels);
-
-    return img;
 }
 
 int main(int argc, char const *argv[])
@@ -165,7 +143,7 @@ int main(int argc, char const *argv[])
     auto dev =      vku_device_t::create(surf);
     auto cp =       vku_cmdpool_t::create(dev);
 
-    auto img = load_image(cp, "test_image.png");
+    auto img = vku::load_image(cp, "test_image.png");
     auto view = vku_img_view_t::create(img, VK_IMAGE_ASPECT_COLOR_BIT);
     auto sampl = vku_img_sampl_t::create(dev);
 

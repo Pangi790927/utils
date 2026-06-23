@@ -3,7 +3,7 @@
 #include "vulkan_composer.h"
 #include <stb_image.h>
 
-namespace vulkan_composer {
+namespace vulkan_utils {
 
 namespace vku = vulkan_utils;
 namespace vc = virt_composer;

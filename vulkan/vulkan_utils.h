@@ -114,12 +114,10 @@ VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_DESCRIPTOR_SET);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_DESCRIPTOR_POOL);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_SAMPLER_BINDING);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_BUFFER_BINDING);
-VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_BINDING_DESCRIPTOR_SET);
+VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_DESCRIPTOR_SET_INITIALIZER);
 
 /* TODO:
     - Add logs for all the creations/deletions of objects with type and id(ptr)
-    - Continue the tutorial: https://vulkan-tutorial.com/Uniform_buffers/Descriptor_layout_and_buffer
-    - Add compute shaders and compute things
     - Create an ImGui backend using this helper
     - Add the "#include ..." macro for shaders and test if the rest work as expected
     - Add the option to use multiple include dirs for shader compilation
@@ -132,7 +130,7 @@ struct vertex_input_desc_t;
 struct vertex_p2n0c3t2_t;
 struct vertex_p3n3c3t2_t;
 
-struct binding_desc_set_t;
+struct desc_set_initializer_t;
 struct mvp_t;
 struct ubo_t;
 struct ssbo_t;
@@ -189,6 +187,8 @@ inline void copy_buff(
         ref_t<buffer_t> src,
         VkDeviceSize sz,
         ref_t<cmdbuff_t> /* optional */ cbuff);
+
+vc::ref_t<vku::image_t> load_image(vc::ref_t<vku::cmdpool_t> cp, std::string path);
 
 /* To string for own enums: */
 inline std::string to_string(vku_shader_stage_e stage);
@@ -440,7 +440,7 @@ struct pipeline_t : public object_t {
     std::vector<ref_t<shader_t>>    m_shaders;
     VkPrimitiveTopology             m_topology;
     vertex_input_desc_t             m_input_desc;
-    ref_t<binding_desc_set_t>       m_bindings;
+    ref_t<desc_set_initializer_t>   m_bindings_initer;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_PIPELINE; }
     virtual std::string to_string() const override;
@@ -453,29 +453,29 @@ struct pipeline_t : public object_t {
             const std::vector<ref_t<shader_t>>& shaders,
             VkPrimitiveTopology                 topology,
             vertex_input_desc_t                 input_desc,
-            ref_t<binding_desc_set_t>           bd);
+            ref_t<desc_set_initializer_t>       bd);
 
     virtual vc::ret_t init() override;
     virtual vc::ret_t uninit() override;
 };
 
 struct compute_pipeline_t : public object_t {
-    VkPipeline                  vk_pipeline;
-    VkPipelineLayout            vk_layout;
-    VkDescriptorSetLayout       vk_desc_set_layout;
+    VkPipeline                      vk_pipeline;
+    VkPipelineLayout                vk_layout;
+    VkDescriptorSetLayout           vk_desc_set_layout;
 
-    ref_t<device_t>             m_device;
-    ref_t<shader_t>             m_shader;
-    ref_t<binding_desc_set_t>   m_bindings;
+    ref_t<device_t>                 m_device;
+    ref_t<shader_t>                 m_shader;
+    ref_t<desc_set_initializer_t>   m_bindings_initer;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_COMPUTE_PIPELINE; }
     virtual std::string to_string() const override;
 
     static  object_type_e type_id_static() { return VKU_TYPE_COMPUTE_PIPELINE; }
     static ref_t<compute_pipeline_t> create(
-            ref_t<device_t>             dev,
-            ref_t<shader_t>             shader,
-            ref_t<binding_desc_set_t>   bindings);
+            ref_t<device_t>                 dev,
+            ref_t<shader_t>                 shader,
+            ref_t<desc_set_initializer_t>   bindings_initer);
 
 private:
     virtual vc::ret_t init() override;
@@ -689,20 +689,20 @@ private:
 };
 
 struct desc_pool_t : public object_t {
-    VkDescriptorPool            vk_descpool;
+    VkDescriptorPool                vk_descpool;
 
-    ref_t<device_t>             m_device;
-    ref_t<binding_desc_set_t>   m_bindings;
-    uint32_t                    m_cnt;
+    ref_t<device_t>                 m_device;
+    ref_t<desc_set_initializer_t>   m_bindings_initer;
+    uint32_t                        m_cnt;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_POOL; }
     virtual std::string to_string() const override;
 
     static  object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_POOL; }
     static ref_t<desc_pool_t> create(
-            ref_t<device_t>             dev,
-            ref_t<binding_desc_set_t>   bindings,
-            uint32_t                    cnt);
+            ref_t<device_t>                 dev,
+            ref_t<desc_set_initializer_t>   bindings_initer,
+            uint32_t                        cnt);
 
 private:
     virtual vc::ret_t init() override;
@@ -712,9 +712,9 @@ private:
 struct desc_set_t : public object_t {
     VkDescriptorSet             vk_desc_set;
 
-    ref_t<desc_pool_t>          m_descriptor_pool;
-    ref_t<binding_desc_set_t>   m_bindings;
-    VkDescriptorSetLayout       m_desc_set_layout;
+    ref_t<desc_pool_t>              m_descriptor_pool;
+    ref_t<desc_set_initializer_t>   m_bindings_initer;
+    VkDescriptorSetLayout           m_desc_set_layout;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET; }
     virtual std::string to_string() const override;
@@ -723,16 +723,64 @@ struct desc_set_t : public object_t {
 
     static object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET; }
     static ref_t<desc_set_t> create(
-            ref_t<desc_pool_t>          dp,
-            VkDescriptorSetLayout       desc_set_layout,
-            ref_t<binding_desc_set_t>   bindings);
+            ref_t<desc_pool_t>              dp,
+            VkDescriptorSetLayout           desc_set_layout,
+            ref_t<desc_set_initializer_t>   bindings_initer);
 
 private:
     virtual vc::ret_t init() override;
     virtual vc::ret_t uninit() override;
 };
 
-struct binding_desc_set_t : public object_t {
+
+/*!
+ * 
+ * A layout is like the type of a descriptor set, while a descriptor set is the actual instance of
+ * a layout. For myself I can imagine how having to keep both a layout around and to manualy set the
+ * descriptors into the descriptor sets would be a pain, so this structure desc_set_initializer_t
+ * is meant to hold both the structure and the descriptor values with the help with which both the
+ * layer and the descriptors will be made. Furthermore, this structure will help to update the
+ * descriptor sets when such updating will be needed. It may sacrifice some speed, but it is for now
+ * a sacrifice I am willing to make.
+ * 
+ * To view the idea, this is how I understand vulkan views this whole thing:
+ * ------------------------
+ * template <Int binding, typename DescType, Int DescCount>
+ * struct SetLayoutBinding {
+ *     DescType descriptors[DescCount];    
+ * };
+ * 
+ * template <Int N>
+ * struct SetLayout {
+ *     tuple<SetLayoutBinding1, SetLayoutBinding2, ... SetLayoutBinding_N> bindings;
+ * };
+ * 
+ * VkDescriptorPool<SetLayout> pool;
+ * SetLayout desc_set(pool);
+ * ------------------------
+ * 
+ * In this example:
+ * - the type SetLayout is held by VkDescriptorSetLayout.
+ * - the pool needs to hold some information about the layout, as such it is dependent on it, you
+ *   create descriptor sets from it.
+ * - the SetLayout is made out of multiple SetLayoutBindings, or VkDescriptorSetLayoutBinding, those
+ *   describe the binding
+ * - the desc_set is the final container for the descriptors, placed in such a way that the shaders
+ *   would be able to understand it's layout, VkWriteDescriptorSet hold those containers
+ * 
+ * desc_set_initializer_t holds both the values of an initial setup for the descriptors referenced
+ * in the descriptor set and their location in the shader.
+ * 
+ * binding_desc_t and it's derivatives hold single binding information.
+ * 
+ * USAGE:
+ * Create this structure, with some initial descriptors and the desired location, types, etc.
+ * Create a layout from it.
+ * Create sets from it.
+ * Further in time, if needed, modify the descriptors inside the bindings and update the descriptor
+ * sets 
+ */
+struct desc_set_initializer_t : public object_t {
     struct binding_desc_t : public object_t {
         VkDescriptorSetLayoutBinding m_desc;
 
@@ -782,15 +830,15 @@ struct binding_desc_set_t : public object_t {
         virtual vc::ret_t init() override;
     };
 
-    std::vector<ref_t<binding_desc_t>> m_binds;
-
-    virtual object_type_e type_id() const override { return VKU_TYPE_BINDING_DESCRIPTOR_SET; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET_INITIALIZER; }
     virtual std::string to_string() const override;
 
-    static  object_type_e type_id_static() { return VKU_TYPE_BINDING_DESCRIPTOR_SET; }
-    static ref_t<binding_desc_set_t> create(std::vector<ref_t<binding_desc_t>> binds);
+    static  object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET_INITIALIZER; }
+    static ref_t<desc_set_initializer_t> create(std::vector<ref_t<binding_desc_t>> binds);
 
-    std::vector<VkWriteDescriptorSet> get_writes() const;
+    std::vector<ref_t<binding_desc_t>> m_binds;
+
+    std::vector<VkWriteDescriptorSet> get_writes(VkDescriptorSet dst_set) const;
     std::vector<VkDescriptorSetLayoutBinding> get_descriptors() const;
 
 private:
@@ -1617,7 +1665,7 @@ inline ref_t<pipeline_t> pipeline_t::create(
         const std::vector<ref_t<shader_t>> &shaders,
         VkPrimitiveTopology topology,
         vertex_input_desc_t input_desc,
-        ref_t<binding_desc_set_t> bindings)
+        ref_t<desc_set_initializer_t> bindings_initer)
 {
     auto ret = std::make_shared<pipeline_t>();
     ret->m_width = width;
@@ -1626,7 +1674,7 @@ inline ref_t<pipeline_t> pipeline_t::create(
     ret->m_shaders = shaders;
     ret->m_topology = topology;
     ret->m_input_desc = input_desc;
-    ret->m_bindings = bindings;
+    ret->m_bindings_initer = bindings_initer;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -1775,7 +1823,7 @@ inline vc::ret_t pipeline_t::init() {
         .maxDepthBounds = 1.0,
     };
 
-    auto bind_descriptors = m_bindings->get_descriptors();
+    auto bind_descriptors = m_bindings_initer->get_descriptors();
     DBGVV("cnt bind_descriptors: %zu", bind_descriptors.size());
     for (auto &b : bind_descriptors) {
         DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
@@ -1860,7 +1908,7 @@ inline std::string pipeline_t::to_string() const {
             "m_topology={} m_vertex_input_descriptor={} m_binding_desc_set={}",
             (void*)this, m_width, m_height, (void*)m_renderpass.get(), sh_str,
             vulkan_utils::to_string(m_topology), vulkan_utils::to_string(m_input_desc),
-            (void*)m_bindings.get());
+            (void*)m_bindings_initer.get());
 }
 
 /* compute_pipeline_t
@@ -1869,12 +1917,12 @@ inline std::string pipeline_t::to_string() const {
 inline ref_t<compute_pipeline_t> compute_pipeline_t::create(
         ref_t<device_t> dev,
         ref_t<shader_t> shader,
-        ref_t<binding_desc_set_t> bindings)
+        ref_t<desc_set_initializer_t> bindings_initer)
 {
     auto ret = std::make_shared<compute_pipeline_t>();
     ret->m_device = dev;
     ret->m_shader = shader;
-    ret->m_bindings = bindings;
+    ret->m_bindings_initer = bindings_initer;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -1882,7 +1930,7 @@ inline ref_t<compute_pipeline_t> compute_pipeline_t::create(
 inline vc::ret_t compute_pipeline_t::init() {
     FnScope err_scope;
 
-    auto bind_descriptors = m_bindings->get_descriptors();
+    auto bind_descriptors = m_bindings_initer->get_descriptors();
     DBGVV("cnt bind_descriptors: %zu", bind_descriptors.size());
     for (auto &b : bind_descriptors) {
         DBGVV("Descriptor: type: %x, bind: %d, stage: %x ",
@@ -1958,7 +2006,7 @@ inline vc::ret_t compute_pipeline_t::uninit() {
 
 inline std::string compute_pipeline_t::to_string() const {
     return std::format("vku::compute_pipeline[{}]: m_device={} m_shader={} m_binding_desc_set={}",
-            (void*)this, (void*)m_device.get(), (void*)m_shader.get(), (void*)m_bindings.get());
+            (void*)this, (void*)m_device.get(), (void*)m_shader.get(), (void*)m_bindings_initer.get());
 }
 
 /* framebuffs_t
@@ -2118,6 +2166,7 @@ inline void cmdbuff_t::begin_rpass(ref_t<framebuffs_t> fbs, uint32_t img_idx) {
     vkCmdBeginRenderPass(vk_buff, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
 }
 
+/* TODO: there is no point in a first_bind if we have only one vertex binding */
 inline void cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
         std::vector<std::pair<ref_t<buffer_t>, VkDeviceSize>> buffs)
 {
@@ -2702,12 +2751,12 @@ inline VkDescriptorSetLayoutBinding img_sampl_t::get_desc_set(uint32_t binding,
 
 inline ref_t<desc_pool_t> desc_pool_t::create(
         ref_t<device_t> dev,
-        ref_t<binding_desc_set_t> bindings,
+        ref_t<desc_set_initializer_t> bindings_initer,
         uint32_t cnt)
 {
     auto ret = std::make_shared<desc_pool_t>();
     ret->m_device = dev;
-    ret->m_bindings = bindings;
+    ret->m_bindings_initer = bindings_initer;
     ret->m_cnt = cnt;
     VK_ASSERT(ret->init());
     return ret;
@@ -2715,8 +2764,8 @@ inline ref_t<desc_pool_t> desc_pool_t::create(
 
 inline vc::ret_t desc_pool_t::init() {
     std::vector<VkDescriptorPoolSize> pool_sizes;
-    std::map<decltype(m_bindings->m_binds[0]->m_desc.descriptorType), uint32_t> type_cnt;
-    for (auto &b : m_bindings->m_binds)
+    std::map<decltype(m_bindings_initer->m_binds[0]->m_desc.descriptorType), uint32_t> type_cnt;
+    for (auto &b : m_bindings_initer->m_binds)
         type_cnt[b->m_desc.descriptorType] += m_cnt;
 
     for (auto &[type, cnt] : type_cnt) {
@@ -2748,7 +2797,7 @@ inline vc::ret_t desc_pool_t::uninit() {
 
 inline std::string desc_pool_t::to_string() const {
     return std::format("vku::desc_pool[{}]: m_device={} m_binding_desc_set={} m_cnt={}",
-            (void*)this, (void*)m_device.get(), (void*)m_bindings.get(), m_cnt);
+            (void*)this, (void*)m_device.get(), (void*)m_bindings_initer.get(), m_cnt);
 }
 
 /* desc_set_t
@@ -2778,11 +2827,11 @@ Barriers:
 inline ref_t<desc_set_t> desc_set_t::create(
         ref_t<desc_pool_t> desc_pool,
         VkDescriptorSetLayout desc_set_layout,
-        ref_t<binding_desc_set_t> bindings)
+        ref_t<desc_set_initializer_t> bindings_initer)
 {
     auto ret = std::make_shared<desc_set_t>();
     ret->m_descriptor_pool = desc_pool;
-    ret->m_bindings = bindings;
+    ret->m_bindings_initer = bindings_initer;
     ret->m_desc_set_layout = desc_set_layout;
     VK_ASSERT(ret->init());
     return ret;
@@ -2815,7 +2864,7 @@ inline vc::ret_t desc_set_t::uninit() {
 }
 
 inline void desc_set_t::update() {
-    auto desc_writes = m_bindings->get_writes();
+    auto desc_writes = m_bindings_initer->get_writes(vk_desc_set);
     for (auto &dw : desc_writes)
         dw.dstSet = vk_desc_set;
 
@@ -2833,17 +2882,17 @@ inline void desc_set_t::update() {
 inline std::string desc_set_t::to_string() const {
     return std::format("vku::desc_set[{}]: m_desc_pool={} m_desc_set_layout={} m_binding_desc_set={}",
             (void*)this, (void*)m_descriptor_pool.get(), (void*)m_desc_set_layout,
-            (void*)m_bindings.get());
+            (void*)m_bindings_initer.get());
 }
 
 /* binding_desc_t:
 ================================================================================================= */
 
-inline ref_t<binding_desc_set_t::buff_binding_t> binding_desc_set_t::buff_binding_t::create(
+inline ref_t<desc_set_initializer_t::buff_binding_t> desc_set_initializer_t::buff_binding_t::create(
         VkDescriptorSetLayoutBinding desc,
         ref_t<buffer_t> buff)
 {
-    using bd_t = binding_desc_set_t::buff_binding_t;
+    using bd_t = desc_set_initializer_t::buff_binding_t;
     ref_t<bd_t> ret = std::make_shared<bd_t>();
     ret->m_desc = desc;
     ret->m_buffer = buff;
@@ -2851,12 +2900,12 @@ inline ref_t<binding_desc_set_t::buff_binding_t> binding_desc_set_t::buff_bindin
     return ret;
 }
 
-inline std::string binding_desc_set_t::buff_binding_t::to_string() const {
-    return std::format("vku::binding_desc_set_t::buff_binding_t[{}]: m_desc={} m_buffer={}",
+inline std::string desc_set_initializer_t::buff_binding_t::to_string() const {
+    return std::format("vku::desc_set_initializer_t::buff_binding_t[{}]: m_desc={} m_buffer={}",
             (void*)this, vulkan_utils::to_string(m_desc), (void*)m_buffer.get());
 }
 
-inline vc::ret_t binding_desc_set_t::buff_binding_t::init() {
+inline vc::ret_t desc_set_initializer_t::buff_binding_t::init() {
     if (m_buffer) {
         desc_buff_info = VkDescriptorBufferInfo {
             .buffer = m_buffer->vk_buff,
@@ -2867,7 +2916,7 @@ inline vc::ret_t binding_desc_set_t::buff_binding_t::init() {
     return VK_SUCCESS;
 }
 
-inline VkWriteDescriptorSet binding_desc_set_t::buff_binding_t::get_write() const {
+inline VkWriteDescriptorSet desc_set_initializer_t::buff_binding_t::get_write() const {
     VkWriteDescriptorSet desc_write{
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
         .pNext = nullptr,
@@ -2885,12 +2934,12 @@ inline VkWriteDescriptorSet binding_desc_set_t::buff_binding_t::get_write() cons
 }
 
 
-inline ref_t<binding_desc_set_t::sampl_binding_t> binding_desc_set_t::sampl_binding_t::create(
+inline ref_t<desc_set_initializer_t::sampl_binding_t> desc_set_initializer_t::sampl_binding_t::create(
         VkDescriptorSetLayoutBinding desc,
         ref_t<img_view_t> view,
         ref_t<img_sampl_t> sampl)
 {
-    using sb_t = binding_desc_set_t::sampl_binding_t;
+    using sb_t = desc_set_initializer_t::sampl_binding_t;
     ref_t<sb_t> ret = std::make_shared<sb_t>();
     ret->m_desc = desc;
     ret->m_view = view;
@@ -2899,13 +2948,13 @@ inline ref_t<binding_desc_set_t::sampl_binding_t> binding_desc_set_t::sampl_bind
     return ret;
 }
 
-inline std::string binding_desc_set_t::sampl_binding_t::to_string() const {
-    return std::format("vku::binding_desc_set_t::sampl_binding_t[{}]: m_desc={} m_view={} "
+inline std::string desc_set_initializer_t::sampl_binding_t::to_string() const {
+    return std::format("vku::desc_set_initializer_t::sampl_binding_t[{}]: m_desc={} m_view={} "
             "m_sampler={}",
             (void*)this, vulkan_utils::to_string(m_desc), (void*)m_view.get(), (void*)m_sampler.get());
 }
 
-inline vc::ret_t binding_desc_set_t::sampl_binding_t::init() {
+inline vc::ret_t desc_set_initializer_t::sampl_binding_t::init() {
     if (m_view && m_sampler) {
         imag_info = VkDescriptorImageInfo {
             .sampler = m_sampler->vk_sampler,
@@ -2916,7 +2965,7 @@ inline vc::ret_t binding_desc_set_t::sampl_binding_t::init() {
     return VK_SUCCESS;
 }
 
-inline VkWriteDescriptorSet binding_desc_set_t::sampl_binding_t::get_write() const {
+inline VkWriteDescriptorSet desc_set_initializer_t::sampl_binding_t::get_write() const {
     VkWriteDescriptorSet desc_write{
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
         .pNext = nullptr,
@@ -2933,42 +2982,46 @@ inline VkWriteDescriptorSet binding_desc_set_t::sampl_binding_t::get_write() con
     return desc_write;
 }
 
-inline ref_t<binding_desc_set_t> binding_desc_set_t::create(
+inline ref_t<desc_set_initializer_t> desc_set_initializer_t::create(
         std::vector<ref_t<binding_desc_t>> binds)
 {
-    auto ret = std::make_shared<binding_desc_set_t>();
+    auto ret = std::make_shared<desc_set_initializer_t>();
     ret->m_binds = binds;
     VK_ASSERT(ret->init());
     return ret;
 }
 
-inline vc::ret_t binding_desc_set_t::init() {
+inline vc::ret_t desc_set_initializer_t::init() {
     return VK_SUCCESS;
 }
 
-inline vc::ret_t binding_desc_set_t::uninit() {
+inline vc::ret_t desc_set_initializer_t::uninit() {
     return VK_SUCCESS;
 }
 
-inline std::string binding_desc_set_t::to_string() const {
+inline std::string desc_set_initializer_t::to_string() const {
     std::string binds_str = "[";
     for (auto b : m_binds)
         binds_str += std::format("{}, ", (void*)b.get());
     binds_str += "]";
-    return std::format("vku::binding_desc_set_t[{}]: m_bindings={} ",
+    return std::format("vku::desc_set_initializer_t[{}]: m_bindings={} ",
             (void*)this, binds_str);
 }
 
-inline std::vector<VkWriteDescriptorSet> binding_desc_set_t::get_writes() const {
+inline std::vector<VkWriteDescriptorSet> desc_set_initializer_t::get_writes(
+        VkDescriptorSet dst_set) const
+{
     std::vector<VkWriteDescriptorSet> ret;
 
-    for (auto &b : m_binds)
+    for (auto &b : m_binds) {
         ret.push_back(b->get_write());
+        ret.back().dstSet = dst_set;
+    }
 
     return ret;
 }
 
-inline std::vector<VkDescriptorSetLayoutBinding> binding_desc_set_t::get_descriptors() const {
+inline std::vector<VkDescriptorSetLayoutBinding> desc_set_initializer_t::get_descriptors() const {
     std::vector<VkDescriptorSetLayoutBinding> ret;
     for (auto &b : m_binds)
         ret.push_back(b->m_desc);

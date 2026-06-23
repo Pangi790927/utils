@@ -333,7 +333,7 @@
  *   pipeline stages.
  * - m_topology: Primitive topology (triangle list, line list, etc.).
  * - m_input_desc: Vertex input description (binding, attributes, stride, input rate).
- * - m_bindings: Reference to a binding_desc_set_t object. Descriptor sets used 
+ * - m_bindings: Reference to a desc_set_initializer_t object. Descriptor sets used 
  *   by the pipeline.
  * - m_width, m_height: Pipeline viewport dimensions.
  *
@@ -344,7 +344,7 @@
  *     - shaders: Vector of shader_t references for each stage.
  *     - topology: Primitive topology.
  *     - input_desc: Vertex input description.
- *     - bindings: Reference to binding_desc_set_t describing descriptor sets.
+ *     - bindings: Reference to desc_set_initializer_t describing descriptor sets.
  *
  * TODO:
  * - maybe get rid of m_width, m_height, create new objects for viewport and stuff
@@ -359,14 +359,14 @@
  * Members:
  * - m_device: Reference to a device_t object. The device that owns this compute pipeline.
  * - m_shader: Reference to a shader_t object containing the compute shader.
- * - m_bindings: Reference to a binding_desc_set_t object describing descriptor sets 
+ * - m_bindings: Reference to a desc_set_initializer_t object describing descriptor sets 
  *   used by the shader.
  *
  * Init: create(device, shader, bindings)
  *   - Parameters:
  *     - device: Reference to the device_t object.
  *     - shader: Reference to the compute shader (shader_t).
- *     - bindings: Reference to binding_desc_set_t describing descriptor sets.
+ *     - bindings: Reference to desc_set_initializer_t describing descriptor sets.
  * 
  * 
  * vku::framebuffs_t
@@ -597,7 +597,7 @@
  * - add m_address_mode, max_anisotropy, mipmap_mode
  * 
  * 
- * vku::binding_desc_set_t
+ * vku::desc_set_initializer_t
  * -----------------------
  *
  * Description: Represents a collection of Vulkan descriptor bindings that define 
@@ -634,7 +634,7 @@
  *   Vulkan descriptor sets.
  * 
  * 
- * vku::binding_desc_set_t::buff_binding_t
+ * vku::desc_set_initializer_t::buff_binding_t
  * ---------------------------------------
  *
  * Description: Represents a buffer binding within a Vulkan descriptor set. 
@@ -659,7 +659,7 @@
  * - Typically used for uniform buffers or storage buffers in graphics or compute pipelines.
  * 
  * 
- * vku::binding_desc_set_t::sampl_binding_t
+ * vku::desc_set_initializer_t::sampl_binding_t
  * ----------------------------------------
  *
  * Description: Represents a combined image sampler binding within a Vulkan descriptor set. 
@@ -698,7 +698,7 @@
  *
  * Members:
  * - m_device: Reference to the device_t object that owns this pool.
- * - m_bindings: Reference to a binding_desc_set_t object describing the types 
+ * - m_bindings: Reference to a desc_set_initializer_t object describing the types 
  *   of bindings this pool can allocate.
  * - m_cnt: Number of descriptor sets this pool can allocate.
  * - vk_descpool: Vulkan descriptor pool handle.
@@ -707,7 +707,7 @@
  * Init: create(dev, bindings, cnt)
  *   - Parameters:
  *     - dev: Reference to the device_t object used to create the pool.
- *     - bindings: Reference to a binding_desc_set_t describing the binding types.
+ *     - bindings: Reference to a desc_set_initializer_t describing the binding types.
  *     - cnt: Maximum number of descriptor sets that can be allocated from this pool.
  * 
  * 
@@ -722,13 +722,13 @@
  * Members:
  * - m_descriptor_pool: Reference to the desc_pool_t object that allocated this set.
  * - m_pipeline: Reference to the pipeline_t object using this descriptor set.
- * - m_bindings: Reference to a binding_desc_set_t object describing the resources 
+ * - m_bindings: Reference to a desc_set_initializer_t object describing the resources 
  *   bound to this descriptor set.
  * - vk_desc_set: Vulkan descriptor set handle.
  *
  * Member functions:
  * - update(): Updates the GPU descriptor set with the current resources from the
- *   associated binding_desc_set_t. Should be called after changing any buffers, images,
+ *   associated desc_set_initializer_t. Should be called after changing any buffers, images,
  *   or samplers in the bindings. This function must be called before binding the descriptor set in
  *   a command buffer if any resources have changed.
  *
@@ -736,18 +736,18 @@
  *   - Parameters:
  *     - dp: Reference to the desc_pool_t to allocate the descriptor set from.
  *     - pl: Reference to the pipeline_t that will use this descriptor set.
- *     - bindings: Reference to a binding_desc_set_t describing the bindings for this set.
+ *     - bindings: Reference to a desc_set_initializer_t describing the bindings for this set.
  * 
  * Notes:
  * - desc_set_t represents an actual Vulkan descriptor set allocated from a descriptor pool.
- *   It implements the resources described by a binding_desc_set_t. While binding_desc_set_t
+ *   It implements the resources described by a desc_set_initializer_t. While desc_set_initializer_t
  *   defines the layout and points to the specific resources (buffers, images, samplers),
  *   desc_set_t is the concrete GPU object that can be bound in a pipeline. Multiple 
- *   desc_set_t instances can share the same binding_desc_set_t layout.
- * - Buffers and samplers are stored in the binding_desc_set_t bindings. To change the
+ *   desc_set_t instances can share the same desc_set_initializer_t layout.
+ * - Buffers and samplers are stored in the desc_set_initializer_t bindings. To change the
  *   resource used by a desc_set_t, modify the resource in the corresponding 
- *   binding_desc_set_t::binding_desc_t and call update() on the desc_set_t. Alternatively,
- *   calling update() on the binding_desc_set_t itself also works, as desc_set_t depends
+ *   desc_set_initializer_t::binding_desc_t and call update() on the desc_set_t. Alternatively,
+ *   calling update() on the desc_set_initializer_t itself also works, as desc_set_t depends
  *   on it and will propagate the changes automatically.
  */
 
@@ -874,7 +874,6 @@ VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_VERTEX_INPUT_DESC);
 VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_BINDING_DESC);
 
 inline std::string app_path = std::filesystem::canonical("./");
-vc::ref_t<vku::image_t> load_image(vc::ref_t<vku::cmdpool_t> cp, std::string path);
 
 /* Does this really have any irl usage? */
 struct lua_var_t : public vku::object_t {
@@ -1526,7 +1525,7 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto cp = co_await resolve_obj<vku::cmdpool_t>(vs, node["m_cmdpool"]);
             auto path = co_await resolve_str(vs, node["m_path"]);
-            auto obj = load_image(cp, path);
+            auto obj = vku::load_image(cp, path);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -1589,14 +1588,14 @@ inline int register_meta(vc::virt_state_t *vs) {
 
 
     ret = add_named_builder_callback(vs,
-        "vku::binding_desc_set_t::sampl_binding_t",
+        "vku::desc_set_initializer_t::sampl_binding_t",
         [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
             -> co::task<vc::ref_t<vc::object_t>>
         {
             auto view = co_await resolve_obj<vku::img_view_t>(vs, node["m_view"]);
             auto sampler = co_await resolve_obj<vku::img_sampl_t>(vs, node["m_sampler"]);
             auto desc = co_await resolve_obj<vkc::binding_t>(vs, node["m_desc"]);
-            auto obj = vku::binding_desc_set_t::sampl_binding_t::create(desc->bd, view, sampler);
+            auto obj = vku::desc_set_initializer_t::sampl_binding_t::create(desc->bd, view, sampler);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -1604,13 +1603,13 @@ inline int register_meta(vc::virt_state_t *vs) {
     ASSERT_FN(ret);
 
     ret = add_named_builder_callback(vs,
-        "vku::binding_desc_set_t::buff_binding_t",
+        "vku::desc_set_initializer_t::buff_binding_t",
         [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
             -> co::task<vc::ref_t<vc::object_t>>
         {
             auto buff = co_await resolve_obj<vku::buffer_t>(vs, node["m_buffer"]);
             auto desc = co_await resolve_obj<vkc::binding_t>(vs, node["m_desc"]);
-            auto obj = vku::binding_desc_set_t::buff_binding_t::create(desc->bd, buff);
+            auto obj = vku::desc_set_initializer_t::buff_binding_t::create(desc->bd, buff);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -1618,15 +1617,15 @@ inline int register_meta(vc::virt_state_t *vs) {
     ASSERT_FN(ret);
 
     ret = add_named_builder_callback(vs,
-        "vku::binding_desc_set_t",
+        "vku::desc_set_initializer_t",
         [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
             -> co::task<vc::ref_t<vc::object_t>>
         {
-            std::vector<vku::ref_t<vku::binding_desc_set_t::binding_desc_t>> bindings;
+            std::vector<vku::ref_t<vku::desc_set_initializer_t::binding_desc_t>> bindings;
             for (auto& subnode : node["m_descriptors"])
                 bindings.push_back(
-                        co_await resolve_obj<vku::binding_desc_set_t::binding_desc_t>(vs, subnode));
-            auto obj = vku::binding_desc_set_t::create(bindings);
+                        co_await resolve_obj<vku::desc_set_initializer_t::binding_desc_t>(vs, subnode));
+            auto obj = vku::desc_set_initializer_t::create(bindings);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -1663,7 +1662,7 @@ inline int register_meta(vc::virt_state_t *vs) {
                 shaders.push_back(co_await resolve_obj<vku::shader_t>(vs, sh));
             auto topol = vc::get_enum_val<VkPrimitiveTopology>(node["m_topology"]);
             auto indesc = co_await resolve_obj<vkc::vertex_input_desc_t>(vs, node["m_input_desc"]);
-            auto binds = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
+            auto binds = co_await resolve_obj<vku::desc_set_initializer_t>(vs, node["m_bindings"]);
             auto obj = vku::pipeline_t::create(w, h, rp, shaders, topol, indesc->vid, binds);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
@@ -1758,7 +1757,7 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto descriptor_pool = co_await resolve_obj<vku::desc_pool_t>(vs, node["m_descriptor_pool"]);
             auto desc_layout = co_await resolve_memb<VkDescriptorSetLayout>(vs, node["m_layout"]);
-            auto bindings = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
+            auto bindings = co_await resolve_obj<vku::desc_set_initializer_t>(vs, node["m_bindings"]);
             auto obj = vku::desc_set_t::create(descriptor_pool, desc_layout, bindings);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
@@ -1772,7 +1771,7 @@ inline int register_meta(vc::virt_state_t *vs) {
             -> co::task<vc::ref_t<vc::object_t>>
         {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-            auto binds = co_await resolve_obj<vku::binding_desc_set_t>(vs, node["m_bindings"]);
+            auto binds = co_await resolve_obj<vku::desc_set_initializer_t>(vs, node["m_bindings"]);
             int cnt = co_await resolve_int(vs, node["m_cnt"]);
             auto obj = vku::desc_pool_t::create(dev, binds, cnt);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());

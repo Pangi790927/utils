@@ -5,9 +5,6 @@
 #include "misc_utils.h"
 #include "time_utils.h"
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
-
 namespace vku = vulkan_utils;
 
 struct compute_ubo_t {
@@ -207,34 +204,34 @@ int main()
 
     DBG("predesc sets create");
 
-    auto comp_bindings = vku::binding_desc_set_t::create({
-        vku::binding_desc_set_t::buff_binding_t::create(
+    auto comp_bindings = vku::desc_set_initializer_t::create({
+        vku::desc_set_initializer_t::buff_binding_t::create(
             vku::ubo_t::get_desc_set(0, VK_SHADER_STAGE_COMPUTE_BIT),
             comp_ubo_buff
-        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
-        vku::binding_desc_set_t::buff_binding_t::create(
+        )->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
+        vku::desc_set_initializer_t::buff_binding_t::create(
             vku::ssbo_t::get_desc_set(1, VK_SHADER_STAGE_COMPUTE_BIT),
             comp_in
-        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
-        vku::binding_desc_set_t::buff_binding_t::create(
+        )->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
+        vku::desc_set_initializer_t::buff_binding_t::create(
             vku::ssbo_t::get_desc_set(2, VK_SHADER_STAGE_COMPUTE_BIT),
             comp_out
-        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
+        )->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
     });
 
-    auto comp_bindings2 = vku::binding_desc_set_t::create({
-        vku::binding_desc_set_t::buff_binding_t::create(
+    auto comp_bindings2 = vku::desc_set_initializer_t::create({
+        vku::desc_set_initializer_t::buff_binding_t::create(
             vku::ubo_t::get_desc_set(0, VK_SHADER_STAGE_COMPUTE_BIT),
             comp_ubo_buff
-        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
-        vku::binding_desc_set_t::buff_binding_t::create(
+        )->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
+        vku::desc_set_initializer_t::buff_binding_t::create(
             vku::ssbo_t::get_desc_set(1, VK_SHADER_STAGE_COMPUTE_BIT),
             comp_in
-        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
-        vku::binding_desc_set_t::buff_binding_t::create(
+        )->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
+        vku::desc_set_initializer_t::buff_binding_t::create(
             vku::ssbo_t::get_desc_set(2, VK_SHADER_STAGE_COMPUTE_BIT),
             comp_out
-        )->to_related<vku::binding_desc_set_t::binding_desc_t>(),
+        )->to_related<vku::desc_set_initializer_t::binding_desc_t>(),
     });
 
     DBG("posts sets create");
