@@ -3905,6 +3905,12 @@ inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
         .forward_compatible = false,
         .messages = GLSLANG_MSG_DEFAULT_BIT,
         .resource = &spirv_resources,
+        .callbacks = {
+            .include_system = nullptr,
+            .include_local = nullptr,
+            .free_include_result = nullptr,
+        },
+        .callbacks_ctx = nullptr,
     };
 
     glslang_shader_t* shader = glslang_shader_create(&input);

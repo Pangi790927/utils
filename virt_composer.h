@@ -41,6 +41,9 @@
  */
 
 /* TODO: Check the docs of composer, so that I can make sure the documentation still makes sense */
+/* TODO: all yaml nodes should be able to define dependencies, those dependencies would be
+especially usefull for things like shaders, lua scripts, expressions, etc. This would in a sense
+create a strict ordering that and I should check if it can create cycles (deadlocks). */
 
 #include  <typeindex>
 
