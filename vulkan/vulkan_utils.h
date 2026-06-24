@@ -166,8 +166,9 @@ struct desc_set_t;          /* uses (desc_pool) */
 inline vc::ret_t init();
 inline vc::ret_t uninit();
 
-inline void wait_fences(std::vector<ref_t<fence_t>> fences);
+inline void wait_fences(std::vector<ref_t<fence_t>> fences, bool wait_all, uint64_t timeout);
 inline void reset_fences(std::vector<ref_t<fence_t>> fences);
+
 inline void aquire_next_img(
         ref_t<swapchain_t> swc,
         ref_t<sem_t> sem,
@@ -552,12 +553,15 @@ private:
 struct sem_t : public object_t {
     VkSemaphore     vk_sem;
 
+    uint64_t        m_initial;
+    VkSemaphoreType m_sem_type;
     ref_t<device_t> m_device;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_SEMAPHORE; }
     virtual std::string to_string() const override;
 
-    static ref_t<sem_t> create(ref_t<device_t> dev);
+    static ref_t<sem_t> create(ref_t<device_t> dev,
+            VkSemaphoreType sem_type = VK_SEMAPHORE_TYPE_BINARY, uint64_t inital = 0);
 
 private:
     virtual vc::ret_t init() override;
@@ -575,6 +579,10 @@ struct fence_t : public object_t {
 
     static object_type_e type_id_static() { return VKU_TYPE_FENCE; }
     static ref_t<fence_t> create(ref_t<device_t> dev, VkFenceCreateFlags flags = 0);
+
+    VkResult get_status() { return vkGetFenceStatus(m_device->vk_dev, vk_fence); }
+
+    /* TODO: check (IF NEEDED) handle exports (fd or handle) */
 
 private:
     virtual vc::ret_t init() override;
@@ -2215,17 +2223,25 @@ inline void cmdbuff_t::dispatch_compute(uint32_t x, uint32_t y, uint32_t z) {
 /* sem_t
 ================================================================================================= */
 
-inline ref_t<sem_t> sem_t::create(ref_t<device_t> dev) {
+inline ref_t<sem_t> sem_t::create(ref_t<device_t> dev, VkSemaphoreType sem_type, uint64_t initial) {
     auto ret = std::make_shared<sem_t>();
     ret->m_device = dev;
+    ret->m_sem_type = sem_type;
+    ret->m_initial = initial;
     VK_ASSERT(ret->init());
     return ret;
 }
 
 inline vc::ret_t sem_t::init() {
+    VkSemaphoreTypeCreateInfo sem_type_info {
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+        .pNext = nullptr,
+        .semaphoreType = m_sem_type,
+        .initialValue = m_initial,
+    };
     VkSemaphoreCreateInfo sem_info {
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-        .pNext = nullptr,
+        .pNext = &sem_type_info,
         .flags = 0,
     };
 
@@ -2528,7 +2544,7 @@ inline void image_t::transition_layout(ref_t<cmdpool_t> cp,
         cbuff->end();
 
         submit_cmdbuff({}, cbuff, fence, {});
-        wait_fences({fence});
+        wait_fences({fence}, true, UINT64_MAX);
     }
 }
 
@@ -2596,7 +2612,7 @@ inline void image_t::set_data(ref_t<cmdpool_t> cp, void *data, uint32_t sz,
         cbuff->end();
 
         submit_cmdbuff({}, cbuff, fence, {});
-        wait_fences({fence});
+        wait_fences({fence}, true, UINT64_MAX);
     }
 }
 
@@ -3090,7 +3106,7 @@ inline std::vector<VkDescriptorSetLayoutBinding> desc_set_initializer_t::get_des
 /* Functions:
 ================================================================================================= */
 
-inline void wait_fences(std::vector<ref_t<fence_t>> fences) {
+inline void wait_fences(std::vector<ref_t<fence_t>> fences, bool wait_all, uint64_t timeout) {
     std::vector<VkFence> vk_fences;
 
     if (!fences.size()) {
@@ -3102,7 +3118,7 @@ inline void wait_fences(std::vector<ref_t<fence_t>> fences) {
         vk_fences.push_back(f->vk_fence);
 
     VK_ASSERT(vkWaitForFences(fences[0]->m_device->vk_dev,
-            vk_fences.size(), vk_fences.data(), VK_TRUE, UINT64_MAX));
+            vk_fences.size(), vk_fences.data(), wait_all, timeout));
 }
 
 inline void reset_fences(std::vector<ref_t<fence_t>> fences) {
@@ -3208,7 +3224,7 @@ inline void copy_buff(ref_t<cmdpool_t> cp, ref_t<buffer_t> dst,
         cbuff->end();
 
         submit_cmdbuff({}, cbuff, fence, {});
-        wait_fences({fence});
+        wait_fences({fence}, true, UINT64_MAX);
     }
 }
 
@@ -3895,7 +3911,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
         .language = GLSLANG_SOURCE_GLSL,
         .stage = gs_stage,
         .client = GLSLANG_CLIENT_VULKAN,
-        .client_version = GLSLANG_TARGET_VULKAN_1_2,
+        .client_version = GLSLANG_TARGET_VULKAN_1_3,
         .target_language = GLSLANG_TARGET_SPV,
         .target_language_version = GLSLANG_TARGET_SPV_1_5,
         .code = code,

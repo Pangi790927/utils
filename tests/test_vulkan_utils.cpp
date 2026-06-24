@@ -241,7 +241,7 @@ int main(int argc, char const *argv[])
                     cbuff, fence, {draw_sem});
             vku::present(swc, {draw_sem}, img_idx);
 
-            vku::wait_fences({fence});
+            vku::wait_fences({fence}, true, UINT64_MAX);
             vku::reset_fences({fence});
         }
         catch (vku::except_t &e) {

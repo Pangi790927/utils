@@ -84,7 +84,7 @@
  *         vku.cbuff, vku.fence, {vku.draw_sem})
  *     vku.present(vku.swc, {vku.draw_sem}, img_idx)
  *
- *     vku.wait_fences({vku.fence})
+ *     vku.wait_fences({vku.fence}, 1, -1)
  *     vku.reset_fences({vku.fence})
  * end
  *
@@ -800,6 +800,9 @@ enum vkc_error_e : int32_t {
 
 namespace virt_composer {
 
+extern inline std::unordered_map<std::string, VkResult>
+        vk_result_from_str;
+
 extern inline std::unordered_map<std::string, VkBufferUsageFlagBits>
         vk_buffer_usage_flag_bits_from_str;
 
@@ -842,6 +845,11 @@ extern inline std::unordered_map<std::string, VkDescriptorType>
 extern inline std::unordered_map<std::string, vku_shader_stage_e>
         shader_stage_from_string;
 
+extern inline std::unordered_map<std::string, VkSemaphoreType>
+        vk_semaphore_type_from_str;
+
+
+template <> inline VkResult get_enum_val<VkResult>(fkyaml::node &n);
 template <> inline VkBufferUsageFlagBits get_enum_val<VkBufferUsageFlagBits>(fkyaml::node &n);
 template <> inline VkSharingMode get_enum_val<VkSharingMode>(fkyaml::node &n);
 template <> inline VkMemoryPropertyFlagBits get_enum_val<VkMemoryPropertyFlagBits>(fkyaml::node &n);
@@ -857,6 +865,23 @@ template <> inline VkVertexInputRate get_enum_val<VkVertexInputRate>(fkyaml::nod
 template <> inline VkShaderStageFlagBits get_enum_val<VkShaderStageFlagBits>(fkyaml::node &n);
 template <> inline VkDescriptorType get_enum_val<VkDescriptorType>(fkyaml::node &n);
 template <> inline vku_shader_stage_e get_enum_val<vku_shader_stage_e>(fkyaml::node &n);
+template <> inline VkSemaphoreType get_enum_val<VkSemaphoreType>(fkyaml::node &n);
+
+template <>
+struct luaw_returner_t<VkResult> {
+    void luaw_ret_push(lua_State *L, VkResult x) { lua_pushinteger(L, x); }
+};
+
+/* This is not really usefull, but an example on how to add new parameters: (obs: longer ones should
+be implemented bellow, like the functions above) */
+template <ssize_t index>
+struct luaw_param_t<VkResult, index> {
+    VkResult luaw_single_param(lua_State *L) {
+        int valid;
+        return (VkResult)lua_tointegerx(L, index, &valid);
+    }
+};
+
 
 } /* virt_composer */
 
@@ -1293,7 +1318,9 @@ inline int register_meta(vc::virt_state_t *vs) {
         >},
         {"wait_fences", vc::luaw_function_wrapper<
                 /* FN:    */ vku::wait_fences,
-                /* PARAMS:*/ std::vector<vc::ref_t<vku::fence_t>>
+                /* PARAMS:*/ std::vector<vc::ref_t<vku::fence_t>>,
+                             bool,
+                             uint64_t
         >},
         {"reset_fences", vc::luaw_function_wrapper<
                 /* FN:    */ vku::reset_fences,
@@ -1364,6 +1391,10 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_FUNCTION(vs, vkc::cpu_buffer_t, data);
     VC_REGISTER_MEMBER_FUNCTION(vs, vkc::cpu_buffer_t, size);
 
+    // /* vku::fence_t
+    // ----------------------------------------------------------------------------------------- */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::fence_t, get_status);
+
     /* Done objects
     ----------------------------------------------------------------------------------------- */
 
@@ -1380,6 +1411,7 @@ inline int register_meta(vc::virt_state_t *vs) {
     vc::add_lua_flag_mapping(vs, vc::vk_memory_property_flag_bits_from_str);
     vc::add_lua_flag_mapping(vs, vc::vk_sharing_mode_from_str);
     vc::add_lua_flag_mapping(vs, vc::vk_buffer_usage_flag_bits_from_str);
+    vc::add_lua_flag_mapping(vs, vc::vk_result_from_str);
     vc::add_lua_flag_mapping(vs, vc::shader_stage_from_string);
     luaw_set_glfw_fields(vs);
 
@@ -1737,7 +1769,13 @@ inline int register_meta(vc::virt_state_t *vs) {
             -> co::task<vc::ref_t<vc::object_t>>
         {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-            auto obj = vku::sem_t::create(dev);
+            auto sem_type = node["m_sem_type"].is_null()
+                    ? VK_SEMAPHORE_TYPE_BINARY
+                    : vc::get_enum_val<VkSemaphoreType>(node["m_sem_type"]);
+            auto initial = node["m_initial"].is_null()
+                    ? 0
+                    : co_await resolve_int(vs, node["m_initial"]);
+            auto obj = vku::sem_t::create(dev, sem_type, initial);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -2135,6 +2173,113 @@ inline void luaw_set_glfw_fields(vc::virt_state_t *vs) {
 }; /* namespace vkc */
 
 namespace virt_composer {
+
+inline std::unordered_map<std::string, VkResult> vk_result_from_str = {
+    {"VK_SUCCESS",
+            VK_SUCCESS},
+    {"VK_NOT_READY",
+            VK_NOT_READY},
+    {"VK_TIMEOUT",
+            VK_TIMEOUT},
+    {"VK_EVENT_SET",
+            VK_EVENT_SET},
+    {"VK_EVENT_RESET",
+            VK_EVENT_RESET},
+    {"VK_INCOMPLETE",
+            VK_INCOMPLETE},
+    {"VK_ERROR_OUT_OF_HOST_MEMORY",
+            VK_ERROR_OUT_OF_HOST_MEMORY},
+    {"VK_ERROR_OUT_OF_DEVICE_MEMORY",
+            VK_ERROR_OUT_OF_DEVICE_MEMORY},
+    {"VK_ERROR_INITIALIZATION_FAILED",
+            VK_ERROR_INITIALIZATION_FAILED},
+    {"VK_ERROR_DEVICE_LOST",
+            VK_ERROR_DEVICE_LOST},
+    {"VK_ERROR_MEMORY_MAP_FAILED",
+            VK_ERROR_MEMORY_MAP_FAILED},
+    {"VK_ERROR_LAYER_NOT_PRESENT",
+            VK_ERROR_LAYER_NOT_PRESENT},
+    {"VK_ERROR_EXTENSION_NOT_PRESENT",
+            VK_ERROR_EXTENSION_NOT_PRESENT},
+    {"VK_ERROR_FEATURE_NOT_PRESENT",
+            VK_ERROR_FEATURE_NOT_PRESENT},
+    {"VK_ERROR_INCOMPATIBLE_DRIVER",
+            VK_ERROR_INCOMPATIBLE_DRIVER},
+    {"VK_ERROR_TOO_MANY_OBJECTS",
+            VK_ERROR_TOO_MANY_OBJECTS},
+    {"VK_ERROR_FORMAT_NOT_SUPPORTED",
+            VK_ERROR_FORMAT_NOT_SUPPORTED},
+    {"VK_ERROR_FRAGMENTED_POOL",
+            VK_ERROR_FRAGMENTED_POOL},
+    {"VK_ERROR_UNKNOWN",
+            VK_ERROR_UNKNOWN},
+    // {"VK_ERROR_VALIDATION_FAILED",
+    //         VK_ERROR_VALIDATION_FAILED},
+    {"VK_ERROR_OUT_OF_POOL_MEMORY",
+            VK_ERROR_OUT_OF_POOL_MEMORY},
+    {"VK_ERROR_INVALID_EXTERNAL_HANDLE",
+            VK_ERROR_INVALID_EXTERNAL_HANDLE},
+    {"VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS",
+            VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS},
+    {"VK_ERROR_FRAGMENTATION",
+            VK_ERROR_FRAGMENTATION},
+    // {"VK_PIPELINE_COMPILE_REQUIRED",
+    //         VK_PIPELINE_COMPILE_REQUIRED},
+    // {"VK_ERROR_NOT_PERMITTED",
+    //         VK_ERROR_NOT_PERMITTED},
+    {"VK_ERROR_SURFACE_LOST_KHR",
+            VK_ERROR_SURFACE_LOST_KHR},
+    {"VK_ERROR_NATIVE_WINDOW_IN_USE_KHR",
+            VK_ERROR_NATIVE_WINDOW_IN_USE_KHR},
+    {"VK_SUBOPTIMAL_KHR",
+            VK_SUBOPTIMAL_KHR},
+    {"VK_ERROR_OUT_OF_DATE_KHR",
+            VK_ERROR_OUT_OF_DATE_KHR},
+    {"VK_ERROR_INCOMPATIBLE_DISPLAY_KHR",
+            VK_ERROR_INCOMPATIBLE_DISPLAY_KHR},
+    {"VK_ERROR_INVALID_SHADER_NV",
+            VK_ERROR_INVALID_SHADER_NV},
+    // {"VK_ERROR_IMAGE_USAGE_NOT_SUPPORTED_KHR",
+    //         VK_ERROR_IMAGE_USAGE_NOT_SUPPORTED_KHR},
+    // {"VK_ERROR_VIDEO_PICTURE_LAYOUT_NOT_SUPPORTED_KHR",
+    //         VK_ERROR_VIDEO_PICTURE_LAYOUT_NOT_SUPPORTED_KHR},
+    // {"VK_ERROR_VIDEO_PROFILE_OPERATION_NOT_SUPPORTED_KHR",
+    //         VK_ERROR_VIDEO_PROFILE_OPERATION_NOT_SUPPORTED_KHR},
+    // {"VK_ERROR_VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR",
+    //         VK_ERROR_VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR},
+    // {"VK_ERROR_VIDEO_PROFILE_CODEC_NOT_SUPPORTED_KHR",
+    //         VK_ERROR_VIDEO_PROFILE_CODEC_NOT_SUPPORTED_KHR},
+    // {"VK_ERROR_VIDEO_STD_VERSION_NOT_SUPPORTED_KHR",
+    //         VK_ERROR_VIDEO_STD_VERSION_NOT_SUPPORTED_KHR},
+    {"VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT",
+            VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT},
+    // {"VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT",
+    //         VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT},
+    {"VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT",
+            VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT},
+    // {"VK_THREAD_IDLE_KHR",
+    //         VK_THREAD_IDLE_KHR},
+    // {"VK_THREAD_DONE_KHR",
+    //         VK_THREAD_DONE_KHR},
+    // {"VK_OPERATION_DEFERRED_KHR",
+    //         VK_OPERATION_DEFERRED_KHR},
+    // {"VK_OPERATION_NOT_DEFERRED_KHR",
+    //         VK_OPERATION_NOT_DEFERRED_KHR},
+    // {"VK_ERROR_INVALID_VIDEO_STD_PARAMETERS_KHR",
+    //         VK_ERROR_INVALID_VIDEO_STD_PARAMETERS_KHR},
+    // {"VK_ERROR_COMPRESSION_EXHAUSTED_EXT",
+    //         VK_ERROR_COMPRESSION_EXHAUSTED_EXT},
+    // {"VK_INCOMPATIBLE_SHADER_BINARY_EXT",
+    //         VK_INCOMPATIBLE_SHADER_BINARY_EXT},
+    // {"VK_PIPELINE_BINARY_MISSING_KHR",
+    //         VK_PIPELINE_BINARY_MISSING_KHR},
+    // {"VK_ERROR_NOT_ENOUGH_SPACE_KHR",
+    //         VK_ERROR_NOT_ENOUGH_SPACE_KHR},
+};
+
+template <> inline VkResult get_enum_val<VkResult>(fkyaml::node &n) {
+    return get_enum_val(n, vk_result_from_str);
+}
 
 inline std::unordered_map<std::string, VkBufferUsageFlagBits> vk_buffer_usage_flag_bits_from_str = {
     {"VK_BUFFER_USAGE_NONE", (VkBufferUsageFlagBits)0},
@@ -2643,6 +2788,14 @@ template <> inline vku_shader_stage_e get_enum_val<vku_shader_stage_e>(fkyaml::n
     return get_enum_val(n, shader_stage_from_string);
 }
 
+inline std::unordered_map<std::string, VkSemaphoreType> vk_semaphore_type_from_str = {
+    {"VK_SEMAPHORE_TYPE_BINARY",   VK_SEMAPHORE_TYPE_BINARY},
+    {"VK_SEMAPHORE_TYPE_TIMELINE", VK_SEMAPHORE_TYPE_TIMELINE},
+};
+
+template <> inline VkSemaphoreType get_enum_val<VkSemaphoreType>(fkyaml::node &n) {
+    return get_enum_val(n, vk_semaphore_type_from_str);
+}
 
 } /* virt_composer */
 

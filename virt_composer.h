@@ -1462,6 +1462,8 @@ struct luaw_param_t<std::vector<T>, index> {
  *
  * @tparam T The C++ type to push to Lua.
  */
+/* TODO: returners and parameters must be part of the interface because users need to be able to
+add their types */
 template <typename T>
 struct luaw_returner_t {
     void luaw_ret_push(lua_State *L, T&& t) {

@@ -171,6 +171,8 @@ fbs:
 img_sem:
   m_type: vku::sem_t
   m_device: !ref dev
+  # optional m_sem_type: VK_SEMAPHORE_TYPE_TIMELINE
+  # optional m_initial: 11
 draw_sem:
   m_type: vku::sem_t
   m_device: !ref dev
@@ -241,7 +243,7 @@ lua_script:
           vc.cbuff, vc.fence, {vc.draw_sem})
       vc.present(vc.swc, {vc.draw_sem}, img_idx)
 
-      vc.wait_fences({vc.fence})
+      vc.wait_fences({vc.fence}, 1, -1)
       vc.reset_fences({vc.fence})
     end
 

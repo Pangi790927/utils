@@ -350,7 +350,7 @@ int main()
             );
             vku::present(swc, {draw_sem}, img_idx);
 
-            vku::wait_fences({fence});
+            vku::wait_fences({fence}, true, UINT64_MAX);
             vku::reset_fences({fence});
         }
         catch (vku::except_t &e) {
