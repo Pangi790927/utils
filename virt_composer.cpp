@@ -623,6 +623,10 @@ static int luaopen_vc(lua_State *L) {
                 luaw_push_error(L, std::format("invalid class id: {}", vc::to_string(class_id)));
             }
             if (!has(vs->lua_class_members[class_id], member_name)) {
+                DBG("On ERROR Settrs: class_id[%s[%d]]", class_id.name(), class_id.value());
+                for (auto &[k, m] : vs->lua_class_members[class_id]) {
+                    DBG("key: %s", k.c_str());
+                }
                 luaw_push_error(L, std::format("class id {} doesn't have member: {}",
                         vc::to_string(class_id), member_name));
             }

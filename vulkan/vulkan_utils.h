@@ -91,6 +91,10 @@ using object_type_e = vc::object_type_e;
 use it later on. */
 /* object_t is pure virtual, so no object should have this type */
 
+VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_BINDING_DESC);
+VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_DEPENDENCY_INFO);
+// VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_DEPENDENCY_INFO2);
+VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_IMAGE_SUBRESOURCE_RANGE);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_OBJECT);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_WINDOW);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_INSTANCE);
@@ -105,6 +109,7 @@ VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_FRAMEBUFFERS);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_COMMAND_POOL);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_COMMAND_BUFFER);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_SEMAPHORE);
+VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_EVENT);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_FENCE);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_BUFFER);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_IMAGE);
@@ -156,6 +161,7 @@ struct cmdpool_t;           /* uses (device) */
 struct cmdbuff_t;           /* uses (cmdpool) */
 struct sem_t;               /* uses (device) */
 struct fence_t;             /* uses (device) */
+struct event_t;             /* uses (device) */
 struct buffer_t;            /* uses (device) */
 struct image_t;             /* uses (device) */
 struct img_view_t;          /* uses (imag) */
@@ -207,6 +213,7 @@ inline std::string to_string(VkSharingMode shmod);
 inline std::string to_string(VkFilter shmod);
 inline std::string to_string(VkDescriptorType dtype);
 inline std::string to_string(const VkDescriptorSetLayoutBinding& bind);
+inline std::string to_string(VkImageLayout lay);
 
 /* To string for external flags */
 /* OBS: You can't use those directly because the actual values are in the form VkFlags not
@@ -217,6 +224,13 @@ inline std::string to_string(VkMemoryPropertyFlagBits flags);
 inline std::string to_string(VkImageUsageFlagBits flags);
 inline std::string to_string(VkImageAspectFlagBits flags);
 inline std::string to_string(VkShaderStageFlagBits flags);
+inline std::string to_string(VkPipelineStageFlagBits flags);
+inline std::string to_string(VkAccessFlagBits flags);
+inline std::string to_string(VkDependencyFlagBits flags);
+
+/* TODO: this needs to be implemented in a newer version of vulkan, tested and as such */
+// inline std::string to_string(VkPipelineStageFlagBits2 flags);
+// inline std::string to_string(VkAccessFlagBits2 flags);
 
 /* VKU Objects:
 ================================================================================================= */
@@ -283,6 +297,130 @@ struct ssbo_t {
 using vertex2d_t = vertex_p2n0c3t2_t;
 using vertex3d_t = vertex_p3n3c3t2_t;
 
+/*!
+ * 
+ * vkc::binding_t
+ * --------------
+ *
+ * Description: Represents a generic descriptor set binding in Vulkan.
+ * This object wraps a VkDescriptorSetLayoutBinding structure, which defines 
+ * the binding index, descriptor type, number of descriptors, and shader stage flags.
+ * It's main purpose is to keep it around in Lua and reference it in C++ programs.
+ *
+ * Init: create(bd)
+ *   - Parameters:
+ *     - bd: A VkDescriptorSetLayoutBinding structure describing the binding.
+ *
+ * Notes:
+ * - Serves as a base or standalone representation for descriptor set bindings.
+ * - Can be used to initialize more specific binding types such as buffer or 
+ *   sampler bindings.
+ * 
+ */
+struct binding_t : public object_t {
+    VkDescriptorSetLayoutBinding bd;
+
+    static vku::object_type_e type_id_static() { return VKU_TYPE_BINDING_DESC; }
+    virtual vku::object_type_e type_id() const override { return VKU_TYPE_BINDING_DESC; }
+
+    static vku::ref_t<binding_t> create(const VkDescriptorSetLayoutBinding& bd);
+    inline std::string to_string() const override;
+
+private:
+    virtual vc::ret_t init() override { return VK_SUCCESS; }
+    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
+};
+
+struct dependency_info_t : public vku::object_t {
+    VkPipelineStageFlags m_src_stage_mask;
+    VkPipelineStageFlags m_dst_stage_mask;
+    VkDependencyFlags m_dep_flags;
+
+    std::vector<VkMemoryBarrier> mem_bars;
+    std::vector<VkBufferMemoryBarrier> buff_mem_bars;
+    std::vector<VkImageMemoryBarrier> img_mem_bars;
+
+    static vku::object_type_e type_id_static() { return VKU_TYPE_DEPENDENCY_INFO; }
+    virtual vku::object_type_e type_id() const override { return VKU_TYPE_DEPENDENCY_INFO; }
+
+    static vku::ref_t<dependency_info_t> create(
+            VkPipelineStageFlagBits src_stage_mask,
+            VkPipelineStageFlagBits dst_stage_mask,
+            const std::vector<VkMemoryBarrier> &mem_bars,
+            const std::vector<VkBufferMemoryBarrier> &buff_mem_bars,
+            const std::vector<VkImageMemoryBarrier> &img_mem_bars,
+            VkDependencyFlags dep_flags = 0);
+
+    virtual vc::ret_t init() override { return VK_SUCCESS; }
+    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
+
+    inline std::string to_string() const override;
+};
+
+
+/* TODO: this needs to be implemented in a newer version of vulkan, tested and as such */
+/* TODO: description
+    OBS: there exists only VkDependencyInfo, but all the associated types have a 2, as such this
+    struct will also have a 2 */
+/* TODO: add it in composer */
+/* TODO: add macro include guards for vk1.3 versioning */
+// struct dependency_info2_t : public vku::object_t {
+//     VkDependencyInfo dep_info;
+//     std::vector<VkMemoryBarrier2> mem_bars;
+//     std::vector<VkBufferMemoryBarrier2> buff_mem_bars;
+//     std::vector<VkImageMemoryBarrier2> img_mem_bars;
+
+//     static vku::object_type_e type_id_static() { return VKU_TYPE_DEPENDENCY_INFO2; }
+//     virtual vku::object_type_e type_id() const override { return VKU_TYPE_DEPENDENCY_INFO2; }
+
+//     static vku::ref_t<dependency_info2_t> create(
+//             const VkDependencyInfo& dep_info,
+//             const std::vector<VkMemoryBarrier2> &mem_bars,
+//             const std::vector<VkBufferMemoryBarrier2> &buff_mem_bars,
+//             const std::vector<VkImageMemoryBarrier2> &img_mem_bars);
+
+//     virtual vc::ret_t init() override { return (update_ptrs(), VK_SUCCESS); }
+//     virtual vc::ret_t uninit() override { return VK_SUCCESS; }
+
+//     inline std::string to_string() const override;
+
+//     VkDependencyInfo *get_dep() { return &dep_info; }
+//     void update_ptrs();
+// };
+
+/* TODO: desc */
+struct image_subresource_range_t : public object_t {
+    VkImageSubresourceRange m_img_subrange;
+
+    static vku::object_type_e type_id_static() { return VKU_TYPE_IMAGE_SUBRESOURCE_RANGE; }
+    virtual vku::object_type_e type_id() const override { return VKU_TYPE_IMAGE_SUBRESOURCE_RANGE; }
+
+    static vku::ref_t<image_subresource_range_t> create(const VkImageSubresourceRange& img_subrange);
+
+    virtual vc::ret_t init() override { return VK_SUCCESS; }
+    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
+
+    inline std::string to_string() const override;
+};
+
+/*!
+ * vku::window_t
+ * -------------
+ *
+ * Description: Represents a GLFW window. This object manages a platform-specific window
+ * and serves as the target for Vulkan rendering. It allows resizing, title changes, and
+ * provides access to the underlying GLFWwindow* for integration with other libraries.
+ *
+ * Members:
+ * - m_name: Window title.
+ * - m_width, m_height: Window dimensions.
+ *
+ * Init: create(width, height, name)
+ *   - Parameters:
+ *     - width: Initial width of the window (default: 800).
+ *     - height: Initial height of the window (default: 600).
+ *     - name: Title of the window (default: "vku::window_name_placeholder").
+ */
 struct window_t : public object_t {
     /* Those can be modified at any time, but they need a rebuild to actually take effect (see
     ref_t::rebuild()) */
@@ -306,6 +444,32 @@ private:
     GLFWwindow *_window = NULL;
 };
 
+/*!
+ * vku::instance_t
+ * ---------------
+ *
+ * Description: Represents a Vulkan instance. A Vulkan instance is the foundational 
+ * object that initializes the Vulkan library for a specific application. It manages 
+ * the connection between the application and the Vulkan runtime, and it enables 
+ * creation of devices, surfaces, and other Vulkan objects. This object also supports 
+ * optional debug layers for development and validation.
+ *
+ * Members:
+ * - m_app_name: Name of the application. Used for debugging and identification.
+ * - m_engine_name: Name of the engine. Used for debugging and identification.
+ * - m_extensions: List of Vulkan extensions to enable on creation.
+ * - m_layers: List of Vulkan layers (such as validation layers) to enable.
+ *
+ * Init: create(app_name, engine_name, extensions, layers)
+ *   - Parameters:
+ *     - app_name: Name of the application (default: "vku::app_name_placeholder").
+ *     - engine_name: Name of the engine (default: "vku::engine_name_placeholder").
+ *     - extensions: Vector of extension names to enable (default: { "VK_EXT_debug_utils" }).
+ *     - layers: Vector of layer names to enable (default: { "VK_LAYER_KHRONOS_validation" }).
+ *
+ * Notes:
+ * - Debug layers can be optionally enabled to catch errors and warnings during development.
+ */
 struct instance_t : public object_t {
     VkInstance                  vk_instance;
     VkDebugUtilsMessengerEXT    vk_dbg_messenger;
@@ -330,6 +494,28 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vku::surface_t
+ * --------------
+ *
+ * Description: Wraps a Vulkan surface. A Vulkan surface is an abstraction that allows 
+ * rendering to be presented to a window system. This object manages the relationship 
+ * between a Vulkan instance and a platform-specific window (GLFW in this case). 
+ * It handles creation and destruction of the VkSurfaceKHR handle and ensures that 
+ * the surface is properly associated with the correct window and Vulkan instance.
+ *
+ * Members:
+ * - m_window: Reference to a window_t object. This is the window that the surface 
+ *   is associated with. The surface will present images to this window.
+ * - m_instance: Reference to an instance_t object. The Vulkan instance that created 
+ *   and manages this surface.
+ *
+ * Init: create(window, instance)
+ *   - Parameters:
+ *     - window: A reference to a window_t object to associate the surface with.
+ *     - instance: A reference to an instance_t object used to create the surface.
+ *   - Returns: A reference-counted surface_t object with a valid VkSurfaceKHR handle.
+ */
 struct surface_t : public object_t {
     VkSurfaceKHR        vk_surface = NULL;
 
@@ -347,6 +533,29 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vku::device_t
+ * -------------
+ *
+ * Description: Represents a Vulkan logical device. This object abstracts a physical 
+ * GPU and provides access to queues for graphics and presentation. It is used to 
+ * create buffers, images, pipelines, and other Vulkan resources.
+ *
+ * Members:
+ * - m_surface: Reference to a surface_t object. The surface used for presentation and 
+ *   swapchain creation.
+ *
+ * Init: create(surface)
+ *   - Parameters:
+ *     - surface: A reference to a surface_t object that this device will render to.
+ *
+ * Notes:
+ * - Automatically selects suitable graphics and presentation queues.
+ * - Provides access to device-local and host-visible memory through buffer objects.
+ * 
+ * TODO:
+ * - Add options for selecting the phys dev
+ */
 struct device_t : public object_t {
     VkPhysicalDevice    vk_phy_dev;
     VkDevice            vk_dev;
@@ -369,7 +578,31 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
-/* VkSwapchainKHR */
+/*!
+ * vku::swapchain_t
+ * ----------------
+ *
+ * Description: Wraps a Vulkan swapchain. A swapchain manages a set of images that 
+ * are presented to a window in a controlled manner. This object handles creation 
+ * of the VkSwapchainKHR, its images, and associated image views.
+ *
+ * Members:
+ * - m_device: Reference to a device_t object. The device used to create and manage 
+ *   the swapchain.
+ * - m_depth_imag: Reference to a depth image used for depth testing (automatically created).
+ * - m_depth_view: Reference to an image view for the depth image (automatically created).
+ *
+ * Init: create(device)
+ *   - Parameters:
+ *     - device: Reference to the device_t object.
+ *
+ * Notes:
+ * - Automatically chooses the surface format, present mode, and image count.
+ * - Provides access to the swapchain images and their views for rendering.
+ * 
+ * TODO:
+ * - more init hints?
+ */
 struct swapchain_t : public object_t {
     VkSurfaceFormatKHR          vk_surf_fmt;
     VkPresentModeKHR            vk_present_mode;
@@ -393,6 +626,28 @@ struct swapchain_t : public object_t {
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vku::shader_t
+ * -------------
+ *
+ * Description: Wraps a Vulkan shader module. This object represents a compiled 
+ * shader in SPIR-V format and can be used in graphics or compute pipelines. It 
+ * supports initialization from a SPIR-V object or directly from a precompiled file.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this shader.
+ * - m_type: Shader stage (vertex, fragment, compute, etc.).
+ * - m_spirv: Reference to a spirv_t object containing the compiled SPIR-V code.
+ * - m_path: Path to the shader file (used if initialized from file).
+ * - m_init_from_path: Flag indicating whether the shader was initialized from a file.
+ *
+ * Init:
+ * - create(device, spirv): Initialize from a spirv_t object.
+ * - create(device, path, type): Initialize from a compiled shader file.
+ *
+ * Notes:
+ * - For graphics pipelines, shaders must match the pipeline’s stage requirements.
+ */
 struct shader_t : public object_t {
     VkShaderModule      vk_shader;
 
@@ -419,6 +674,26 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vku::renderpass_t
+ * -----------------
+ *
+ * Description: Wraps a Vulkan render pass. A render pass defines how framebuffer 
+ * attachments are used during rendering, including their load/store operations 
+ * and the subpass dependencies. This object manages the creation of a VkRenderPass 
+ * for a given swapchain.
+ *
+ * Members:
+ * - m_swapchain: Reference to a swapchain_t object. The swapchain whose images 
+ *   will be rendered into using this render pass.
+ *
+ * Init: create(swc)
+ *   - Parameters:
+ *     - swc: Reference to a swapchain_t object that will provide the framebuffer images.
+ *
+ * Notes:
+ * - Handles attachment descriptions, subpass definitions, and dependencies automatically.
+ */
 struct renderpass_t : public object_t {
     VkRenderPass        vk_render_pass;
 
@@ -434,6 +709,38 @@ struct renderpass_t : public object_t {
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vku::pipeline_t
+ * ---------------
+ *
+ * Description: Wraps a Vulkan graphics pipeline. This object encapsulates the entire 
+ * pipeline state, including shaders, vertex input, topology, viewport, rasterization, 
+ * and descriptor set bindings. It is used for rendering commands submitted to a 
+ * command buffer.
+ *
+ * Members:
+ * - m_renderpass: Reference to a renderpass_t object. The render pass this pipeline 
+ *   will be used with.
+ * - m_shaders: Vector of references to shader_t objects. The shaders used in the 
+ *   pipeline stages.
+ * - m_topology: Primitive topology (triangle list, line list, etc.).
+ * - m_input_desc: Vertex input description (binding, attributes, stride, input rate).
+ * - m_bindings_initer: Reference to a desc_set_initializer_t object. Descriptor sets used 
+ *   by the pipeline.
+ * - m_width, m_height: Pipeline viewport dimensions.
+ *
+ * Init: create(width, height, renderpass, shaders, topology, input_desc, bindings)
+ *   - Parameters:
+ *     - width, height: Pipeline viewport dimensions.
+ *     - renderpass: Reference to the renderpass_t object.
+ *     - shaders: Vector of shader_t references for each stage.
+ *     - topology: Primitive topology.
+ *     - input_desc: Vertex input description.
+ *     - bindings: Reference to desc_set_initializer_t describing descriptor sets.
+ *
+ * TODO:
+ * - maybe get rid of m_width, m_height, create new objects for viewport and stuff
+ */
 struct pipeline_t : public object_t {
     VkPipeline                      vk_pipeline;
 
@@ -462,6 +769,26 @@ struct pipeline_t : public object_t {
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vku::compute_pipeline_t
+ * -----------------------
+ *
+ * Description: Wraps a Vulkan compute pipeline. This object encapsulates a compute 
+ * shader and the descriptor sets it uses. It is used to dispatch compute workloads 
+ * on the GPU.
+ *
+ * Members:
+ * - m_device: Reference to a device_t object. The device that owns this compute pipeline.
+ * - m_shader: Reference to a shader_t object containing the compute shader.
+ * - m_bindings_initer: Reference to a desc_set_initializer_t object describing descriptor sets 
+ *   used by the shader.
+ *
+ * Init: create(device, shader, bindings)
+ *   - Parameters:
+ *     - device: Reference to the device_t object.
+ *     - shader: Reference to the compute shader (shader_t).
+ *     - bindings: Reference to desc_set_initializer_t describing descriptor sets.
+ */
 struct compute_pipeline_t : public object_t {
     VkPipeline                      vk_pipeline;
 
@@ -483,7 +810,22 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
-/*engine_create_framebuffs*/
+/*!
+ * vku::framebuffs_t
+ * -----------------
+ *
+ * Description: Wraps Vulkan framebuffers. A framebuffer represents a collection of 
+ * attachments (color, depth, etc.) used by a render pass for rendering. This object 
+ * manages the creation of VkFramebuffer objects corresponding to the swapchain images.
+ *
+ * Members:
+ * - m_renderpass: Reference to a renderpass_t object. The render pass that these 
+ *   framebuffers are compatible with.
+ *
+ * Init: create(renderpass)
+ *   - Parameters:
+ *     - renderpass: Reference to the renderpass_t object these framebuffers will be used with.
+ */
 struct framebuffs_t : public object_t {
     std::vector<VkFramebuffer>  vk_fbuffs;      /* needs separate object framebuffer_t */
 
@@ -499,7 +841,25 @@ struct framebuffs_t : public object_t {
     virtual vc::ret_t uninit() override;
 };
 
-/*engine_create_cmdpool*/
+/*!
+ * vku::cmdpool_t
+ * --------------
+ *
+ * Description: Wraps a Vulkan command pool. A command pool manages the memory and 
+ * allocation of command buffers, which record rendering and compute commands. This 
+ * object simplifies creation and management of command buffers for a device.
+ *
+ * Members:
+ * - m_device: Reference to a device_t object. The device that owns this command pool.
+ *
+ * Init: create(device)
+ *   - Parameters:
+ *     - device: Reference to the device_t object that will own this command pool.
+ *
+ * Notes:
+ * - All command buffers allocated from this pool are implicitly associated with
+ * the device’s queues.
+ */
 struct cmdpool_t : public object_t {
     VkCommandPool   vk_pool;
 
@@ -516,6 +876,42 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vku::cmdbuff_t
+ * --------------
+ *
+ * Description: Wraps a Vulkan command buffer. Command buffers record rendering and 
+ * compute commands that are submitted to a queue for execution. This object manages 
+ * allocation, recording, and submission of commands, and provides utility functions 
+ * for common operations like binding vertex buffers, descriptor sets, and drawing.
+ *
+ * Members:
+ * - m_cmdpool: Reference to a cmdpool_t object. The command pool from which this 
+ *   command buffer was allocated.
+ * - m_host_free: TODO explanation
+ *
+ * Member functions:
+ * - begin(flags): Begin recording commands with specified usage flags.
+ * - begin_rpass(fbs, img_idx): Begin a render pass using the specified framebuffers.
+ * - bind_vert_buffs(first_bind, buffs): Bind vertex buffers.
+ * - bind_idx_buff(ibuff, offset, idx_type): Bind an index buffer.
+ * - bind_desc_set(bind_point, pl, desc_set): Bind a descriptor set for the pipeline.
+ * - draw(pl, vert_cnt): Issue a non-indexed draw call.
+ * - draw_idx(pl, vert_cnt): Issue an indexed draw call.
+ * - end_rpass(): End the current render pass.
+ * - end(): Finish recording commands.
+ * - reset(): Reset the command buffer for reuse.
+ * - bind_compute(cpl): Bind a compute pipeline.
+ * - dispatch_compute(x, y, z): Dispatch compute shader workgroups.
+ *
+ * Init: create(cmdpool, host_free=false)
+ *   - Parameters:
+ *     - cmdpool: Reference to the cmdpool_t object from which this buffer will be allocated.
+ *     - host_free: Optional flag indicating whether the buffer is host-allocated (default: false).
+ *
+ * TODO:
+ * - check this description again
+ */
 struct cmdbuff_t : public object_t {
     VkCommandBuffer     vk_buff;
 
@@ -545,11 +941,36 @@ struct cmdbuff_t : public object_t {
     void bind_compute(ref_t<compute_pipeline_t> cpl);
     void dispatch_compute(uint32_t x, uint32_t y = 1, uint32_t z = 1);
 
+    void set_event(ref_t<event_t> event, VkPipelineStageFlags stage);
+    void reset_event(ref_t<event_t> event, VkPipelineStageFlags stage);
+    void wait_events(const std::vector<ref_t<event_t>>& events, ref_t<dependency_info_t> dep_info);
+
+    void pipeline_barrier(ref_t<dependency_info_t> dep_info);
+
 private:
     virtual vc::ret_t init() override;
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vku::sem_t
+ * ----------
+ *
+ * Description: Wraps a Vulkan semaphore. Semaphores are synchronization primitives 
+ * used to coordinate execution between command buffers and queues, and to synchronize 
+ * presentation with rendering.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this semaphore.
+ *
+ * Init: create(device)
+ *   - Parameters:
+ *     - device: Reference to the device_t object that will own this semaphore.
+ *
+ * Notes:
+ * - Typically used to signal when an image is available from the swapchain or when 
+ *   rendering is complete.
+ */
 struct sem_t : public object_t {
     VkSemaphore     vk_sem;
 
@@ -558,16 +979,63 @@ struct sem_t : public object_t {
     ref_t<device_t> m_device;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_SEMAPHORE; }
-    virtual std::string to_string() const override;
+    static object_type_e type_id_static() { return VKU_TYPE_SEMAPHORE; }
 
     static ref_t<sem_t> create(ref_t<device_t> dev,
             VkSemaphoreType sem_type = VK_SEMAPHORE_TYPE_BINARY, uint64_t inital = 0);
+
+    virtual std::string to_string() const override;
+
+    /* TODO: get_counter() -- this is for timeline semaphore */
+    /* TODO: static/global wait_semaphores({sems...}, {vals...}, wait_all) -- for timeline */
+    /* TODO: signal(value) -- for timeline, wait for value */
 
 private:
     virtual vc::ret_t init() override;
     virtual vc::ret_t uninit() override;
 };
 
+struct event_t : public object_t {
+    VkEvent vk_event;
+
+    ref_t<device_t> m_device;
+
+    virtual object_type_e type_id() const override { return VKU_TYPE_EVENT; }
+    static object_type_e type_id_static() { return VKU_TYPE_EVENT; }
+
+    static ref_t<event_t> create(ref_t<device_t> dev);
+    virtual std::string to_string() const override;
+
+    VkResult get_status() {  return vkGetEventStatus(m_device->vk_dev, vk_event); }
+    VkResult set_event() {   return vkSetEvent(m_device->vk_dev, vk_event); }
+    VkResult reset_event() { return vkResetEvent(m_device->vk_dev, vk_event); }
+
+private:
+    virtual vc::ret_t init() override;
+    virtual vc::ret_t uninit() override;
+};
+
+/*!
+ * vku::fence_t
+ * ------------
+ *
+ * Description: Wraps a Vulkan fence. Fences are synchronization primitives used to 
+ * coordinate CPU and GPU operations. They allow the host to wait for GPU execution 
+ * to complete, ensuring proper synchronization between command submissions.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this fence.
+ * - m_flags: Fence creation flags. These control initial fence state (e.g., signaled 
+ *   or unsignaled).
+ *
+ * Init: create(device, flags=0)
+ *   - Parameters:
+ *     - device: Reference to the device_t object that will own this fence.
+ *     - flags: Optional fence creation flags (default: 0).
+ *
+ * Notes:
+ * - Fences can be waited on from the CPU to ensure GPU completion of submitted work.
+ */
 struct fence_t : public object_t {
     VkFence             vk_fence;
 
@@ -589,6 +1057,40 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vku::buffer_t
+ * -------------
+ *
+ * Description: Wraps a Vulkan buffer and its associated device memory. Buffers are 
+ * linear memory resources used to store vertex data, index data, uniform data, or 
+ * any other structured GPU-accessible data. This object manages both the VkBuffer 
+ * and its backing VkDeviceMemory, and provides helper functions for mapping and 
+ * unmapping memory for CPU access.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this buffer.
+ * - m_size: The total size of the buffer in bytes.
+ * - m_usage_flags: Vulkan usage flags (e.g., VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) that 
+ *   determine how the buffer will be used by the GPU.
+ * - m_sharing_mode: Vulkan sharing mode (exclusive or concurrent) that determines 
+ *   how the buffer is accessed across multiple queue families.
+ * - m_memory_flags: Vulkan memory property flags that specify the type of memory 
+ *   allocation (e.g., host-visible, device-local, coherent).
+ * - m_map_ptr: Pointer to mapped memory (valid only when the buffer is mapped).
+ *
+ * Member functions:
+ * - map_data(offset, size): Maps the buffer's device memory to CPU-visible address space 
+ *   so that data can be written directly from the host.
+ * - unmap_data(): Unmaps the buffer's device memory after CPU writes are complete.
+ *
+ * Init: create(device, size, usage_flags, sharing_mode, memory_flags)
+ *   - Parameters:
+ *     - device: Reference to the device_t that will own this buffer.
+ *     - size: The total size of the buffer in bytes.
+ *     - usage_flags: Vulkan usage flags indicating how the buffer will be used.
+ *     - sharing_mode: How the buffer is shared across queue families.
+ *     - memory_flags: Memory properties for the buffer’s allocation.
+ */
 struct buffer_t : public object_t {
     VkBuffer                vk_buff;
     VkDeviceMemory          vk_mem; /* needs separate object memory_t */
@@ -619,7 +1121,38 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
-
+/*!
+ * vku::image_t
+ * ------------
+ *
+ * Description: Wraps a Vulkan image and its associated device memory. Images are
+ * multidimensional resources used for textures, color attachments, depth buffers,
+ * and other GPU-readable or -writable image data. This object manages the VkImage
+ * handle, its VkDeviceMemory allocation, and supports layout transitions and view creation.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this image.
+ * - m_width, m_height: Dimensions of the image in pixels.
+ * - m_format: Vulkan format (e.g., VK_FORMAT_R8G8B8A8_SRGB) that defines the pixel layout.
+ *   how the image will be used.
+ * - m_usage: Vulkan usage flags (e.g., VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) indicating 
+ *   how the image will be used.
+ *
+ * Member functions:
+ * - transition_layout(cmd_buff, old_layout, new_layout): Records a layout transition
+ *   command for this image, changing how the GPU interprets its contents.
+ * - set_data(cmd_pool, ptr, size, cmd_buff=nullptr): Copies data from a buffer into the image.
+ *
+ * Init: create(device, width, height, format, usage)
+ *   - Parameters:
+ *     - device: Reference to the device_t that will own this image.
+ *     - width, height: Dimensions of the image.
+ *     - format: Image format.
+ *     - usage: Usage flags describing intended image use.
+ *
+ * TODO:
+ * - add m_tiling and m_mem_flags? 
+ */
 struct image_t : public object_t {
     VkImage             vk_img;
     VkDeviceMemory      vk_img_mem;
@@ -661,6 +1194,33 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vku::img_view_t
+ * ---------------
+ *
+ * Description: Wraps a Vulkan image view. An image view defines how a Vulkan image’s
+ * data can be accessed and interpreted within shaders or as attachments. This object
+ * manages the VkImageView handle and ensures it is correctly associated with its
+ * underlying VkImage.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this image view.
+ * - m_image: Reference to the image_t object that this view is based on.
+ * - m_aspect_flags: Aspect flags defining which parts of the image are accessible 
+ *   (e.g., color, depth, or stencil).
+ *
+ * Init: create(device, image, aspect_flags)
+ *   - Parameters:
+ *     - device: Reference to the device_t object that owns this image view.
+ *     - image: Reference to the image_t object to create a view for.
+ *     - aspect_flags: Aspect flags specifying which parts of the image the view will access.
+ *
+ * Notes:
+ * - Required for using images as color or depth attachments, or as sampled textures.
+ * - The view type (1D, 2D, 3D, or cube) is inferred from the image and usage flags.
+ * - Multiple views can be created from the same image to represent different mip levels
+ *   or aspects.
+ */
 struct img_view_t : public object_t {
     VkImageView         vk_view;
 
@@ -678,6 +1238,31 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vku::img_sampl_t
+ * ----------------
+ *
+ * Description: Wraps a Vulkan sampler. A sampler defines how image data is read in shaders, 
+ * including filtering, addressing modes, and mipmap behavior. This object manages the 
+ * VkSampler handle and its configuration, and is used in combination with an img_view_t 
+ * when binding textures to descriptor sets.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this sampler.
+ * - m_filter: Filtering mode used for magnification and minification (e.g., 
+ *   VK_FILTER_LINEAR, VK_FILTER_NEAREST).
+ *
+ * Init: create(device, filter)
+ *   - Parameters:
+ *     - device: Reference to the device_t object that will own this sampler.
+ *     - filter: Filtering mode for magnification and minification.
+ *
+ * Notes:
+ * - Samplers are independent of specific images and can be reused across multiple textures.
+ * 
+ * TODO:
+ * - add m_address_mode, max_anisotropy, mipmap_mode
+ */
 struct img_sampl_t : public object_t {
     VkSampler       vk_sampler;
 
@@ -696,6 +1281,29 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vkc::desc_pool_t
+ * ----------------
+ *
+ * Description: Represents a Vulkan descriptor pool. A descriptor pool allocates 
+ * and manages descriptor sets, which are used to bind resources (buffers, 
+ * images, samplers) to shaders. This object wraps the VkDescriptorPool handle 
+ * and tracks associated bindings and allocation count.
+ *
+ * Members:
+ * - m_device: Reference to the device_t object that owns this pool.
+ * - m_bindings_initer: Reference to a desc_set_initializer_t object describing the types 
+ *   of bindings this pool can allocate.
+ * - m_cnt: Number of descriptor sets this pool can allocate.
+ * - vk_descpool: Vulkan descriptor pool handle.
+ *
+ *
+ * Init: create(dev, bindings, cnt)
+ *   - Parameters:
+ *     - dev: Reference to the device_t object used to create the pool.
+ *     - bindings: Reference to a desc_set_initializer_t describing the binding types.
+ *     - cnt: Maximum number of descriptor sets that can be allocated from this pool.
+ */
 struct desc_pool_t : public object_t {
     VkDescriptorPool                vk_descpool;
 
@@ -717,6 +1325,46 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
+/*!
+ * vkc::desc_set_t
+ * ---------------
+ *
+ * Description: Represents a Vulkan descriptor set. Descriptor sets are allocated 
+ * from a descriptor pool and define how resources (buffers, images, samplers) 
+ * are bound to shaders in a pipeline. This object wraps the VkDescriptorSet handle 
+ * and tracks the pool, pipeline, and bindings associated with the set.
+ *
+ * Members:
+ * - m_descriptor_pool: Reference to the desc_pool_t object that allocated this set.
+ * - m_pipeline: Reference to the pipeline_t object using this descriptor set.
+ * - m_bindings_initer: Reference to a desc_set_initializer_t object describing the resources 
+ *   bound to this descriptor set.
+ * - vk_desc_set: Vulkan descriptor set handle.
+ *
+ * Member functions:
+ * - update(): Updates the GPU descriptor set with the current resources from the
+ *   associated desc_set_initializer_t. Should be called after changing any buffers, images,
+ *   or samplers in the bindings. This function must be called before binding the descriptor set in
+ *   a command buffer if any resources have changed.
+ *
+ * Init: create(dp, pl, bindings)
+ *   - Parameters:
+ *     - dp: Reference to the desc_pool_t to allocate the descriptor set from.
+ *     - pl: Reference to the pipeline_t that will use this descriptor set.
+ *     - bindings: Reference to a desc_set_initializer_t describing the bindings for this set.
+ * 
+ * Notes:
+ * - desc_set_t represents an actual Vulkan descriptor set allocated from a descriptor pool.
+ *   It implements the resources described by a desc_set_initializer_t. While desc_set_initializer_t
+ *   defines the layout and points to the specific resources (buffers, images, samplers),
+ *   desc_set_t is the concrete GPU object that can be bound in a pipeline. Multiple 
+ *   desc_set_t instances can share the same desc_set_initializer_t layout.
+ * - Buffers and samplers are stored in the desc_set_initializer_t bindings. To change the
+ *   resource used by a desc_set_t, modify the resource in the corresponding 
+ *   desc_set_initializer_t::binding_desc_t and call update() on the desc_set_t. Alternatively,
+ *   calling update() on the desc_set_initializer_t itself also works, as desc_set_t depends
+ *   on it and will propagate the changes automatically.
+ */
 struct desc_set_t : public object_t {
     VkDescriptorSet                 vk_desc_set;
 
@@ -738,6 +1386,7 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
+/*! TODO: desc */
 struct desc_set_layout_t : public object_t {
     VkDescriptorSetLayout           vk_desc_set_layout;
 
@@ -756,6 +1405,7 @@ private:
     virtual vc::ret_t uninit() override;
 };
 
+/*! TODO: desc */
 struct pipeline_layout_t : public object_t {
     VkPipelineLayout            vk_pipeline_layout;
 
@@ -818,6 +1468,90 @@ private:
  * Create sets from it.
  * Further in time, if needed, modify the descriptors inside the bindings and update the descriptor
  * sets 
+ * 
+ * vku::desc_set_initializer_t
+ * -----------------------
+ *
+ * Description: Represents a collection of Vulkan descriptor bindings that define 
+ * how GPU resources (buffers, images, samplers) are connected to shaders. 
+ * This object holds a list of binding descriptors (either buffer or sampler bindings) 
+ * and provides helper functions to produce Vulkan structures used during 
+ * descriptor set and layout creation.
+ *
+ * Members:
+ * - m_binds: Vector of binding_desc_t objects, each describing a single resource 
+ *   binding (uniform buffer, storage buffer, or combined image sampler).
+ *
+ * Nested types:
+ * - binding_desc_t: Abstract base class for a descriptor binding. 
+ *   Defines a common interface for obtaining a VkWriteDescriptorSet structure.
+ * - buff_binding_t: Represents a buffer descriptor binding. Holds a reference 
+ *   to a buffer_t and its associated VkDescriptorBufferInfo.
+ * - sampl_binding_t: Represents a combined image sampler binding. Holds references 
+ *   to an img_view_t and an img_sampl_t, as well as the associated VkDescriptorImageInfo.
+ *
+ * Member functions:
+ * - get_writes(): Returns a vector of VkWriteDescriptorSet structures for updating 
+ *   descriptor sets.
+ * - get_descriptors(): Returns a vector of VkDescriptorSetLayoutBinding structures 
+ *   describing all bindings for layout creation.
+ *
+ * Init: create(binds)
+ *   - Parameters:
+ *     - binds: Vector of binding_desc_t references (each created using buff_binding_t::create 
+ *       or sampl_binding_t::create).
+ *
+ * Notes:
+ * - This object is used by desc_pool_t and desc_set_t to create and populate 
+ *   Vulkan descriptor sets.
+ * 
+ * 
+ * vku::desc_set_initializer_t::buff_binding_t
+ * ---------------------------------------
+ *
+ * Description: Represents a buffer binding within a Vulkan descriptor set. 
+ * This binding connects a GPU buffer (uniform or storage) to a shader stage. 
+ * It wraps a buffer_t reference and the corresponding VkDescriptorBufferInfo needed 
+ * for descriptor updates.
+ *
+ * Members:
+ * - m_buffer: Reference to a buffer_t object containing the GPU buffer.
+ *
+ * Member functions:
+ * - get_write(): Returns a VkWriteDescriptorSet structure suitable for updating 
+ *   a descriptor set with this buffer binding.
+ *
+ * Init: create(desc, buffer)
+ *   - Parameters:
+ *     - desc: VkDescriptorSetLayoutBinding describing this binding (binding index, 
+ *       descriptor type, stage flags, etc.).
+ *     - buffer: Reference to a buffer_t object to bind.
+ *
+ * Notes:
+ * - Typically used for uniform buffers or storage buffers in graphics or compute pipelines.
+ * 
+ * 
+ * vku::desc_set_initializer_t::sampl_binding_t
+ * ----------------------------------------
+ *
+ * Description: Represents a combined image sampler binding within a Vulkan descriptor set. 
+ * This binding connects a GPU image (via img_view_t) and a sampler (img_sampl_t) 
+ * to a shader stage, allowing shaders to sample textures.
+ *
+ * Members:
+ * - m_view: Reference to an img_view_t object representing the image to be sampled.
+ * - m_sampler: Reference to an img_sampl_t object representing the sampler used for filtering.
+ *
+ * Member functions:
+ * - get_write(): Returns a VkWriteDescriptorSet structure suitable for updating 
+ *   a descriptor set with this image-sampler binding.
+ *
+ * Init: create(desc, view, sampler)
+ *   - Parameters:
+ *     - desc: VkDescriptorSetLayoutBinding describing this binding (binding index, 
+ *       descriptor type, stage flags, etc.).
+ *     - view: Reference to an img_view_t object to bind.
+ *     - sampler: Reference to an img_sampl_t object to bind.
  */
 struct desc_set_initializer_t : public object_t {
     struct binding_desc_t : public object_t {
@@ -887,6 +1621,8 @@ private:
 };
 
 /* Internal:
+=================================================================================================
+=================================================================================================
 ================================================================================================= */
 
 struct except_t : vc::except_t {
@@ -1065,8 +1801,217 @@ inline VkDescriptorSetLayoutBinding ssbo_t::get_desc_set(uint32_t binding,
     };
 }
 
+/* binding_t
+================================================================================================= */
+
+inline vku::ref_t<binding_t> binding_t::create(const VkDescriptorSetLayoutBinding& bd) {
+    auto ret = std::make_shared<binding_t>();
+    ret->bd = bd;
+    return ret;
+}
+
+
+inline std::string binding_t::to_string() const {
+    return std::format("vku::binding_t[{}]: binding={}, descriptorType={}, descriptorCount={} "
+            "stageFlags={} pImmutableSamplers={}]",
+            (void *)this, bd.binding, vku::to_string(bd.descriptorType), bd.descriptorCount,
+            vku::to_string((VkShaderStageFlagBits)bd.stageFlags), (void *)bd.pImmutableSamplers);
+}
+
+/* dependency_info_t
+================================================================================================= */
+
+inline vku::ref_t<dependency_info_t> dependency_info_t::create(
+        VkPipelineStageFlagBits src_stage_mask,
+        VkPipelineStageFlagBits dst_stage_mask,
+        const std::vector<VkMemoryBarrier> &mem_bars,
+        const std::vector<VkBufferMemoryBarrier> &buff_mem_bars,
+        const std::vector<VkImageMemoryBarrier> &img_mem_bars,
+        VkDependencyFlags dep_flags)
+{
+    auto ret = std::make_shared<dependency_info_t>();
+    ret->m_src_stage_mask = src_stage_mask;
+    ret->m_dst_stage_mask = dst_stage_mask;
+    ret->m_dep_flags = dep_flags;
+    ret->mem_bars = mem_bars;
+    ret->buff_mem_bars = buff_mem_bars;
+    ret->img_mem_bars = img_mem_bars;
+    ret->init();
+    return ret;
+}
+
+inline std::string dependency_info_t::to_string() const {
+    std::string ret;
+    ret += std::format("vku::dependency_info_t[{}]:\n"
+            "\tsrc_stage_mask={}\n"
+            "\tdst_stage_mask={}\n"
+            "\tdependencyFlags={}\n"
+            "\tMemoryBarriers = ",
+            (void *)this,
+            vku::to_string((VkPipelineStageFlagBits)m_src_stage_mask),
+            vku::to_string((VkPipelineStageFlagBits)m_dst_stage_mask),
+            vku::to_string((VkDependencyFlagBits)m_dep_flags));
+    ret += "\t{\n";
+    for (auto barrier : mem_bars) {
+        ret += std::format("\t\tsrcAccessMask={},\n",
+                vku::to_string((VkAccessFlagBits)barrier.srcAccessMask));
+        ret += std::format("\t\tdstAccessMask={}\n",
+                vku::to_string((VkAccessFlagBits)barrier.dstAccessMask));
+    }
+    ret += "\t},\nBufferMemoryBarriers = {\n";
+    for (auto barrier : buff_mem_bars) {
+        ret += std::format("\t\tsrcAccessMask={},\n",
+                vku::to_string((VkAccessFlagBits)barrier.srcAccessMask));
+        ret += std::format("\t\tdstAccessMask={}\n",
+                vku::to_string((VkAccessFlagBits)barrier.dstAccessMask));
+        ret += std::format("\t\tsrcQueueFamilyIndex={}\n", barrier.srcQueueFamilyIndex);
+        ret += std::format("\t\tdstQueueFamilyIndex={}\n", barrier.dstQueueFamilyIndex);
+        ret += std::format("\t\tbuffer={}\n",              (void *)barrier.buffer);
+        ret += std::format("\t\toffset={}\n",              (size_t)barrier.offset);
+        ret += std::format("\t\tsize={}\n",                (size_t)barrier.size);
+    }
+    ret += "\t},\nImageMemoryBarriers = {\n";
+    for (auto barrier : img_mem_bars) {
+        ret += std::format("\t\tsrcAccessMask={},\n",
+                vku::to_string((VkAccessFlagBits)barrier.srcAccessMask));
+        ret += std::format("\t\tdstAccessMask={}\n",
+                vku::to_string((VkAccessFlagBits)barrier.dstAccessMask));
+        ret += std::format("\t\toldLayout={}\n",           vku::to_string(barrier.oldLayout));
+        ret += std::format("\t\tnewLayout={}\n",           vku::to_string(barrier.newLayout));
+        ret += std::format("\t\tsrcQueueFamilyIndex={}\n", barrier.srcQueueFamilyIndex);
+        ret += std::format("\t\tdstQueueFamilyIndex={}\n", barrier.dstQueueFamilyIndex);
+        ret += std::format("\t\timage={}\n",               (void *)barrier.image);
+        ret += "\tsubresourceRange = {\n";
+        ret += std::format("\t\t\taspectMask={},\n",
+                vku::to_string((VkImageAspectFlagBits)barrier.subresourceRange.aspectMask));
+        ret += std::format("\t\t\tbaseMipLevel={},\n",     barrier.subresourceRange.baseMipLevel);
+        ret += std::format("\t\t\tlevelCount={},\n",       barrier.subresourceRange.levelCount);
+        ret += std::format("\t\t\tbaseArrayLayer={},\n",   barrier.subresourceRange.baseArrayLayer);
+        ret += std::format("\t\t\tlayerCount={},\n",       barrier.subresourceRange.layerCount);
+        ret += "\t}\n";
+    }
+    ret += "\t}\n";
+    return ret;
+}
+
+/* dependency_info2_t
+================================================================================================= */
+
+/* TODO: this needs to be implemented in a newer version of vulkan, tested and as such */
+// static vku::ref_t<dependency_info2_t> dependency_info2_t::create(
+//         const VkDependencyInfo& dep_info,
+//         const std::vector<VkMemoryBarrier2> &mem_bars,
+//         const std::vector<VkBufferMemoryBarrier2> &buff_mem_bars,
+//         const std::vector<VkImageMemoryBarrier2> &img_mem_bars)
+// {
+//     auto ret = std::make_shared<dependency_info2_t>();
+//     ret->dep_info = dep_info;
+//     ret->mem_bars = mem_bars;
+//     ret->buff_mem_bars = buff_mem_bars;
+//     ret->img_mem_bars = img_mem_bars;
+//     ret->init();
+//     return ret;
+// }
+
+// inline std::string dependency_info2_t::to_string() const {
+//     std::string ret;
+//     ret += std::format("vku::dependency_info2_t[{}]: dependencyFlags={} MemoryBarriers = ",
+//             (void *)this, vku::to_string(bd.dependencyFlags));
+//     ret += "{\n";
+//     for (auto barrier : mem_bars) {
+//         ret += std::format("\tsrcStageMask={},\n",
+//                 vku::to_string((VkPipelineStageFlagBits2)barrier.srcStageMask));
+//         ret += std::format("\tsrcAccessMask={},\n",
+//                 vku::to_string((VkAccessFlags2)barrier.srcAccessMask));
+//         ret += std::format("\tdstStageMask={},\n",
+//                 vku::to_string((VkPipelineStageFlagBits2)barrier.dstStageMask));
+//         ret += std::format("\tdstAccessMask={}\n",
+//                 vku::to_string((VkAccessFlags2)barrier.dstAccessMask));
+//     }
+//     ret += "},\nBufferMemoryBarriers = {\n";
+//     for (auto barrier : buff_mem_bars) {
+//         ret += std::format("\tsrcStageMask={},\n",
+//                 vku::to_string((VkPipelineStageFlagBits2)barrier.srcStageMask));
+//         ret += std::format("\tsrcAccessMask={},\n",
+//                 vku::to_string((VkAccessFlags2)barrier.srcAccessMask));
+//         ret += std::format("\tdstStageMask={},\n",
+//                 vku::to_string((VkPipelineStageFlagBits2)barrier.dstStageMask));
+//         ret += std::format("\tdstAccessMask={}\n",
+//                 vku::to_string((VkAccessFlags2)barrier.dstAccessMask));
+//         ret += std::format("\tsrcQueueFamilyIndex={}\n", barrier.srcQueueFamilyIndex);
+//         ret += std::format("\tdstQueueFamilyIndex={}\n", barrier.dstQueueFamilyIndex);
+//         ret += std::format("\tbuffer={}\n",              (void *)barrier.buffer);
+//         ret += std::format("\toffset={}\n",              (size_t)barrier.offset);
+//         ret += std::format("\tsize={}\n",                (size_t)barrier.size);
+//     }
+//     ret += "},\nImageMemoryBarriers = {\n";
+//     for (auto barrier : img_mem_bars) {
+//         ret += std::format("\tsrcStageMask={},\n",
+//                 vku::to_string((VkPipelineStageFlagBits2)barrier.srcStageMask));
+//         ret += std::format("\tsrcAccessMask={},\n",
+//                 vku::to_string((VkAccessFlags2)barrier.srcAccessMask));
+//         ret += std::format("\tdstStageMask={},\n",
+//                 vku::to_string((VkPipelineStageFlagBits2)barrier.dstStageMask));
+//         ret += std::format("\tdstAccessMask={}\n",
+//                 vku::to_string((VkAccessFlags2)barrier.dstAccessMask));
+//         ret += std::format("\toldLayout={}\n",           vku::to_string(barrier.oldLayout));
+//         ret += std::format("\tnewLayout={}\n",           vku::to_string(barrier.newLayout));
+//         ret += std::format("\tsrcQueueFamilyIndex={}\n", barrier.srcQueueFamilyIndex);
+//         ret += std::format("\tdstQueueFamilyIndex={}\n", barrier.dstQueueFamilyIndex);
+//         ret += std::format("\timage={}\n",               (void *)barrier.image);
+//         ret += "\tsubresourceRange = {\n";
+//         ret += std::format("\t\taspectMask={},\n",
+//                 vku::to_string((VkImageAspectFlagBits)barrier.subresourceRange.aspectMask));
+//         ret += std::format("\t\tbaseMipLevel={},\n",     barrier.subresourceRange.baseMipLevel);
+//         ret += std::format("\t\tlevelCount={},\n",       barrier.subresourceRange.levelCount);
+//         ret += std::format("\t\tbaseArrayLayer={},\n",   barrier.subresourceRange.baseArrayLayer);
+//         ret += std::format("\t\tlayerCount={},\n",       barrier.subresourceRange.layerCount);
+//         ret += "\t}\n";
+//     }
+//     ret += "}\n";
+//     return ret;
+// }
+
+// inline void dependency_info2_t::update_ptrs() {
+//     dep_info.memoryBarrierCount = (uint32_t)mem_bars.size();
+//     dep_info.pMemoryBarriers = mem_bars.data();
+//     dep_info.bufferMemoryBarrierCount = (uint32_t)buff_mem_bars.size();
+//     dep_info.pBufferMemoryBarriers = buff_mem_bars.data();
+//     dep_info.imageMemoryBarrierCount = (uint32_t)img_mem_bars.size();
+//     dep_info.pImageMemoryBarriers = img_mem_bars.data();
+// }
+
+/* image_subresource_range_t
+================================================================================================= */
+
+inline vku::ref_t<image_subresource_range_t> image_subresource_range_t::create(
+        const VkImageSubresourceRange& img_subrange)
+{
+    auto ret = std::make_shared<image_subresource_range_t>();
+    ret->m_img_subrange = img_subrange;
+    return ret;
+}
+
+inline std::string image_subresource_range_t::to_string() const {
+    return std::format("vku::image_subresource_range_t[{}]: taspectMask={}, baseMipLevel={}, "
+            "levelCount={} baseArrayLayer={} layerCount={}", 
+            (void *)this, vku::to_string((VkImageAspectFlagBits)m_img_subrange.aspectMask),
+            m_img_subrange.baseMipLevel, m_img_subrange.levelCount, m_img_subrange.baseArrayLayer,
+            m_img_subrange.layerCount);
+}
+
 /* window_t
 ================================================================================================= */
+
+inline ref_t<window_t> window_t::create(int width, int height, std::string name) {
+    auto ret = std::make_shared<window_t>();
+    ret->m_name = name;
+    ret->m_width = width;
+    ret->m_height = height;
+
+    VK_ASSERT(ret->init());
+    return ret;
+}
 
 inline vc::ret_t window_t::uninit() {
     if (_window)
@@ -1083,16 +2028,6 @@ inline vc::ret_t window_t::init() {
     }
     DBG("Created Window %p", this);
     return VK_SUCCESS;
-}
-
-inline ref_t<window_t> window_t::create(int width, int height, std::string name) {
-    auto ret = std::make_shared<window_t>();
-    ret->m_name = name;
-    ret->m_width = width;
-    ret->m_height = height;
-
-    VK_ASSERT(ret->init());
-    return ret;
 }
 
 inline std::string window_t::to_string() const {
@@ -2220,6 +3155,36 @@ inline void cmdbuff_t::dispatch_compute(uint32_t x, uint32_t y, uint32_t z) {
     vkCmdDispatch(vk_buff, x, y, z);
 }
 
+void cmdbuff_t::set_event(ref_t<event_t> event, VkPipelineStageFlags stage) {
+    vkCmdSetEvent(vk_buff, event->vk_event, stage);
+}
+
+void cmdbuff_t::reset_event(ref_t<event_t> event, VkPipelineStageFlags stage) {
+    vkCmdResetEvent(vk_buff, event->vk_event, stage);
+}
+
+void cmdbuff_t::wait_events(const std::vector<ref_t<event_t>>& events,
+        ref_t<dependency_info_t> dep_info)
+{
+    std::vector<VkEvent> vk_events(events.size());
+    for (size_t i = 0; i < events.size(); i++)
+        vk_events[i] = events[i]->vk_event;
+
+    vkCmdWaitEvents(vk_buff, vk_events.size(), vk_events.data(),
+            dep_info->m_src_stage_mask, dep_info->m_dst_stage_mask,
+            dep_info->mem_bars.size(), dep_info->mem_bars.data(),
+            dep_info->buff_mem_bars.size(), dep_info->buff_mem_bars.data(),
+            dep_info->img_mem_bars.size(), dep_info->img_mem_bars.data());
+}
+
+void cmdbuff_t::pipeline_barrier(ref_t<dependency_info_t> dep_info) {
+    vkCmdPipelineBarrier(vk_buff,
+            dep_info->m_src_stage_mask, dep_info->m_dst_stage_mask, dep_info->m_dep_flags,
+            dep_info->mem_bars.size(), dep_info->mem_bars.data(),
+            dep_info->buff_mem_bars.size(), dep_info->buff_mem_bars.data(),
+            dep_info->img_mem_bars.size(), dep_info->img_mem_bars.data());
+}
+
 /* sem_t
 ================================================================================================= */
 
@@ -2257,6 +3222,35 @@ inline vc::ret_t sem_t::uninit() {
 
 inline std::string sem_t::to_string() const {
     return std::format("vku::sem_t[{}]: m_device={}", (void*)this, (void*)m_device.get());
+}
+
+/* event_t
+================================================================================================= */
+
+inline ref_t<event_t> event_t::create(ref_t<device_t> dev) {
+    auto ret = std::make_shared<event_t>();
+    ret->m_device = dev;
+    VK_ASSERT(ret->init());
+    return ret;
+}
+
+inline vc::ret_t event_t::init() {
+    VkEventCreateInfo evt_info {
+        .sType = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0
+    };
+    VK_ASSERT(vkCreateEvent(m_device->vk_dev, &evt_info, nullptr, &vk_event));
+    return VK_SUCCESS;
+}
+
+inline vc::ret_t event_t::uninit() {
+    vkDestroyEvent(m_device->vk_dev, vk_event, nullptr);
+    return VK_SUCCESS;
+}
+
+inline std::string event_t::to_string() const {
+    return std::format("vku::event_t[{}]: m_device={}", (void*)this, (void*)m_device.get());
 }
 
 /* fence_t
@@ -3527,6 +4521,77 @@ inline std::string to_string(VkDescriptorType dtype) {
     }
 }
 
+inline std::string to_string(VkImageLayout lay) {
+    switch (lay) {
+        case VK_IMAGE_LAYOUT_UNDEFINED:
+                return "VK_IMAGE_LAYOUT_UNDEFINED";
+        case VK_IMAGE_LAYOUT_GENERAL:
+                return "VK_IMAGE_LAYOUT_GENERAL";
+        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+                return "VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+                return "VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+                return "VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL";
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+                return "VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL";
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+                return "VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL";
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                return "VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL";
+        case VK_IMAGE_LAYOUT_PREINITIALIZED:
+                return "VK_IMAGE_LAYOUT_PREINITIALIZED";
+        case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
+                return "VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
+                return "VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL";
+        case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+                return "VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
+                return "VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL";
+        case VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL:
+                return "VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL:
+                return "VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL";
+        // case VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL:
+        //         return "VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL";
+        // case VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL:
+        //         return "VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL";
+        // case VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ:
+        //         return "VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ";
+        case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+                return "VK_IMAGE_LAYOUT_PRESENT_SRC_KHR";
+        // case VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR:
+        //         return "VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR";
+        // case VK_IMAGE_LAYOUT_VIDEO_DECODE_SRC_KHR:
+        //         return "VK_IMAGE_LAYOUT_VIDEO_DECODE_SRC_KHR";
+        // case VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR:
+        //         return "VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR";
+        case VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR:
+                return "VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR";
+        case VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT:
+                return "VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT";
+        // case VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR:
+        //         return "VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR";
+        // case VK_IMAGE_LAYOUT_VIDEO_ENCODE_DST_KHR:
+        //         return "VK_IMAGE_LAYOUT_VIDEO_ENCODE_DST_KHR";
+        // case VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR:
+        //         return "VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR";
+        // case VK_IMAGE_LAYOUT_VIDEO_ENCODE_DPB_KHR:
+        //         return "VK_IMAGE_LAYOUT_VIDEO_ENCODE_DPB_KHR";
+        // case VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT:
+        //         return "VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT";
+        // case VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM:
+        //         return "VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM";
+        // case VK_IMAGE_LAYOUT_VIDEO_ENCODE_QUANTIZATION_MAP_KHR:
+        //         return "VK_IMAGE_LAYOUT_VIDEO_ENCODE_QUANTIZATION_MAP_KHR";
+        // case VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT:
+        //         return "VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT";
+        default: return "VK_UNKNOWN_LAYOUT_TYPE";
+    }
+}
+
+
 inline std::string to_string(const VkDescriptorSetLayoutBinding& bind) {
     return std::format("VkDescriptorSetLayoutBinding{{ .binding={} .type={} .count={} "
             ".stage_flags={} .immutable_samplers={} }}",
@@ -3630,72 +4695,543 @@ inline std::string to_string(VkImageUsageFlagBits flags) {
 inline std::string to_string(VkImageAspectFlagBits flags) {
     std::string ret = "[";
     if (flags & VK_IMAGE_ASPECT_COLOR_BIT)
-        ret += "VK_IMAGE_ASPECT_COLOR_BIT";
+        ret += "VK_IMAGE_ASPECT_COLOR_BIT, ";
     if (flags & VK_IMAGE_ASPECT_DEPTH_BIT)
-        ret += "VK_IMAGE_ASPECT_DEPTH_BIT";
+        ret += "VK_IMAGE_ASPECT_DEPTH_BIT, ";
     if (flags & VK_IMAGE_ASPECT_STENCIL_BIT)
-        ret += "VK_IMAGE_ASPECT_STENCIL_BIT";
+        ret += "VK_IMAGE_ASPECT_STENCIL_BIT, ";
     if (flags & VK_IMAGE_ASPECT_METADATA_BIT)
-        ret += "VK_IMAGE_ASPECT_METADATA_BIT";
+        ret += "VK_IMAGE_ASPECT_METADATA_BIT, ";
     if (flags & VK_IMAGE_ASPECT_PLANE_0_BIT)
-        ret += "VK_IMAGE_ASPECT_PLANE_0_BIT";
+        ret += "VK_IMAGE_ASPECT_PLANE_0_BIT, ";
     if (flags & VK_IMAGE_ASPECT_PLANE_1_BIT)
-        ret += "VK_IMAGE_ASPECT_PLANE_1_BIT";
+        ret += "VK_IMAGE_ASPECT_PLANE_1_BIT, ";
     if (flags & VK_IMAGE_ASPECT_PLANE_2_BIT)
-        ret += "VK_IMAGE_ASPECT_PLANE_2_BIT";
+        ret += "VK_IMAGE_ASPECT_PLANE_2_BIT, ";
     if (flags & VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT)
-        ret += "VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT";
+        ret += "VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT, ";
     if (flags & VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT)
-        ret += "VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT";
+        ret += "VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT, ";
     if (flags & VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT)
-        ret += "VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT";
+        ret += "VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT, ";
     if (flags & VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT)
-        ret += "VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT";
+        ret += "VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT, ";
     if (flags & VK_IMAGE_ASPECT_PLANE_0_BIT_KHR)
-        ret += "VK_IMAGE_ASPECT_PLANE_0_BIT_KHR";
+        ret += "VK_IMAGE_ASPECT_PLANE_0_BIT_KHR, ";
     if (flags & VK_IMAGE_ASPECT_PLANE_1_BIT_KHR)
-        ret += "VK_IMAGE_ASPECT_PLANE_1_BIT_KHR";
+        ret += "VK_IMAGE_ASPECT_PLANE_1_BIT_KHR, ";
     if (flags & VK_IMAGE_ASPECT_PLANE_2_BIT_KHR)
-        ret += "VK_IMAGE_ASPECT_PLANE_2_BIT_KHR";
+        ret += "VK_IMAGE_ASPECT_PLANE_2_BIT_KHR, ";
     return ret + "]";
 }
 
 inline std::string to_string(VkShaderStageFlagBits flags) {
     std::string ret = "[";
     if (flags & VK_SHADER_STAGE_VERTEX_BIT)
-        ret += "VK_SHADER_STAGE_VERTEX_BIT";
+        ret += "VK_SHADER_STAGE_VERTEX_BIT, ";
     if (flags & VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT)
-        ret += "VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT";
+        ret += "VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT, ";
     if (flags & VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT)
-        ret += "VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT";
+        ret += "VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, ";
     if (flags & VK_SHADER_STAGE_GEOMETRY_BIT)
-        ret += "VK_SHADER_STAGE_GEOMETRY_BIT";
+        ret += "VK_SHADER_STAGE_GEOMETRY_BIT, ";
     if (flags & VK_SHADER_STAGE_FRAGMENT_BIT)
-        ret += "VK_SHADER_STAGE_FRAGMENT_BIT";
+        ret += "VK_SHADER_STAGE_FRAGMENT_BIT, ";
     if (flags & VK_SHADER_STAGE_COMPUTE_BIT)
-        ret += "VK_SHADER_STAGE_COMPUTE_BIT";
+        ret += "VK_SHADER_STAGE_COMPUTE_BIT, ";
     if (flags & VK_SHADER_STAGE_ALL_GRAPHICS)
-        ret += "VK_SHADER_STAGE_ALL_GRAPHICS";
+        ret += "VK_SHADER_STAGE_ALL_GRAPHICS, ";
     if (flags & VK_SHADER_STAGE_ALL)
-        ret += "VK_SHADER_STAGE_ALL";
+        ret += "VK_SHADER_STAGE_ALL, ";
     if (flags & VK_SHADER_STAGE_RAYGEN_BIT_NV)
-        ret += "VK_SHADER_STAGE_RAYGEN_BIT_NV";
+        ret += "VK_SHADER_STAGE_RAYGEN_BIT_NV, ";
     if (flags & VK_SHADER_STAGE_ANY_HIT_BIT_NV)
-        ret += "VK_SHADER_STAGE_ANY_HIT_BIT_NV";
+        ret += "VK_SHADER_STAGE_ANY_HIT_BIT_NV, ";
     if (flags & VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV)
-        ret += "VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV";
+        ret += "VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV, ";
     if (flags & VK_SHADER_STAGE_MISS_BIT_NV)
-        ret += "VK_SHADER_STAGE_MISS_BIT_NV";
+        ret += "VK_SHADER_STAGE_MISS_BIT_NV, ";
     if (flags & VK_SHADER_STAGE_INTERSECTION_BIT_NV)
-        ret += "VK_SHADER_STAGE_INTERSECTION_BIT_NV";
+        ret += "VK_SHADER_STAGE_INTERSECTION_BIT_NV, ";
     if (flags & VK_SHADER_STAGE_CALLABLE_BIT_NV)
-        ret += "VK_SHADER_STAGE_CALLABLE_BIT_NV";
+        ret += "VK_SHADER_STAGE_CALLABLE_BIT_NV, ";
     if (flags & VK_SHADER_STAGE_TASK_BIT_NV)
-        ret += "VK_SHADER_STAGE_TASK_BIT_NV";
+        ret += "VK_SHADER_STAGE_TASK_BIT_NV, ";
     if (flags & VK_SHADER_STAGE_MESH_BIT_NV)
-        ret += "VK_SHADER_STAGE_MESH_BIT_NV";
+        ret += "VK_SHADER_STAGE_MESH_BIT_NV, ";
     return ret + "]";
 }
+
+inline std::string to_string(VkPipelineStageFlagBits flags) {
+    std::string ret = "[";
+    if (flags & VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT)
+        ret += "VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT)
+        ret += "VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_VERTEX_INPUT_BIT)
+        ret += "VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_VERTEX_SHADER_BIT)
+        ret += "VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT)
+        ret += "VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT)
+        ret += "VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT)
+        ret += "VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)
+        ret += "VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT)
+        ret += "VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT)
+        ret += "VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
+        ret += "VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)
+        ret += "VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_TRANSFER_BIT)
+        ret += "VK_PIPELINE_STAGE_TRANSFER_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT)
+        ret += "VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_HOST_BIT)
+        ret += "VK_PIPELINE_STAGE_HOST_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+        ret += "VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
+        ret += "VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, ";
+    if (flags & VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT)
+        ret += "VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT, ";
+    if (flags & VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT)
+        ret += "VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT, ";
+    // if (flags & VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR)
+    //     ret += "VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, ";
+    // if (flags & VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR)
+    //     ret += "VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, ";
+    if (flags & VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT)
+        ret += "VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT, ";
+    // if (flags & VK_PIPELINE_STAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR)
+    //     ret += "VK_PIPELINE_STAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR, ";
+    // if (flags & VK_PIPELINE_STAGE_TASK_SHADER_BIT_EXT)
+    //     ret += "VK_PIPELINE_STAGE_TASK_SHADER_BIT_EXT, ";
+    // if (flags & VK_PIPELINE_STAGE_MESH_SHADER_BIT_EXT)
+    //     ret += "VK_PIPELINE_STAGE_MESH_SHADER_BIT_EXT, ";
+    // if (flags & VK_PIPELINE_STAGE_COMMAND_PREPROCESS_BIT_EXT)
+    //     ret += "VK_PIPELINE_STAGE_COMMAND_PREPROCESS_BIT_EXT, ";
+    return ret + "]";
+}
+
+inline std::string to_string(VkAccessFlagBits flags) {
+    std::string ret = "[";
+    if (flags & VK_ACCESS_INDIRECT_COMMAND_READ_BIT)
+        ret += "VK_ACCESS_INDIRECT_COMMAND_READ_BIT, ";
+    if (flags & VK_ACCESS_INDEX_READ_BIT)
+        ret += "VK_ACCESS_INDEX_READ_BIT, ";
+    if (flags & VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT)
+        ret += "VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT, ";
+    if (flags & VK_ACCESS_UNIFORM_READ_BIT)
+        ret += "VK_ACCESS_UNIFORM_READ_BIT, ";
+    if (flags & VK_ACCESS_INPUT_ATTACHMENT_READ_BIT)
+        ret += "VK_ACCESS_INPUT_ATTACHMENT_READ_BIT, ";
+    if (flags & VK_ACCESS_SHADER_READ_BIT)
+        ret += "VK_ACCESS_SHADER_READ_BIT, ";
+    if (flags & VK_ACCESS_SHADER_WRITE_BIT)
+        ret += "VK_ACCESS_SHADER_WRITE_BIT, ";
+    if (flags & VK_ACCESS_COLOR_ATTACHMENT_READ_BIT)
+        ret += "VK_ACCESS_COLOR_ATTACHMENT_READ_BIT, ";
+    if (flags & VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
+        ret += "VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, ";
+    if (flags & VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT)
+        ret += "VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT, ";
+    if (flags & VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
+        ret += "VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, ";
+    if (flags & VK_ACCESS_TRANSFER_READ_BIT)
+        ret += "VK_ACCESS_TRANSFER_READ_BIT, ";
+    if (flags & VK_ACCESS_TRANSFER_WRITE_BIT)
+        ret += "VK_ACCESS_TRANSFER_WRITE_BIT, ";
+    if (flags & VK_ACCESS_HOST_READ_BIT)
+        ret += "VK_ACCESS_HOST_READ_BIT, ";
+    if (flags & VK_ACCESS_HOST_WRITE_BIT)
+        ret += "VK_ACCESS_HOST_WRITE_BIT, ";
+    if (flags & VK_ACCESS_MEMORY_READ_BIT)
+        ret += "VK_ACCESS_MEMORY_READ_BIT, ";
+    if (flags & VK_ACCESS_MEMORY_WRITE_BIT)
+        ret += "VK_ACCESS_MEMORY_WRITE_BIT, ";
+    if (flags & VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT)
+        ret += "VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT, ";
+    if (flags & VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT)
+        ret += "VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT, ";
+    if (flags & VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT)
+        ret += "VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT, ";
+    if (flags & VK_ACCESS_CONDITIONAL_RENDERING_READ_BIT_EXT)
+        ret += "VK_ACCESS_CONDITIONAL_RENDERING_READ_BIT_EXT, ";
+    if (flags & VK_ACCESS_COLOR_ATTACHMENT_READ_NONCOHERENT_BIT_EXT)
+        ret += "VK_ACCESS_COLOR_ATTACHMENT_READ_NONCOHERENT_BIT_EXT, ";
+    // if (flags & VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR)
+    //     ret += "VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR, ";
+    // if (flags & VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR)
+    //     ret += "VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, ";
+    if (flags & VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT)
+        ret += "VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT, ";
+    // if (flags & VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR)
+    //     ret += "VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR, ";
+    // if (flags & VK_ACCESS_COMMAND_PREPROCESS_READ_BIT_EXT)
+    //     ret += "VK_ACCESS_COMMAND_PREPROCESS_READ_BIT_EXT, ";
+    // if (flags & VK_ACCESS_COMMAND_PREPROCESS_WRITE_BIT_EXT)
+    //     ret += "VK_ACCESS_COMMAND_PREPROCESS_WRITE_BIT_EXT, ";
+    if (flags & VK_ACCESS_SHADING_RATE_IMAGE_READ_BIT_NV)
+        ret += "VK_ACCESS_SHADING_RATE_IMAGE_READ_BIT_NV, ";
+    if (flags & VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_NV)
+        ret += "VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_NV, ";
+    if (flags & VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_NV)
+        ret += "VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_NV, ";
+    // if (flags & VK_ACCESS_COMMAND_PREPROCESS_READ_BIT_NV)
+    //     ret += "VK_ACCESS_COMMAND_PREPROCESS_READ_BIT_NV, ";
+    // if (flags & VK_ACCESS_COMMAND_PREPROCESS_WRITE_BIT_NV)
+    //     ret += "VK_ACCESS_COMMAND_PREPROCESS_WRITE_BIT_NV, ";
+    return ret + "]";
+}
+
+inline std::string to_string(VkDependencyFlagBits flags) {
+    std::string ret = "[";
+    if (flags & VK_DEPENDENCY_BY_REGION_BIT)
+        ret += "VK_DEPENDENCY_BY_REGION_BIT, ";
+    if (flags & VK_DEPENDENCY_DEVICE_GROUP_BIT)
+        ret += "VK_DEPENDENCY_DEVICE_GROUP_BIT, ";
+    if (flags & VK_DEPENDENCY_VIEW_LOCAL_BIT)
+        ret += "VK_DEPENDENCY_VIEW_LOCAL_BIT, ";
+    // if (flags & VK_DEPENDENCY_FEEDBACK_LOOP_BIT_EXT)
+    //     ret += "VK_DEPENDENCY_FEEDBACK_LOOP_BIT_EXT, ";
+    // if (flags & VK_DEPENDENCY_QUEUE_FAMILY_OWNERSHIP_TRANSFER_USE_ALL_STAGES_BIT_KHR)
+    //     ret += "VK_DEPENDENCY_QUEUE_FAMILY_OWNERSHIP_TRANSFER_USE_ALL_STAGES_BIT_KHR, ";
+    // if (flags & VK_DEPENDENCY_ASYMMETRIC_EVENT_BIT_KHR)
+    //     ret += "VK_DEPENDENCY_ASYMMETRIC_EVENT_BIT_KHR, ";
+    return ret + "]";
+}
+
+
+/* TODO: this needs to be implemented in a newer version of vulkan, tested and as such */
+// inline std::string to_string(VkPipelineStageFlagBits2 flags) {
+//     std::string ret = "[";
+//     if (flags & VK_PIPELINE_STAGE_2_NONE)
+//         ret += "VK_PIPELINE_STAGE_2_NONE, ";
+//     if (flags & VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_TRANSFER_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_TRANSFER_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_HOST_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_HOST_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_COPY_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_COPY_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_RESOLVE_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_RESOLVE_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_BLIT_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_BLIT_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_CLEAR_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_CLEAR_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT)
+//         ret += "VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_NONE_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_NONE_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_HOST_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_HOST_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_COPY_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_RESOLVE_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_RESOLVE_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_BLIT_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_BLIT_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_CLEAR_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_CLEAR_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT)
+//         ret += "VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT)
+//         ret += "VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_NV)
+//         ret += "VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_NV, ";
+//     if (flags & VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT)
+//         ret += "VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_SHADING_RATE_IMAGE_BIT_NV)
+//         ret += "VK_PIPELINE_STAGE_2_SHADING_RATE_IMAGE_BIT_NV, ";
+//     if (flags & VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_NV)
+//         ret += "VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_NV, ";
+//     if (flags & VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_NV)
+//         ret += "VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_NV, ";
+//     if (flags & VK_PIPELINE_STAGE_2_FRAGMENT_DENSITY_PROCESS_BIT_EXT)
+//         ret += "VK_PIPELINE_STAGE_2_FRAGMENT_DENSITY_PROCESS_BIT_EXT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_NV)
+//         ret += "VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_NV, ";
+//     if (flags & VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_NV)
+//         ret += "VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_NV, ";
+//     if (flags & VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT)
+//         ret += "VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT)
+//         ret += "VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_SUBPASS_SHADER_BIT_HUAWEI)
+//         ret += "VK_PIPELINE_STAGE_2_SUBPASS_SHADER_BIT_HUAWEI, ";
+//     if (flags & VK_PIPELINE_STAGE_2_SUBPASS_SHADING_BIT_HUAWEI)
+//         ret += "VK_PIPELINE_STAGE_2_SUBPASS_SHADING_BIT_HUAWEI, ";
+//     if (flags & VK_PIPELINE_STAGE_2_INVOCATION_MASK_BIT_HUAWEI)
+//         ret += "VK_PIPELINE_STAGE_2_INVOCATION_MASK_BIT_HUAWEI, ";
+//     if (flags & VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT)
+//         ret += "VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT, ";
+//     if (flags & VK_PIPELINE_STAGE_2_CLUSTER_CULLING_SHADER_BIT_HUAWEI)
+//         ret += "VK_PIPELINE_STAGE_2_CLUSTER_CULLING_SHADER_BIT_HUAWEI, ";
+//     if (flags & VK_PIPELINE_STAGE_2_OPTICAL_FLOW_BIT_NV)
+//         ret += "VK_PIPELINE_STAGE_2_OPTICAL_FLOW_BIT_NV, ";
+//     if (flags & VK_PIPELINE_STAGE_2_CONVERT_COOPERATIVE_VECTOR_MATRIX_BIT_NV)
+//         ret += "VK_PIPELINE_STAGE_2_CONVERT_COOPERATIVE_VECTOR_MATRIX_BIT_NV, ";
+//     if (flags & VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM)
+//         ret += "VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM, ";
+//     if (flags & VK_PIPELINE_STAGE_2_COPY_INDIRECT_BIT_KHR)
+//         ret += "VK_PIPELINE_STAGE_2_COPY_INDIRECT_BIT_KHR, ";
+//     if (flags & VK_PIPELINE_STAGE_2_MEMORY_DECOMPRESSION_BIT_EXT)
+//         ret += "VK_PIPELINE_STAGE_2_MEMORY_DECOMPRESSION_BIT_EXT, ";
+//     return ret + "]";
+// }
+// inline std::string to_string(VkAccessFlagBits2 flags) {
+//     std::string ret = "[";
+//     if (flags & VK_ACCESS_2_NONE)
+//         ret += "VK_ACCESS_2_NONE, ";
+//     if (flags & VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT)
+//         ret += "VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_INDEX_READ_BIT)
+//         ret += "VK_ACCESS_2_INDEX_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT)
+//         ret += "VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_UNIFORM_READ_BIT)
+//         ret += "VK_ACCESS_2_UNIFORM_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT)
+//         ret += "VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_SHADER_READ_BIT)
+//         ret += "VK_ACCESS_2_SHADER_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_SHADER_WRITE_BIT)
+//         ret += "VK_ACCESS_2_SHADER_WRITE_BIT, ";
+//     if (flags & VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT)
+//         ret += "VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)
+//         ret += "VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, ";
+//     if (flags & VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT)
+//         ret += "VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
+//         ret += "VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, ";
+//     if (flags & VK_ACCESS_2_TRANSFER_READ_BIT)
+//         ret += "VK_ACCESS_2_TRANSFER_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_TRANSFER_WRITE_BIT)
+//         ret += "VK_ACCESS_2_TRANSFER_WRITE_BIT, ";
+//     if (flags & VK_ACCESS_2_HOST_READ_BIT)
+//         ret += "VK_ACCESS_2_HOST_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_HOST_WRITE_BIT)
+//         ret += "VK_ACCESS_2_HOST_WRITE_BIT, ";
+//     if (flags & VK_ACCESS_2_MEMORY_READ_BIT)
+//         ret += "VK_ACCESS_2_MEMORY_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_MEMORY_WRITE_BIT)
+//         ret += "VK_ACCESS_2_MEMORY_WRITE_BIT, ";
+//     if (flags & VK_ACCESS_2_SHADER_SAMPLED_READ_BIT)
+//         ret += "VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_SHADER_STORAGE_READ_BIT)
+//         ret += "VK_ACCESS_2_SHADER_STORAGE_READ_BIT, ";
+//     if (flags & VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
+//         ret += "VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, ";
+//     if (flags & VK_ACCESS_2_VIDEO_DECODE_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_VIDEO_DECODE_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR)
+//         ret += "VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_SAMPLER_HEAP_READ_BIT_EXT)
+//         ret += "VK_ACCESS_2_SAMPLER_HEAP_READ_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_RESOURCE_HEAP_READ_BIT_EXT)
+//         ret += "VK_ACCESS_2_RESOURCE_HEAP_READ_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_VIDEO_ENCODE_WRITE_BIT_KHR)
+//         ret += "VK_ACCESS_2_VIDEO_ENCODE_WRITE_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_SHADER_TILE_ATTACHMENT_READ_BIT_QCOM)
+//         ret += "VK_ACCESS_2_SHADER_TILE_ATTACHMENT_READ_BIT_QCOM, ";
+//     if (flags & VK_ACCESS_2_SHADER_TILE_ATTACHMENT_WRITE_BIT_QCOM)
+//         ret += "VK_ACCESS_2_SHADER_TILE_ATTACHMENT_WRITE_BIT_QCOM, ";
+//     if (flags & VK_ACCESS_2_NONE_KHR)
+//         ret += "VK_ACCESS_2_NONE_KHR, ";
+//     if (flags & VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_INDEX_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_INDEX_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_UNIFORM_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_UNIFORM_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_SHADER_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_SHADER_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_SHADER_WRITE_BIT_KHR)
+//         ret += "VK_ACCESS_2_SHADER_WRITE_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT_KHR)
+//         ret += "VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT_KHR)
+//         ret += "VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_TRANSFER_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_TRANSFER_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_TRANSFER_WRITE_BIT_KHR)
+//         ret += "VK_ACCESS_2_TRANSFER_WRITE_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_HOST_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_HOST_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_HOST_WRITE_BIT_KHR)
+//         ret += "VK_ACCESS_2_HOST_WRITE_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_MEMORY_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_MEMORY_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_MEMORY_WRITE_BIT_KHR)
+//         ret += "VK_ACCESS_2_MEMORY_WRITE_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_SHADER_SAMPLED_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_SHADER_SAMPLED_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_SHADER_STORAGE_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_SHADER_STORAGE_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT_KHR)
+//         ret += "VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_TRANSFORM_FEEDBACK_WRITE_BIT_EXT)
+//         ret += "VK_ACCESS_2_TRANSFORM_FEEDBACK_WRITE_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT)
+//         ret += "VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT)
+//         ret += "VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT)
+//         ret += "VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_NV)
+//         ret += "VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_NV, ";
+//     if (flags & VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_NV)
+//         ret += "VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_NV, ";
+//     if (flags & VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_EXT)
+//         ret += "VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_EXT)
+//         ret += "VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_SHADING_RATE_IMAGE_READ_BIT_NV)
+//         ret += "VK_ACCESS_2_SHADING_RATE_IMAGE_READ_BIT_NV, ";
+//     if (flags & VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR)
+//         ret += "VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_NV)
+//         ret += "VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_NV, ";
+//     if (flags & VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_NV)
+//         ret += "VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_NV, ";
+//     if (flags & VK_ACCESS_2_FRAGMENT_DENSITY_MAP_READ_BIT_EXT)
+//         ret += "VK_ACCESS_2_FRAGMENT_DENSITY_MAP_READ_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_COLOR_ATTACHMENT_READ_NONCOHERENT_BIT_EXT)
+//         ret += "VK_ACCESS_2_COLOR_ATTACHMENT_READ_NONCOHERENT_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT)
+//         ret += "VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_INVOCATION_MASK_READ_BIT_HUAWEI)
+//         ret += "VK_ACCESS_2_INVOCATION_MASK_READ_BIT_HUAWEI, ";
+//     if (flags & VK_ACCESS_2_SHADER_BINDING_TABLE_READ_BIT_KHR)
+//         ret += "VK_ACCESS_2_SHADER_BINDING_TABLE_READ_BIT_KHR, ";
+//     if (flags & VK_ACCESS_2_MICROMAP_READ_BIT_EXT)
+//         ret += "VK_ACCESS_2_MICROMAP_READ_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_MICROMAP_WRITE_BIT_EXT)
+//         ret += "VK_ACCESS_2_MICROMAP_WRITE_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_OPTICAL_FLOW_READ_BIT_NV)
+//         ret += "VK_ACCESS_2_OPTICAL_FLOW_READ_BIT_NV, ";
+//     if (flags & VK_ACCESS_2_OPTICAL_FLOW_WRITE_BIT_NV)
+//         ret += "VK_ACCESS_2_OPTICAL_FLOW_WRITE_BIT_NV, ";
+//     if (flags & VK_ACCESS_2_DATA_GRAPH_READ_BIT_ARM)
+//         ret += "VK_ACCESS_2_DATA_GRAPH_READ_BIT_ARM, ";
+//     if (flags & VK_ACCESS_2_DATA_GRAPH_WRITE_BIT_ARM)
+//         ret += "VK_ACCESS_2_DATA_GRAPH_WRITE_BIT_ARM, ";
+//     if (flags & VK_ACCESS_2_MEMORY_DECOMPRESSION_READ_BIT_EXT)
+//         ret += "VK_ACCESS_2_MEMORY_DECOMPRESSION_READ_BIT_EXT, ";
+//     if (flags & VK_ACCESS_2_MEMORY_DECOMPRESSION_WRITE_BIT_EXT)
+//         ret += "VK_ACCESS_2_MEMORY_DECOMPRESSION_WRITE_BIT_EXT, ";
+//     return ret + "]";
+// }
+
 
 /* Internal Functions:
 ================================================================================================= */

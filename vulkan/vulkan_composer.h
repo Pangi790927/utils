@@ -2,6 +2,8 @@
 #define VULKAN_COMPOSER_H
 
 /*!
+ * TODO: this description must be moved in virt_composer
+ * 
  * LUA API: Vulkan Utils
  * =====================
  * 
@@ -54,7 +56,7 @@
  * vku.fill_buffer_with_triangles_indexes(vku.staging_buffer.data(), vku.staging_buffer.size())
  * vku.copy_from_cpu_to_gpu(vku.staging_buffer, vku.ibuff, vku.SIZEOF_INT*3, 0)
  * 
- * -- example creating a vku object (vkc::lua_var_t is a dummy object)
+ * -- TODO: example creating a vku object (vkc::lua_var_t is a dummy object)
  * t = {
  *     m_type = "vkc::lua_var_t",
  *     var1 = 1,
@@ -156,599 +158,6 @@
  *
  *    * `m_type` identifies the object type.
  *    * `m_tag` (optional) assigns a reference name so this object can be reused elsewhere.
- * 
- * 
- * Object Types:
- * =============
- * 
- * Following are the objects that are part of vulkan utils (vku) and vulkan composer (vkc):
- * 
- * vku::window_t
- * -------------
- *
- * Description: Represents a GLFW window. This object manages a platform-specific window
- * and serves as the target for Vulkan rendering. It allows resizing, title changes, and
- * provides access to the underlying GLFWwindow* for integration with other libraries.
- *
- * Members:
- * - m_name: Window title.
- * - m_width, m_height: Window dimensions.
- *
- * Init: create(width, height, name)
- *   - Parameters:
- *     - width: Initial width of the window (default: 800).
- *     - height: Initial height of the window (default: 600).
- *     - name: Title of the window (default: "vku::window_name_placeholder").
- * 
- * 
- * vku::instance_t
- * ---------------
- *
- * Description: Represents a Vulkan instance. A Vulkan instance is the foundational 
- * object that initializes the Vulkan library for a specific application. It manages 
- * the connection between the application and the Vulkan runtime, and it enables 
- * creation of devices, surfaces, and other Vulkan objects. This object also supports 
- * optional debug layers for development and validation.
- *
- * Members:
- * - m_app_name: Name of the application. Used for debugging and identification.
- * - m_engine_name: Name of the engine. Used for debugging and identification.
- * - m_extensions: List of Vulkan extensions to enable on creation.
- * - m_layers: List of Vulkan layers (such as validation layers) to enable.
- *
- * Init: create(app_name, engine_name, extensions, layers)
- *   - Parameters:
- *     - app_name: Name of the application (default: "vku::app_name_placeholder").
- *     - engine_name: Name of the engine (default: "vku::engine_name_placeholder").
- *     - extensions: Vector of extension names to enable (default: { "VK_EXT_debug_utils" }).
- *     - layers: Vector of layer names to enable (default: { "VK_LAYER_KHRONOS_validation" }).
- *
- * Notes:
- * - Debug layers can be optionally enabled to catch errors and warnings during development.
- * 
- * 
- * vku::surface_t
- * --------------
- *
- * Description: Wraps a Vulkan surface. A Vulkan surface is an abstraction that allows 
- * rendering to be presented to a window system. This object manages the relationship 
- * between a Vulkan instance and a platform-specific window (GLFW in this case). 
- * It handles creation and destruction of the VkSurfaceKHR handle and ensures that 
- * the surface is properly associated with the correct window and Vulkan instance.
- *
- * Members:
- * - m_window: Reference to a window_t object. This is the window that the surface 
- *   is associated with. The surface will present images to this window.
- * - m_instance: Reference to an instance_t object. The Vulkan instance that created 
- *   and manages this surface.
- *
- * Init: create(window, instance)
- *   - Parameters:
- *     - window: A reference to a window_t object to associate the surface with.
- *     - instance: A reference to an instance_t object used to create the surface.
- *   - Returns: A reference-counted surface_t object with a valid VkSurfaceKHR handle.
- * 
- * vku::device_t
- * -------------
- *
- * Description: Represents a Vulkan logical device. This object abstracts a physical 
- * GPU and provides access to queues for graphics and presentation. It is used to 
- * create buffers, images, pipelines, and other Vulkan resources.
- *
- * Members:
- * - m_surface: Reference to a surface_t object. The surface used for presentation and 
- *   swapchain creation.
- *
- * Init: create(surface)
- *   - Parameters:
- *     - surface: A reference to a surface_t object that this device will render to.
- *
- * Notes:
- * - Automatically selects suitable graphics and presentation queues.
- * - Provides access to device-local and host-visible memory through buffer objects.
- * 
- * TODO:
- * - Add options for selecting the phys dev
- * 
- * 
- * vku::swapchain_t
- * ----------------
- *
- * Description: Wraps a Vulkan swapchain. A swapchain manages a set of images that 
- * are presented to a window in a controlled manner. This object handles creation 
- * of the VkSwapchainKHR, its images, and associated image views.
- *
- * Members:
- * - m_device: Reference to a device_t object. The device used to create and manage 
- *   the swapchain.
- * - m_depth_imag: Reference to a depth image used for depth testing (automatically created).
- * - m_depth_view: Reference to an image view for the depth image (automatically created).
- *
- * Init: create(device)
- *   - Parameters:
- *     - device: Reference to the device_t object.
- *
- * Notes:
- * - Automatically chooses the surface format, present mode, and image count.
- * - Provides access to the swapchain images and their views for rendering.
- * 
- * TODO:
- * - more init hints?
- * 
- * 
- * vku::shader_t
- * -------------
- *
- * Description: Wraps a Vulkan shader module. This object represents a compiled 
- * shader in SPIR-V format and can be used in graphics or compute pipelines. It 
- * supports initialization from a SPIR-V object or directly from a precompiled file.
- *
- * Members:
- * - m_device: Reference to the device_t object that owns this shader.
- * - m_type: Shader stage (vertex, fragment, compute, etc.).
- * - m_spirv: Reference to a spirv_t object containing the compiled SPIR-V code.
- * - m_path: Path to the shader file (used if initialized from file).
- * - m_init_from_path: Flag indicating whether the shader was initialized from a file.
- *
- * Init:
- * - create(device, spirv): Initialize from a spirv_t object.
- * - create(device, path, type): Initialize from a compiled shader file.
- *
- * Notes:
- * - For graphics pipelines, shaders must match the pipeline’s stage requirements.
- * 
- * 
- * vku::renderpass_t
- * -----------------
- *
- * Description: Wraps a Vulkan render pass. A render pass defines how framebuffer 
- * attachments are used during rendering, including their load/store operations 
- * and the subpass dependencies. This object manages the creation of a VkRenderPass 
- * for a given swapchain.
- *
- * Members:
- * - m_swapchain: Reference to a swapchain_t object. The swapchain whose images 
- *   will be rendered into using this render pass.
- *
- * Init: create(swc)
- *   - Parameters:
- *     - swc: Reference to a swapchain_t object that will provide the framebuffer images.
- *
- * Notes:
- * - Handles attachment descriptions, subpass definitions, and dependencies automatically.
- * 
- * 
- * vku::pipeline_t
- * ---------------
- *
- * Description: Wraps a Vulkan graphics pipeline. This object encapsulates the entire 
- * pipeline state, including shaders, vertex input, topology, viewport, rasterization, 
- * and descriptor set bindings. It is used for rendering commands submitted to a 
- * command buffer.
- *
- * Members:
- * - m_renderpass: Reference to a renderpass_t object. The render pass this pipeline 
- *   will be used with.
- * - m_shaders: Vector of references to shader_t objects. The shaders used in the 
- *   pipeline stages.
- * - m_topology: Primitive topology (triangle list, line list, etc.).
- * - m_input_desc: Vertex input description (binding, attributes, stride, input rate).
- * - m_bindings_initer: Reference to a desc_set_initializer_t object. Descriptor sets used 
- *   by the pipeline.
- * - m_width, m_height: Pipeline viewport dimensions.
- *
- * Init: create(width, height, renderpass, shaders, topology, input_desc, bindings)
- *   - Parameters:
- *     - width, height: Pipeline viewport dimensions.
- *     - renderpass: Reference to the renderpass_t object.
- *     - shaders: Vector of shader_t references for each stage.
- *     - topology: Primitive topology.
- *     - input_desc: Vertex input description.
- *     - bindings: Reference to desc_set_initializer_t describing descriptor sets.
- *
- * TODO:
- * - maybe get rid of m_width, m_height, create new objects for viewport and stuff
- * 
- * vku::compute_pipeline_t
- * -----------------------
- *
- * Description: Wraps a Vulkan compute pipeline. This object encapsulates a compute 
- * shader and the descriptor sets it uses. It is used to dispatch compute workloads 
- * on the GPU.
- *
- * Members:
- * - m_device: Reference to a device_t object. The device that owns this compute pipeline.
- * - m_shader: Reference to a shader_t object containing the compute shader.
- * - m_bindings_initer: Reference to a desc_set_initializer_t object describing descriptor sets 
- *   used by the shader.
- *
- * Init: create(device, shader, bindings)
- *   - Parameters:
- *     - device: Reference to the device_t object.
- *     - shader: Reference to the compute shader (shader_t).
- *     - bindings: Reference to desc_set_initializer_t describing descriptor sets.
- * 
- * 
- * vku::framebuffs_t
- * -----------------
- *
- * Description: Wraps Vulkan framebuffers. A framebuffer represents a collection of 
- * attachments (color, depth, etc.) used by a render pass for rendering. This object 
- * manages the creation of VkFramebuffer objects corresponding to the swapchain images.
- *
- * Members:
- * - m_renderpass: Reference to a renderpass_t object. The render pass that these 
- *   framebuffers are compatible with.
- *
- * Init: create(renderpass)
- *   - Parameters:
- *     - renderpass: Reference to the renderpass_t object these framebuffers will be used with.
- * 
- *
- * vku::cmdpool_t
- * --------------
- *
- * Description: Wraps a Vulkan command pool. A command pool manages the memory and 
- * allocation of command buffers, which record rendering and compute commands. This 
- * object simplifies creation and management of command buffers for a device.
- *
- * Members:
- * - m_device: Reference to a device_t object. The device that owns this command pool.
- *
- * Init: create(device)
- *   - Parameters:
- *     - device: Reference to the device_t object that will own this command pool.
- *
- * Notes:
- * - All command buffers allocated from this pool are implicitly associated with
- * the device’s queues.
- * 
- * 
- * vku::cmdbuff_t
- * --------------
- *
- * Description: Wraps a Vulkan command buffer. Command buffers record rendering and 
- * compute commands that are submitted to a queue for execution. This object manages 
- * allocation, recording, and submission of commands, and provides utility functions 
- * for common operations like binding vertex buffers, descriptor sets, and drawing.
- *
- * Members:
- * - m_cmdpool: Reference to a cmdpool_t object. The command pool from which this 
- *   command buffer was allocated.
- * - m_host_free: TODO explanation
- *
- * Member functions:
- * - begin(flags): Begin recording commands with specified usage flags.
- * - begin_rpass(fbs, img_idx): Begin a render pass using the specified framebuffers.
- * - bind_vert_buffs(first_bind, buffs): Bind vertex buffers.
- * - bind_idx_buff(ibuff, offset, idx_type): Bind an index buffer.
- * - bind_desc_set(bind_point, pl, desc_set): Bind a descriptor set for the pipeline.
- * - draw(pl, vert_cnt): Issue a non-indexed draw call.
- * - draw_idx(pl, vert_cnt): Issue an indexed draw call.
- * - end_rpass(): End the current render pass.
- * - end(): Finish recording commands.
- * - reset(): Reset the command buffer for reuse.
- * - bind_compute(cpl): Bind a compute pipeline.
- * - dispatch_compute(x, y, z): Dispatch compute shader workgroups.
- *
- * Init: create(cmdpool, host_free=false)
- *   - Parameters:
- *     - cmdpool: Reference to the cmdpool_t object from which this buffer will be allocated.
- *     - host_free: Optional flag indicating whether the buffer is host-allocated (default: false).
- *
- * TODO:
- * - check this description again
- * 
- * 
- * vku::sem_t
- * ----------
- *
- * Description: Wraps a Vulkan semaphore. Semaphores are synchronization primitives 
- * used to coordinate execution between command buffers and queues, and to synchronize 
- * presentation with rendering.
- *
- * Members:
- * - m_device: Reference to the device_t object that owns this semaphore.
- *
- * Init: create(device)
- *   - Parameters:
- *     - device: Reference to the device_t object that will own this semaphore.
- *
- * Notes:
- * - Typically used to signal when an image is available from the swapchain or when 
- *   rendering is complete.
- * 
- * 
- * vku::fence_t
- * ------------
- *
- * Description: Wraps a Vulkan fence. Fences are synchronization primitives used to 
- * coordinate CPU and GPU operations. They allow the host to wait for GPU execution 
- * to complete, ensuring proper synchronization between command submissions.
- *
- * Members:
- * - m_device: Reference to the device_t object that owns this fence.
- * - m_flags: Fence creation flags. These control initial fence state (e.g., signaled 
- *   or unsignaled).
- *
- * Init: create(device, flags=0)
- *   - Parameters:
- *     - device: Reference to the device_t object that will own this fence.
- *     - flags: Optional fence creation flags (default: 0).
- *
- * Notes:
- * - Fences can be waited on from the CPU to ensure GPU completion of submitted work.
- * 
- * 
- * vku::buffer_t
- * -------------
- *
- * Description: Wraps a Vulkan buffer and its associated device memory. Buffers are 
- * linear memory resources used to store vertex data, index data, uniform data, or 
- * any other structured GPU-accessible data. This object manages both the VkBuffer 
- * and its backing VkDeviceMemory, and provides helper functions for mapping and 
- * unmapping memory for CPU access.
- *
- * Members:
- * - m_device: Reference to the device_t object that owns this buffer.
- * - m_size: The total size of the buffer in bytes.
- * - m_usage_flags: Vulkan usage flags (e.g., VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) that 
- *   determine how the buffer will be used by the GPU.
- * - m_sharing_mode: Vulkan sharing mode (exclusive or concurrent) that determines 
- *   how the buffer is accessed across multiple queue families.
- * - m_memory_flags: Vulkan memory property flags that specify the type of memory 
- *   allocation (e.g., host-visible, device-local, coherent).
- * - m_map_ptr: Pointer to mapped memory (valid only when the buffer is mapped).
- *
- * Member functions:
- * - map_data(offset, size): Maps the buffer's device memory to CPU-visible address space 
- *   so that data can be written directly from the host.
- * - unmap_data(): Unmaps the buffer's device memory after CPU writes are complete.
- *
- * Init: create(device, size, usage_flags, sharing_mode, memory_flags)
- *   - Parameters:
- *     - device: Reference to the device_t that will own this buffer.
- *     - size: The total size of the buffer in bytes.
- *     - usage_flags: Vulkan usage flags indicating how the buffer will be used.
- *     - sharing_mode: How the buffer is shared across queue families.
- *     - memory_flags: Memory properties for the buffer’s allocation.
- *
- * 
- * vku::image_t
- * ------------
- *
- * Description: Wraps a Vulkan image and its associated device memory. Images are
- * multidimensional resources used for textures, color attachments, depth buffers,
- * and other GPU-readable or -writable image data. This object manages the VkImage
- * handle, its VkDeviceMemory allocation, and supports layout transitions and view creation.
- *
- * Members:
- * - m_device: Reference to the device_t object that owns this image.
- * - m_width, m_height: Dimensions of the image in pixels.
- * - m_format: Vulkan format (e.g., VK_FORMAT_R8G8B8A8_SRGB) that defines the pixel layout.
- *   how the image will be used.
- * - m_usage: Vulkan usage flags (e.g., VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) indicating 
- *   how the image will be used.
- *
- * Member functions:
- * - transition_layout(cmd_buff, old_layout, new_layout): Records a layout transition
- *   command for this image, changing how the GPU interprets its contents.
- * - set_data(cmd_pool, ptr, size, cmd_buff=nullptr): Copies data from a buffer into the image.
- *
- * Init: create(device, width, height, format, usage)
- *   - Parameters:
- *     - device: Reference to the device_t that will own this image.
- *     - width, height: Dimensions of the image.
- *     - format: Image format.
- *     - usage: Usage flags describing intended image use.
- *
- * TODO:
- * - add m_tiling and m_mem_flags? 
- * 
- * vku::img_view_t
- * ---------------
- *
- * Description: Wraps a Vulkan image view. An image view defines how a Vulkan image’s
- * data can be accessed and interpreted within shaders or as attachments. This object
- * manages the VkImageView handle and ensures it is correctly associated with its
- * underlying VkImage.
- *
- * Members:
- * - m_device: Reference to the device_t object that owns this image view.
- * - m_image: Reference to the image_t object that this view is based on.
- * - m_aspect_flags: Aspect flags defining which parts of the image are accessible 
- *   (e.g., color, depth, or stencil).
- *
- * Init: create(device, image, aspect_flags)
- *   - Parameters:
- *     - device: Reference to the device_t object that owns this image view.
- *     - image: Reference to the image_t object to create a view for.
- *     - aspect_flags: Aspect flags specifying which parts of the image the view will access.
- *
- * Notes:
- * - Required for using images as color or depth attachments, or as sampled textures.
- * - The view type (1D, 2D, 3D, or cube) is inferred from the image and usage flags.
- * - Multiple views can be created from the same image to represent different mip levels
- *   or aspects.
- * 
- * 
- * vku::img_sampl_t
- * ----------------
- *
- * Description: Wraps a Vulkan sampler. A sampler defines how image data is read in shaders, 
- * including filtering, addressing modes, and mipmap behavior. This object manages the 
- * VkSampler handle and its configuration, and is used in combination with an img_view_t 
- * when binding textures to descriptor sets.
- *
- * Members:
- * - m_device: Reference to the device_t object that owns this sampler.
- * - m_filter: Filtering mode used for magnification and minification (e.g., 
- *   VK_FILTER_LINEAR, VK_FILTER_NEAREST).
- *
- * Init: create(device, filter)
- *   - Parameters:
- *     - device: Reference to the device_t object that will own this sampler.
- *     - filter: Filtering mode for magnification and minification.
- *
- * Notes:
- * - Samplers are independent of specific images and can be reused across multiple textures.
- * 
- * TODO:
- * - add m_address_mode, max_anisotropy, mipmap_mode
- * 
- * 
- * vku::desc_set_initializer_t
- * -----------------------
- *
- * Description: Represents a collection of Vulkan descriptor bindings that define 
- * how GPU resources (buffers, images, samplers) are connected to shaders. 
- * This object holds a list of binding descriptors (either buffer or sampler bindings) 
- * and provides helper functions to produce Vulkan structures used during 
- * descriptor set and layout creation.
- *
- * Members:
- * - m_binds: Vector of binding_desc_t objects, each describing a single resource 
- *   binding (uniform buffer, storage buffer, or combined image sampler).
- *
- * Nested types:
- * - binding_desc_t: Abstract base class for a descriptor binding. 
- *   Defines a common interface for obtaining a VkWriteDescriptorSet structure.
- * - buff_binding_t: Represents a buffer descriptor binding. Holds a reference 
- *   to a buffer_t and its associated VkDescriptorBufferInfo.
- * - sampl_binding_t: Represents a combined image sampler binding. Holds references 
- *   to an img_view_t and an img_sampl_t, as well as the associated VkDescriptorImageInfo.
- *
- * Member functions:
- * - get_writes(): Returns a vector of VkWriteDescriptorSet structures for updating 
- *   descriptor sets.
- * - get_descriptors(): Returns a vector of VkDescriptorSetLayoutBinding structures 
- *   describing all bindings for layout creation.
- *
- * Init: create(binds)
- *   - Parameters:
- *     - binds: Vector of binding_desc_t references (each created using buff_binding_t::create 
- *       or sampl_binding_t::create).
- *
- * Notes:
- * - This object is used by desc_pool_t and desc_set_t to create and populate 
- *   Vulkan descriptor sets.
- * 
- * 
- * vku::desc_set_initializer_t::buff_binding_t
- * ---------------------------------------
- *
- * Description: Represents a buffer binding within a Vulkan descriptor set. 
- * This binding connects a GPU buffer (uniform or storage) to a shader stage. 
- * It wraps a buffer_t reference and the corresponding VkDescriptorBufferInfo needed 
- * for descriptor updates.
- *
- * Members:
- * - m_buffer: Reference to a buffer_t object containing the GPU buffer.
- *
- * Member functions:
- * - get_write(): Returns a VkWriteDescriptorSet structure suitable for updating 
- *   a descriptor set with this buffer binding.
- *
- * Init: create(desc, buffer)
- *   - Parameters:
- *     - desc: VkDescriptorSetLayoutBinding describing this binding (binding index, 
- *       descriptor type, stage flags, etc.).
- *     - buffer: Reference to a buffer_t object to bind.
- *
- * Notes:
- * - Typically used for uniform buffers or storage buffers in graphics or compute pipelines.
- * 
- * 
- * vku::desc_set_initializer_t::sampl_binding_t
- * ----------------------------------------
- *
- * Description: Represents a combined image sampler binding within a Vulkan descriptor set. 
- * This binding connects a GPU image (via img_view_t) and a sampler (img_sampl_t) 
- * to a shader stage, allowing shaders to sample textures.
- *
- * Members:
- * - m_view: Reference to an img_view_t object representing the image to be sampled.
- * - m_sampler: Reference to an img_sampl_t object representing the sampler used for filtering.
- *
- * Member functions:
- * - get_write(): Returns a VkWriteDescriptorSet structure suitable for updating 
- *   a descriptor set with this image-sampler binding.
- *
- * Init: create(desc, view, sampler)
- *   - Parameters:
- *     - desc: VkDescriptorSetLayoutBinding describing this binding (binding index, 
- *       descriptor type, stage flags, etc.).
- *     - view: Reference to an img_view_t object to bind.
- *     - sampler: Reference to an img_sampl_t object to bind.
- *
- * 
-
- * 
- * 
-
- * 
- * 
- * vkc::desc_pool_t
- * ----------------
- *
- * Description: Represents a Vulkan descriptor pool. A descriptor pool allocates 
- * and manages descriptor sets, which are used to bind resources (buffers, 
- * images, samplers) to shaders. This object wraps the VkDescriptorPool handle 
- * and tracks associated bindings and allocation count.
- *
- * Members:
- * - m_device: Reference to the device_t object that owns this pool.
- * - m_bindings_initer: Reference to a desc_set_initializer_t object describing the types 
- *   of bindings this pool can allocate.
- * - m_cnt: Number of descriptor sets this pool can allocate.
- * - vk_descpool: Vulkan descriptor pool handle.
- *
- *
- * Init: create(dev, bindings, cnt)
- *   - Parameters:
- *     - dev: Reference to the device_t object used to create the pool.
- *     - bindings: Reference to a desc_set_initializer_t describing the binding types.
- *     - cnt: Maximum number of descriptor sets that can be allocated from this pool.
- * 
- * 
- * vkc::desc_set_t
- * ---------------
- *
- * Description: Represents a Vulkan descriptor set. Descriptor sets are allocated 
- * from a descriptor pool and define how resources (buffers, images, samplers) 
- * are bound to shaders in a pipeline. This object wraps the VkDescriptorSet handle 
- * and tracks the pool, pipeline, and bindings associated with the set.
- *
- * Members:
- * - m_descriptor_pool: Reference to the desc_pool_t object that allocated this set.
- * - m_pipeline: Reference to the pipeline_t object using this descriptor set.
- * - m_bindings_initer: Reference to a desc_set_initializer_t object describing the resources 
- *   bound to this descriptor set.
- * - vk_desc_set: Vulkan descriptor set handle.
- *
- * Member functions:
- * - update(): Updates the GPU descriptor set with the current resources from the
- *   associated desc_set_initializer_t. Should be called after changing any buffers, images,
- *   or samplers in the bindings. This function must be called before binding the descriptor set in
- *   a command buffer if any resources have changed.
- *
- * Init: create(dp, pl, bindings)
- *   - Parameters:
- *     - dp: Reference to the desc_pool_t to allocate the descriptor set from.
- *     - pl: Reference to the pipeline_t that will use this descriptor set.
- *     - bindings: Reference to a desc_set_initializer_t describing the bindings for this set.
- * 
- * Notes:
- * - desc_set_t represents an actual Vulkan descriptor set allocated from a descriptor pool.
- *   It implements the resources described by a desc_set_initializer_t. While desc_set_initializer_t
- *   defines the layout and points to the specific resources (buffers, images, samplers),
- *   desc_set_t is the concrete GPU object that can be bound in a pipeline. Multiple 
- *   desc_set_t instances can share the same desc_set_initializer_t layout.
- * - Buffers and samplers are stored in the desc_set_initializer_t bindings. To change the
- *   resource used by a desc_set_t, modify the resource in the corresponding 
- *   desc_set_initializer_t::binding_desc_t and call update() on the desc_set_t. Alternatively,
- *   calling update() on the desc_set_initializer_t itself also works, as desc_set_t depends
- *   on it and will propagate the changes automatically.
  */
 
 /*! @file This file will be used to auto-initialize Vulkan. This file will describe the structure
@@ -848,6 +257,23 @@ extern inline std::unordered_map<std::string, vku_shader_stage_e>
 extern inline std::unordered_map<std::string, VkSemaphoreType>
         vk_semaphore_type_from_str;
 
+// extern inline std::unordered_map<std::string, VkPipelineStageFlagBits2>
+//         vk_pipeline_stage_flag_bits2_from_str;
+
+// extern inline std::unordered_map<std::string, VkAccessFlagBits2>
+//         vk_access_flag_bits2_from_str;
+
+extern inline std::unordered_map<std::string, VkImageLayout>
+        vk_image_layout_from_str;
+
+extern inline std::unordered_map<std::string, VkAccessFlagBits>
+        vk_access_flag_bits_from_str;
+
+extern inline std::unordered_map<std::string, VkDependencyFlagBits>
+        vk_dependency_flag_bits_from_str;
+
+extern inline std::unordered_map<std::string, VkFenceCreateFlagBits>
+        vk_fence_create_flag_bits_from_str;
 
 template <> inline VkResult get_enum_val<VkResult>(fkyaml::node &n);
 template <> inline VkBufferUsageFlagBits get_enum_val<VkBufferUsageFlagBits>(fkyaml::node &n);
@@ -866,6 +292,14 @@ template <> inline VkShaderStageFlagBits get_enum_val<VkShaderStageFlagBits>(fky
 template <> inline VkDescriptorType get_enum_val<VkDescriptorType>(fkyaml::node &n);
 template <> inline vku_shader_stage_e get_enum_val<vku_shader_stage_e>(fkyaml::node &n);
 template <> inline VkSemaphoreType get_enum_val<VkSemaphoreType>(fkyaml::node &n);
+// template <> inline VkPipelineStageFlagBits2 get_enum_val<VkPipelineStageFlagBits2>(fkyaml::node &n);
+// template <> inline VkAccessFlagBits2 get_enum_val<VkAccessFlagBits2>(fkyaml::node &n);
+template <> inline VkImageLayout get_enum_val<VkImageLayout>(fkyaml::node &n);
+template <> inline VkPipelineStageFlagBits get_enum_val<VkPipelineStageFlagBits>(fkyaml::node &n);
+template <> inline VkAccessFlagBits get_enum_val<VkAccessFlagBits>(fkyaml::node &n);
+template <> inline VkDependencyFlagBits get_enum_val<VkDependencyFlagBits>(fkyaml::node &n);
+template <> inline VkFenceCreateFlagBits get_enum_val<VkFenceCreateFlagBits>(fkyaml::node &n);
+
 
 template <>
 struct luaw_returner_t<VkResult> {
@@ -899,29 +333,6 @@ VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_VERTEX_INPUT_DESC);
 VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_BINDING_DESC);
 
 inline std::string app_path = std::filesystem::canonical("./");
-
-/* Does this really have any irl usage? */
-struct lua_var_t : public vku::object_t {
-    std::string name;
-
-    static vku::object_type_e type_id_static() { return VKC_TYPE_LUA_VARIABLE; }
-    static vku::ref_t<lua_var_t> create(std::string name) {
-        auto ret = std::make_shared<lua_var_t>();
-        ret->name = name;
-        return ret;
-    }
-
-    virtual vku::object_type_e type_id() const override { return VKC_TYPE_LUA_VARIABLE; }
-
-    inline std::string to_string() const override {
-        return std::format("vkc::lua_var[{}]: m_name={} ", (void*)this, name);
-    }
-
-
-private:
-    virtual vc::ret_t init() override { return VK_SUCCESS; }
-    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
-};
 
 /*!
  * 
@@ -1051,49 +462,6 @@ struct vertex_input_desc_t : public vku::object_t {
                     vku::to_string(attr.format), attr.offset);
         ret += "}}";
         return ret;
-    }
-
-private:
-    virtual vc::ret_t init() override { return VK_SUCCESS; }
-    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
-};
-
-/*!
- * 
- * vkc::binding_t
- * --------------
- *
- * Description: Represents a generic descriptor set binding in Vulkan. 
- * This object wraps a VkDescriptorSetLayoutBinding structure, which defines 
- * the binding index, descriptor type, number of descriptors, and shader stage flags.
- *
- * Init: create(bd)
- *   - Parameters:
- *     - bd: A VkDescriptorSetLayoutBinding structure describing the binding.
- *
- * Notes:
- * - Serves as a base or standalone representation for descriptor set bindings.
- * - Can be used to initialize more specific binding types such as buffer or 
- *   sampler bindings.
- * 
- */
-struct binding_t : public vku::object_t {
-    VkDescriptorSetLayoutBinding bd;
-
-    static vku::object_type_e type_id_static() { return VKC_TYPE_BINDING_DESC; }
-    static vku::ref_t<binding_t> create(const VkDescriptorSetLayoutBinding& bd) {
-        auto ret = std::make_shared<binding_t>();
-        ret->bd = bd;
-        return ret;
-    }
-
-    virtual vku::object_type_e type_id() const override { return VKC_TYPE_BINDING_DESC; }
-
-    inline std::string to_string() const override {
-        return std::format("[binding={}, type={}, stage={}]",
-                bd.binding,
-                vku::to_string(bd.descriptorType),
-                vku::to_string((VkShaderStageFlagBits)bd.stageFlags));
     }
 
 private:
@@ -1348,7 +716,6 @@ inline int register_meta(vc::virt_state_t *vs) {
     };
     ASSERT_FN(add_lua_tab_funcs(vs, vku_tab_funcs));
 
-    /* TODO: register object structures */
     // /* vku::window_t
     // ----------------------------------------------------------------------------------------- */
 
@@ -1371,7 +738,6 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, begin_rpass, vku::ref_t<vku::framebuffs_t>, uint32_t);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_vert_buffs,
             uint32_t, std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>>);
-    /* TODO: */
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_desc_set,
             vc::bm_t<VkPipelineBindPoint>, vku::ref_t<vku::pipeline_layout_t>,
             vku::ref_t<vku::desc_set_t>);
@@ -1386,6 +752,16 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_compute, vku::ref_t<vku::compute_pipeline_t>);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, dispatch_compute, uint32_t, uint32_t, uint32_t);
 
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, set_event, vku::ref_t<vku::event_t>,
+            vc::bm_t<VkPipelineStageFlagBits>);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, reset_event, vku::ref_t<vku::event_t>,
+            vc::bm_t<VkPipelineStageFlagBits>);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, wait_events, std::vector<vku::ref_t<vku::event_t>>,
+            vku::ref_t<vku::dependency_info_t>);
+
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, pipeline_barrier,
+            vku::ref_t<vku::dependency_info_t>);
+
     // /* vkc::cpu_buffer_t
     // ----------------------------------------------------------------------------------------- */
     VC_REGISTER_MEMBER_FUNCTION(vs, vkc::cpu_buffer_t, data);
@@ -1394,6 +770,12 @@ inline int register_meta(vc::virt_state_t *vs) {
     // /* vku::fence_t
     // ----------------------------------------------------------------------------------------- */
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::fence_t, get_status);
+
+    // /* vku::event_t
+    // ----------------------------------------------------------------------------------------- */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::event_t, get_status);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::event_t, set_event);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::event_t, reset_event);
 
     /* Done objects
     ----------------------------------------------------------------------------------------- */
@@ -1413,6 +795,8 @@ inline int register_meta(vc::virt_state_t *vs) {
     vc::add_lua_flag_mapping(vs, vc::vk_buffer_usage_flag_bits_from_str);
     vc::add_lua_flag_mapping(vs, vc::vk_result_from_str);
     vc::add_lua_flag_mapping(vs, vc::shader_stage_from_string);
+    // vc::add_lua_flag_mapping(vs, vc::vk_pipeline_stage_flag_bits2_from_str);
+    // vc::add_lua_flag_mapping(vs, vc::vk_access_flag_bits2_from_str);
     luaw_set_glfw_fields(vs);
 
     ASSERT_FN(add_auto_builder_callback(vs, build_pseudo_object_match, build_pseudo_object_cbk));
@@ -1453,20 +837,131 @@ inline int register_meta(vc::virt_state_t *vs) {
     ASSERT_FN(ret);
 
     ret = add_named_builder_callback(vs,
-        "vkc::binding_t",
+        "vku::binding_t",
         [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
             -> co::task<vc::ref_t<vc::object_t>>
         {
             auto m_binding = co_await resolve_int(vs, node["m_binding"]);
             auto m_stage = vc::get_enum_val<VkShaderStageFlagBits>(node["m_stage"]);
             auto m_desc_type = vc::get_enum_val<VkDescriptorType>(node["m_desc_type"]);
-            auto obj = binding_t::create(VkDescriptorSetLayoutBinding{
+            auto obj = vku::binding_t::create(VkDescriptorSetLayoutBinding{
                 .binding = (uint32_t)m_binding,
                 .descriptorType = m_desc_type,
                 .descriptorCount = 1,
                 .stageFlags = m_stage,
                 .pImmutableSamplers = nullptr
             });
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::image_subresource_range_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto obj = vku::image_subresource_range_t::create(VkImageSubresourceRange {
+                .aspectMask = node["m_aspect_mask"].is_null()
+                        ? VK_IMAGE_ASPECT_COLOR_BIT
+                        : vc::get_enum_val<VkImageAspectFlagBits>(node["m_aspect_mask"]),
+                .baseMipLevel = node["m_base_mip_level"].is_null()
+                        ? 0
+                        : (uint32_t)co_await resolve_int(vs, node["m_base_mip_level"]),
+                .levelCount = node["m_level_count"].is_null()
+                        ? 1
+                        : (uint32_t)co_await resolve_int(vs, node["m_level_count"]),
+                .baseArrayLayer = node["m_base_array_layer"].is_null()
+                        ? 0
+                        : (uint32_t)co_await resolve_int(vs, node["m_base_array_layer"]),
+                .layerCount = node["m_layer_count"].is_null()
+                        ? 1
+                        : (uint32_t)co_await resolve_int(vs, node["m_layer_count"]),
+            });
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+    
+    ret = add_named_builder_callback(vs,
+        "vku::dependency_info_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto src_stage = vc::get_enum_val<VkPipelineStageFlagBits>(node["m_src_stage_mask"]);
+            auto dst_stage = vc::get_enum_val<VkPipelineStageFlagBits>(node["m_dst_stage_mask"]);
+            VkDependencyFlags dep_flags = node["m_flags"].is_null()
+                    ? 0
+                    : vc::get_enum_val<VkDependencyFlagBits>(node["m_dep_flags"]);
+            std::vector<VkMemoryBarrier> mem_bars;
+            for (auto& subnode : node["m_mem_bars"]) {
+                VkMemoryBarrier bar {
+                    .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                    .pNext = nullptr,
+                    .srcAccessMask = vc::get_enum_val<VkAccessFlagBits>(subnode["m_src_access_mask"]),
+                    .dstAccessMask = vc::get_enum_val<VkAccessFlagBits>(subnode["m_dst_access_mask"]),
+                };
+                mem_bars.push_back(bar);
+            }
+            std::vector<VkBufferMemoryBarrier> buff_mem_bars;
+            for (auto& subnode : node["m_buff_mem_bars"]) {
+                auto buff = co_await resolve_obj<vku::buffer_t>(vs, subnode["m_buffer"]);
+                VkBufferMemoryBarrier bar {
+                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                    .pNext = nullptr,
+                    .srcAccessMask = vc::get_enum_val<VkAccessFlagBits>(subnode["m_src_access_mask"]),
+                    .dstAccessMask = vc::get_enum_val<VkAccessFlagBits>(subnode["m_dst_access_mask"]),
+                    .srcQueueFamilyIndex = subnode["m_src_queue_family_index"].is_null()
+                            ? VK_QUEUE_FAMILY_IGNORED
+                            : (uint32_t)co_await resolve_int(vs, subnode["m_src_queue_family_index"]),
+                    .dstQueueFamilyIndex = subnode["m_dst_queue_family_index"].is_null()
+                            ? VK_QUEUE_FAMILY_IGNORED
+                            : (uint32_t)co_await resolve_int(vs, subnode["m_dst_queue_family_index"]),
+                    .buffer = buff->vk_buff,
+                    .offset = subnode["m_offset"].is_null()
+                            ? 0
+                            : (VkDeviceSize)co_await resolve_int(vs, subnode["m_offset"]),
+                    .size = subnode["m_size"].is_null()
+                            ? buff->m_size
+                            : (VkDeviceSize)co_await resolve_int(vs, subnode["m_size"]),
+                };
+                buff_mem_bars.push_back(bar);
+            }
+            std::vector<VkImageMemoryBarrier> img_mem_bars;
+            for (auto& subnode : node["m_img_mem_bars"]) {
+                auto img = co_await resolve_obj<vku::image_t>(vs, subnode["m_image"]);
+                auto img_subrange = subnode["m_subrange"].is_null()
+                        ? VkImageSubresourceRange {
+                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .baseMipLevel = 0,
+                            .levelCount = 1,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1,
+                        }
+                        : (co_await resolve_obj<vku::image_subresource_range_t>(
+                                vs, subnode["m_subrange"]))->m_img_subrange;
+                VkImageMemoryBarrier bar {
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .pNext = nullptr,
+                    .srcAccessMask = vc::get_enum_val<VkAccessFlagBits>(subnode["src_access_mask"]),
+                    .dstAccessMask = vc::get_enum_val<VkAccessFlagBits>(subnode["dst_access_mask"]),
+                    .oldLayout = vc::get_enum_val<VkImageLayout>(subnode["m_old_layout"]),
+                    .newLayout = vc::get_enum_val<VkImageLayout>(subnode["m_new_layout"]),
+                    .srcQueueFamilyIndex = subnode["m_src_queue_family_index"].is_null()
+                            ? VK_QUEUE_FAMILY_IGNORED
+                            : (uint32_t)co_await resolve_int(vs, subnode["m_src_queue_family_index"]),
+                    .dstQueueFamilyIndex = subnode["m_dst_queue_family_index"].is_null()
+                            ? VK_QUEUE_FAMILY_IGNORED
+                            : (uint32_t)co_await resolve_int(vs, subnode["m_dst_queue_family_index"]),
+                    .image = img->vk_img,
+                    .subresourceRange = img_subrange,
+                };
+                img_mem_bars.push_back(bar);
+            }
+            auto obj = vku::dependency_info_t::create(src_stage, dst_stage,
+                    mem_bars, buff_mem_bars, img_mem_bars, dep_flags);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -1486,19 +981,6 @@ inline int register_meta(vc::virt_state_t *vs) {
     );
     ASSERT_FN(ret);
 
-    ret = add_named_builder_callback(vs,
-        "vkc::lua_var_t",
-        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
-            -> co::task<vc::ref_t<vc::object_t>>
-        { /* TODO: not sure how is this type usefull */
-            (void)node;
-            /* lua_var has the same tag_name as the var name */
-            auto obj = lua_var_t::create(node_name);
-            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
-            co_return obj->to_related<vku::object_t>();
-        }
-    );
-    ASSERT_FN(ret);
 
     ret = add_named_builder_callback(vs,
         "vku::instance_t",
@@ -1618,7 +1100,7 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto view = co_await resolve_obj<vku::img_view_t>(vs, node["m_view"]);
             auto sampler = co_await resolve_obj<vku::img_sampl_t>(vs, node["m_sampler"]);
-            auto desc = co_await resolve_obj<vkc::binding_t>(vs, node["m_desc"]);
+            auto desc = co_await resolve_obj<vku::binding_t>(vs, node["m_desc"]);
             auto obj = vku::desc_set_initializer_t::sampl_binding_t::create(desc->bd, view, sampler);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
@@ -1632,7 +1114,7 @@ inline int register_meta(vc::virt_state_t *vs) {
             -> co::task<vc::ref_t<vc::object_t>>
         {
             auto buff = co_await resolve_obj<vku::buffer_t>(vs, node["m_buffer"]);
-            auto desc = co_await resolve_obj<vkc::binding_t>(vs, node["m_desc"]);
+            auto desc = co_await resolve_obj<vku::binding_t>(vs, node["m_desc"]);
             auto obj = vku::desc_set_initializer_t::buff_binding_t::create(desc->bd, buff);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
@@ -1756,7 +1238,10 @@ inline int register_meta(vc::virt_state_t *vs) {
             -> co::task<vc::ref_t<vc::object_t>>
         {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
-            auto obj = vku::fence_t::create(dev);
+            auto flags = node["m_flags"].is_null()
+                    ? 0
+                    : vc::get_enum_val<VkFenceCreateFlagBits>(node["m_flags"]);
+            auto obj = vku::fence_t::create(dev, flags);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -1776,6 +1261,19 @@ inline int register_meta(vc::virt_state_t *vs) {
                     ? 0
                     : co_await resolve_int(vs, node["m_initial"]);
             auto obj = vku::sem_t::create(dev, sem_type, initial);
+            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+            co_return obj->to_related<vku::object_t>();
+        }
+    );
+    ASSERT_FN(ret);
+
+    ret = add_named_builder_callback(vs,
+        "vku::event_t",
+        [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+            -> co::task<vc::ref_t<vc::object_t>>
+        {
+            auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+            auto obj = vku::event_t::create(dev);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -2795,6 +2293,531 @@ inline std::unordered_map<std::string, VkSemaphoreType> vk_semaphore_type_from_s
 
 template <> inline VkSemaphoreType get_enum_val<VkSemaphoreType>(fkyaml::node &n) {
     return get_enum_val(n, vk_semaphore_type_from_str);
+}
+
+inline std::unordered_map<std::string, VkAccessFlagBits> vk_access_flag_bits_from_str = {
+    {"VK_ACCESS_INDIRECT_COMMAND_READ_BIT",
+            VK_ACCESS_INDIRECT_COMMAND_READ_BIT},
+    {"VK_ACCESS_INDEX_READ_BIT",
+            VK_ACCESS_INDEX_READ_BIT},
+    {"VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT",
+            VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT},
+    {"VK_ACCESS_UNIFORM_READ_BIT",
+            VK_ACCESS_UNIFORM_READ_BIT},
+    {"VK_ACCESS_INPUT_ATTACHMENT_READ_BIT",
+            VK_ACCESS_INPUT_ATTACHMENT_READ_BIT},
+    {"VK_ACCESS_SHADER_READ_BIT",
+            VK_ACCESS_SHADER_READ_BIT},
+    {"VK_ACCESS_SHADER_WRITE_BIT",
+            VK_ACCESS_SHADER_WRITE_BIT},
+    {"VK_ACCESS_COLOR_ATTACHMENT_READ_BIT",
+            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT},
+    {"VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT",
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT},
+    {"VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT",
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT},
+    {"VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT",
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT},
+    {"VK_ACCESS_TRANSFER_READ_BIT",
+            VK_ACCESS_TRANSFER_READ_BIT},
+    {"VK_ACCESS_TRANSFER_WRITE_BIT",
+            VK_ACCESS_TRANSFER_WRITE_BIT},
+    {"VK_ACCESS_HOST_READ_BIT",
+            VK_ACCESS_HOST_READ_BIT},
+    {"VK_ACCESS_HOST_WRITE_BIT",
+            VK_ACCESS_HOST_WRITE_BIT},
+    {"VK_ACCESS_MEMORY_READ_BIT",
+            VK_ACCESS_MEMORY_READ_BIT},
+    {"VK_ACCESS_MEMORY_WRITE_BIT",
+            VK_ACCESS_MEMORY_WRITE_BIT},
+    // {"VK_ACCESS_NONE",
+    //         VK_ACCESS_NONE},
+    {"VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT",
+            VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT},
+    {"VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT",
+            VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT},
+    {"VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT",
+            VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT},
+    {"VK_ACCESS_CONDITIONAL_RENDERING_READ_BIT_EXT",
+            VK_ACCESS_CONDITIONAL_RENDERING_READ_BIT_EXT},
+    {"VK_ACCESS_COLOR_ATTACHMENT_READ_NONCOHERENT_BIT_EXT",
+            VK_ACCESS_COLOR_ATTACHMENT_READ_NONCOHERENT_BIT_EXT},
+    // {"VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR",
+    //         VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR},
+    // {"VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR",
+    //         VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR},
+    {"VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT",
+            VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT},
+    // {"VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR",
+    //         VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR},
+    // {"VK_ACCESS_COMMAND_PREPROCESS_READ_BIT_EXT",
+    //         VK_ACCESS_COMMAND_PREPROCESS_READ_BIT_EXT},
+    // {"VK_ACCESS_COMMAND_PREPROCESS_WRITE_BIT_EXT",
+    //         VK_ACCESS_COMMAND_PREPROCESS_WRITE_BIT_EXT},
+    {"VK_ACCESS_SHADING_RATE_IMAGE_READ_BIT_NV",
+            VK_ACCESS_SHADING_RATE_IMAGE_READ_BIT_NV},
+    {"VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_NV",
+            VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_NV},
+    {"VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_NV",
+            VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_NV},
+    // {"VK_ACCESS_COMMAND_PREPROCESS_READ_BIT_NV",
+    //         VK_ACCESS_COMMAND_PREPROCESS_READ_BIT_NV},
+    // {"VK_ACCESS_COMMAND_PREPROCESS_WRITE_BIT_NV",
+    //         VK_ACCESS_COMMAND_PREPROCESS_WRITE_BIT_NV},
+};
+
+template <> inline VkAccessFlagBits get_enum_val<VkAccessFlagBits>(fkyaml::node &n) {
+    return get_enum_val(n, vk_access_flag_bits_from_str);
+}
+
+inline std::unordered_map<std::string, VkDependencyFlagBits> vk_dependency_flag_bits_from_str = {
+    {"VK_DEPENDENCY_BY_REGION_BIT",
+            VK_DEPENDENCY_BY_REGION_BIT},
+    {"VK_DEPENDENCY_DEVICE_GROUP_BIT",
+            VK_DEPENDENCY_DEVICE_GROUP_BIT},
+    {"VK_DEPENDENCY_VIEW_LOCAL_BIT",
+            VK_DEPENDENCY_VIEW_LOCAL_BIT},
+    // {"VK_DEPENDENCY_FEEDBACK_LOOP_BIT_EXT",
+    //         VK_DEPENDENCY_FEEDBACK_LOOP_BIT_EXT},
+    // {"VK_DEPENDENCY_QUEUE_FAMILY_OWNERSHIP_TRANSFER_USE_ALL_STAGES_BIT_KHR",
+    //         VK_DEPENDENCY_QUEUE_FAMILY_OWNERSHIP_TRANSFER_USE_ALL_STAGES_BIT_KHR},
+    // {"VK_DEPENDENCY_ASYMMETRIC_EVENT_BIT_KHR",
+    //         VK_DEPENDENCY_ASYMMETRIC_EVENT_BIT_KHR},
+    {"VK_DEPENDENCY_VIEW_LOCAL_BIT_KHR",
+            VK_DEPENDENCY_VIEW_LOCAL_BIT_KHR},
+    // {"VK_DEPENDENCY_DEVICE_GROUP_BIT_KHR",
+    //         VK_DEPENDENCY_DEVICE_GROUP_BIT_KHR},
+};
+
+template <> inline VkDependencyFlagBits get_enum_val<VkDependencyFlagBits>(fkyaml::node &n) {
+    return get_enum_val(n, vk_dependency_flag_bits_from_str);
+}
+
+inline std::unordered_map<std::string, VkFenceCreateFlagBits> vk_fence_create_flag_bits_from_str = {
+    {"VK_FENCE_CREATE_SIGNALED_BIT", VK_FENCE_CREATE_SIGNALED_BIT}
+};
+
+template <> inline VkFenceCreateFlagBits get_enum_val<VkFenceCreateFlagBits>(fkyaml::node &n) {
+    return get_enum_val(n, vk_fence_create_flag_bits_from_str);
+}
+
+/* TODO: this needs to be implemented in a newer version of vulkan, tested and as such */
+// inline std::unordered_map<std::string, VkPipelineStageFlagBits2>
+//         vk_pipeline_stage_flag_bits2_from_str =
+// {
+//     {"VK_PIPELINE_STAGE_2_NONE",
+//             VK_PIPELINE_STAGE_2_NONE},
+//     {"VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT",
+//             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT},
+//     {"VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT",
+//             VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT},
+//     {"VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT",
+//             VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT},
+//     {"VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT",
+//             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT},
+//     {"VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT",
+//             VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT},
+//     {"VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT",
+//             VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT},
+//     {"VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT",
+//             VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT},
+//     {"VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT",
+//             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT},
+//     {"VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT",
+//             VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT},
+//     {"VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT",
+//             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT},
+//     {"VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT",
+//             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT},
+//     {"VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT",
+//             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT},
+//     {"VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT",
+//             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT},
+//     {"VK_PIPELINE_STAGE_2_TRANSFER_BIT",
+//             VK_PIPELINE_STAGE_2_TRANSFER_BIT},
+//     {"VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT",
+//             VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT},
+//     {"VK_PIPELINE_STAGE_2_HOST_BIT",
+//             VK_PIPELINE_STAGE_2_HOST_BIT},
+//     {"VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT",
+//             VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT},
+//     {"VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT",
+//             VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT},
+//     {"VK_PIPELINE_STAGE_2_COPY_BIT",
+//             VK_PIPELINE_STAGE_2_COPY_BIT},
+//     {"VK_PIPELINE_STAGE_2_RESOLVE_BIT",
+//             VK_PIPELINE_STAGE_2_RESOLVE_BIT},
+//     {"VK_PIPELINE_STAGE_2_BLIT_BIT",
+//             VK_PIPELINE_STAGE_2_BLIT_BIT},
+//     {"VK_PIPELINE_STAGE_2_CLEAR_BIT",
+//             VK_PIPELINE_STAGE_2_CLEAR_BIT},
+//     {"VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT",
+//             VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT},
+//     {"VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT",
+//             VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT},
+//     {"VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT",
+//             VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT},
+//     {"VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_NONE_KHR",
+//             VK_PIPELINE_STAGE_2_NONE_KHR},
+//     {"VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_HOST_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_HOST_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_COPY_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_COPY_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_RESOLVE_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_RESOLVE_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_BLIT_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_BLIT_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_CLEAR_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_CLEAR_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT",
+//             VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT},
+//     {"VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT",
+//             VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT},
+//     {"VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_NV",
+//             VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_NV},
+//     {"VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT",
+//             VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT},
+//     {"VK_PIPELINE_STAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_SHADING_RATE_IMAGE_BIT_NV",
+//             VK_PIPELINE_STAGE_2_SHADING_RATE_IMAGE_BIT_NV},
+//     {"VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_NV",
+//             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_NV},
+//     {"VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_NV",
+//             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_NV},
+//     {"VK_PIPELINE_STAGE_2_FRAGMENT_DENSITY_PROCESS_BIT_EXT",
+//             VK_PIPELINE_STAGE_2_FRAGMENT_DENSITY_PROCESS_BIT_EXT},
+//     {"VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_NV",
+//             VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_NV},
+//     {"VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_NV",
+//             VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_NV},
+//     {"VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT",
+//             VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT},
+//     {"VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT",
+//             VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT},
+//     {"VK_PIPELINE_STAGE_2_SUBPASS_SHADER_BIT_HUAWEI",
+//             VK_PIPELINE_STAGE_2_SUBPASS_SHADER_BIT_HUAWEI},
+//     {"VK_PIPELINE_STAGE_2_SUBPASS_SHADING_BIT_HUAWEI",
+//             VK_PIPELINE_STAGE_2_SUBPASS_SHADING_BIT_HUAWEI},
+//     {"VK_PIPELINE_STAGE_2_INVOCATION_MASK_BIT_HUAWEI",
+//             VK_PIPELINE_STAGE_2_INVOCATION_MASK_BIT_HUAWEI},
+//     {"VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT",
+//             VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT},
+//     {"VK_PIPELINE_STAGE_2_CLUSTER_CULLING_SHADER_BIT_HUAWEI",
+//             VK_PIPELINE_STAGE_2_CLUSTER_CULLING_SHADER_BIT_HUAWEI},
+//     {"VK_PIPELINE_STAGE_2_OPTICAL_FLOW_BIT_NV",
+//             VK_PIPELINE_STAGE_2_OPTICAL_FLOW_BIT_NV},
+//     {"VK_PIPELINE_STAGE_2_CONVERT_COOPERATIVE_VECTOR_MATRIX_BIT_NV",
+//             VK_PIPELINE_STAGE_2_CONVERT_COOPERATIVE_VECTOR_MATRIX_BIT_NV},
+//     {"VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM",
+//             VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM},
+//     {"VK_PIPELINE_STAGE_2_COPY_INDIRECT_BIT_KHR",
+//             VK_PIPELINE_STAGE_2_COPY_INDIRECT_BIT_KHR},
+//     {"VK_PIPELINE_STAGE_2_MEMORY_DECOMPRESSION_BIT_EXT",
+//             VK_PIPELINE_STAGE_2_MEMORY_DECOMPRESSION_BIT_EXT},
+// };
+// template <> inline VkPipelineStageFlagBits2 get_enum_val<VkPipelineStageFlagBits2>(fkyaml::node &n) {
+//     return get_enum_val(n, vk_pipeline_stage_flag_bits2_from_str);
+// }
+// inline std::unordered_map<std::string, VkAccessFlagBits2> vk_access_flag_bits2_from_str = {
+//     {"VK_ACCESS_2_NONE",
+//             VK_ACCESS_2_NONE},
+//     {"VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT",
+//             VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT},
+//     {"VK_ACCESS_2_INDEX_READ_BIT",
+//             VK_ACCESS_2_INDEX_READ_BIT},
+//     {"VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT",
+//             VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT},
+//     {"VK_ACCESS_2_UNIFORM_READ_BIT",
+//             VK_ACCESS_2_UNIFORM_READ_BIT},
+//     {"VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT",
+//             VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT},
+//     {"VK_ACCESS_2_SHADER_READ_BIT",
+//             VK_ACCESS_2_SHADER_READ_BIT},
+//     {"VK_ACCESS_2_SHADER_WRITE_BIT",
+//             VK_ACCESS_2_SHADER_WRITE_BIT},
+//     {"VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT",
+//             VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT},
+//     {"VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT",
+//             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT},
+//     {"VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT",
+//             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT},
+//     {"VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT",
+//             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT},
+//     {"VK_ACCESS_2_TRANSFER_READ_BIT",
+//             VK_ACCESS_2_TRANSFER_READ_BIT},
+//     {"VK_ACCESS_2_TRANSFER_WRITE_BIT",
+//             VK_ACCESS_2_TRANSFER_WRITE_BIT},
+//     {"VK_ACCESS_2_HOST_READ_BIT",
+//             VK_ACCESS_2_HOST_READ_BIT},
+//     {"VK_ACCESS_2_HOST_WRITE_BIT",
+//             VK_ACCESS_2_HOST_WRITE_BIT},
+//     {"VK_ACCESS_2_MEMORY_READ_BIT",
+//             VK_ACCESS_2_MEMORY_READ_BIT},
+//     {"VK_ACCESS_2_MEMORY_WRITE_BIT",
+//             VK_ACCESS_2_MEMORY_WRITE_BIT},
+//     {"VK_ACCESS_2_SHADER_SAMPLED_READ_BIT",
+//             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT},
+//     {"VK_ACCESS_2_SHADER_STORAGE_READ_BIT",
+//             VK_ACCESS_2_SHADER_STORAGE_READ_BIT},
+//     {"VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT",
+//             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT},
+//     {"VK_ACCESS_2_VIDEO_DECODE_READ_BIT_KHR",
+//             VK_ACCESS_2_VIDEO_DECODE_READ_BIT_KHR},
+//     {"VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR",
+//             VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR},
+//     {"VK_ACCESS_2_SAMPLER_HEAP_READ_BIT_EXT",
+//             VK_ACCESS_2_SAMPLER_HEAP_READ_BIT_EXT},
+//     {"VK_ACCESS_2_RESOURCE_HEAP_READ_BIT_EXT",
+//             VK_ACCESS_2_RESOURCE_HEAP_READ_BIT_EXT},
+//     {"VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR",
+//             VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR},
+//     {"VK_ACCESS_2_VIDEO_ENCODE_WRITE_BIT_KHR",
+//             VK_ACCESS_2_VIDEO_ENCODE_WRITE_BIT_KHR},
+//     {"VK_ACCESS_2_SHADER_TILE_ATTACHMENT_READ_BIT_QCOM",
+//             VK_ACCESS_2_SHADER_TILE_ATTACHMENT_READ_BIT_QCOM},
+//     {"VK_ACCESS_2_SHADER_TILE_ATTACHMENT_WRITE_BIT_QCOM",
+//             VK_ACCESS_2_SHADER_TILE_ATTACHMENT_WRITE_BIT_QCOM},
+//     {"VK_ACCESS_2_NONE_KHR",
+//             VK_ACCESS_2_NONE_KHR},
+//     {"VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT_KHR",
+//             VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT_KHR},
+//     {"VK_ACCESS_2_INDEX_READ_BIT_KHR",
+//             VK_ACCESS_2_INDEX_READ_BIT_KHR},
+//     {"VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT_KHR",
+//             VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT_KHR},
+//     {"VK_ACCESS_2_UNIFORM_READ_BIT_KHR",
+//             VK_ACCESS_2_UNIFORM_READ_BIT_KHR},
+//     {"VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT_KHR",
+//             VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT_KHR},
+//     {"VK_ACCESS_2_SHADER_READ_BIT_KHR",
+//             VK_ACCESS_2_SHADER_READ_BIT_KHR},
+//     {"VK_ACCESS_2_SHADER_WRITE_BIT_KHR",
+//             VK_ACCESS_2_SHADER_WRITE_BIT_KHR},
+//     {"VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT_KHR",
+//             VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT_KHR},
+//     {"VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT_KHR",
+//             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT_KHR},
+//     {"VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT_KHR",
+//             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT_KHR},
+//     {"VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT_KHR",
+//             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT_KHR},
+//     {"VK_ACCESS_2_TRANSFER_READ_BIT_KHR",
+//             VK_ACCESS_2_TRANSFER_READ_BIT_KHR},
+//     {"VK_ACCESS_2_TRANSFER_WRITE_BIT_KHR",
+//             VK_ACCESS_2_TRANSFER_WRITE_BIT_KHR},
+//     {"VK_ACCESS_2_HOST_READ_BIT_KHR",
+//             VK_ACCESS_2_HOST_READ_BIT_KHR},
+//     {"VK_ACCESS_2_HOST_WRITE_BIT_KHR",
+//             VK_ACCESS_2_HOST_WRITE_BIT_KHR},
+//     {"VK_ACCESS_2_MEMORY_READ_BIT_KHR",
+//             VK_ACCESS_2_MEMORY_READ_BIT_KHR},
+//     {"VK_ACCESS_2_MEMORY_WRITE_BIT_KHR",
+//             VK_ACCESS_2_MEMORY_WRITE_BIT_KHR},
+//     {"VK_ACCESS_2_SHADER_SAMPLED_READ_BIT_KHR",
+//             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT_KHR},
+//     {"VK_ACCESS_2_SHADER_STORAGE_READ_BIT_KHR",
+//             VK_ACCESS_2_SHADER_STORAGE_READ_BIT_KHR},
+//     {"VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT_KHR",
+//             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT_KHR},
+//     {"VK_ACCESS_2_TRANSFORM_FEEDBACK_WRITE_BIT_EXT",
+//             VK_ACCESS_2_TRANSFORM_FEEDBACK_WRITE_BIT_EXT},
+//     {"VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT",
+//             VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT},
+//     {"VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT",
+//             VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT},
+//     {"VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT",
+//             VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT},
+//     {"VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_NV",
+//             VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_NV},
+//     {"VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_NV",
+//             VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_NV},
+//     {"VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_EXT",
+//             VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_EXT},
+//     {"VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_EXT",
+//             VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_EXT},
+//     {"VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR",
+//             VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR},
+//     {"VK_ACCESS_2_SHADING_RATE_IMAGE_READ_BIT_NV",
+//             VK_ACCESS_2_SHADING_RATE_IMAGE_READ_BIT_NV},
+//     {"VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR",
+//             VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR},
+//     {"VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR",
+//             VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR},
+//     {"VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_NV",
+//             VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_NV},
+//     {"VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_NV",
+//             VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_NV},
+//     {"VK_ACCESS_2_FRAGMENT_DENSITY_MAP_READ_BIT_EXT",
+//             VK_ACCESS_2_FRAGMENT_DENSITY_MAP_READ_BIT_EXT},
+//     {"VK_ACCESS_2_COLOR_ATTACHMENT_READ_NONCOHERENT_BIT_EXT",
+//             VK_ACCESS_2_COLOR_ATTACHMENT_READ_NONCOHERENT_BIT_EXT},
+//     {"VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT",
+//             VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT},
+//     {"VK_ACCESS_2_INVOCATION_MASK_READ_BIT_HUAWEI",
+//             VK_ACCESS_2_INVOCATION_MASK_READ_BIT_HUAWEI},
+//     {"VK_ACCESS_2_SHADER_BINDING_TABLE_READ_BIT_KHR",
+//             VK_ACCESS_2_SHADER_BINDING_TABLE_READ_BIT_KHR},
+//     {"VK_ACCESS_2_MICROMAP_READ_BIT_EXT",
+//             VK_ACCESS_2_MICROMAP_READ_BIT_EXT},
+//     {"VK_ACCESS_2_MICROMAP_WRITE_BIT_EXT",
+//             VK_ACCESS_2_MICROMAP_WRITE_BIT_EXT},
+//     {"VK_ACCESS_2_OPTICAL_FLOW_READ_BIT_NV",
+//             VK_ACCESS_2_OPTICAL_FLOW_READ_BIT_NV},
+//     {"VK_ACCESS_2_OPTICAL_FLOW_WRITE_BIT_NV",
+//             VK_ACCESS_2_OPTICAL_FLOW_WRITE_BIT_NV},
+//     {"VK_ACCESS_2_DATA_GRAPH_READ_BIT_ARM",
+//             VK_ACCESS_2_DATA_GRAPH_READ_BIT_ARM},
+//     {"VK_ACCESS_2_DATA_GRAPH_WRITE_BIT_ARM",
+//             VK_ACCESS_2_DATA_GRAPH_WRITE_BIT_ARM},
+//     {"VK_ACCESS_2_MEMORY_DECOMPRESSION_READ_BIT_EXT",
+//             VK_ACCESS_2_MEMORY_DECOMPRESSION_READ_BIT_EXT},
+//     {"VK_ACCESS_2_MEMORY_DECOMPRESSION_WRITE_BIT_EXT",
+//             VK_ACCESS_2_MEMORY_DECOMPRESSION_WRITE_BIT_EXT},
+// };
+// template <> inline VkAccessFlagBits2 get_enum_val<VkAccessFlagBits2>(fkyaml::node &n) {
+//     return get_enum_val(n, vk_access_flag_bits2_from_str);
+// }
+
+inline std::unordered_map<std::string, VkImageLayout> vk_image_layout_from_str = {
+    {"VK_IMAGE_LAYOUT_UNDEFINED",
+            VK_IMAGE_LAYOUT_UNDEFINED},
+    {"VK_IMAGE_LAYOUT_GENERAL",
+            VK_IMAGE_LAYOUT_GENERAL},
+    {"VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL",
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+    {"VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL",
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL},
+    {"VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL",
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+    {"VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL",
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+    {"VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL",
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL},
+    {"VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL},
+    {"VK_IMAGE_LAYOUT_PREINITIALIZED",
+            VK_IMAGE_LAYOUT_PREINITIALIZED},
+    {"VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL",
+            VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL},
+    {"VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL",
+            VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL},
+    {"VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL",
+            VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL},
+    {"VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL",
+            VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL},
+    {"VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL",
+            VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL},
+    {"VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL",
+            VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL},
+    // {"VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL",
+    //         VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL},
+    // {"VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL",
+    //         VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL},
+    // {"VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ",
+    //         VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ},
+    {"VK_IMAGE_LAYOUT_PRESENT_SRC_KHR",
+            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR},
+    // {"VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR",
+    //         VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR},
+    // {"VK_IMAGE_LAYOUT_VIDEO_DECODE_SRC_KHR",
+    //         VK_IMAGE_LAYOUT_VIDEO_DECODE_SRC_KHR},
+    // {"VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR",
+    //         VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR},
+    {"VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR",
+            VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR},
+    {"VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT",
+            VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT},
+    // {"VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR",
+    //         VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR},
+    // {"VK_IMAGE_LAYOUT_VIDEO_ENCODE_DST_KHR",
+    //         VK_IMAGE_LAYOUT_VIDEO_ENCODE_DST_KHR},
+    // {"VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR",
+    //         VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR},
+    // {"VK_IMAGE_LAYOUT_VIDEO_ENCODE_DPB_KHR",
+    //         VK_IMAGE_LAYOUT_VIDEO_ENCODE_DPB_KHR},
+    // {"VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT",
+    //         VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT},
+    // {"VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM",
+    //         VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM},
+    // {"VK_IMAGE_LAYOUT_VIDEO_ENCODE_QUANTIZATION_MAP_KHR",
+    //         VK_IMAGE_LAYOUT_VIDEO_ENCODE_QUANTIZATION_MAP_KHR},
+    // {"VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT",
+    //         VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT},
+    {"VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL_KHR",
+            VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL_KHR},
+    {"VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL_KHR",
+            VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL_KHR},
+    {"VK_IMAGE_LAYOUT_SHADING_RATE_OPTIMAL_NV",
+            VK_IMAGE_LAYOUT_SHADING_RATE_OPTIMAL_NV},
+    // {"VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR",
+    //         VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR},
+    {"VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL_KHR",
+            VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL_KHR},
+    {"VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL_KHR",
+            VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL_KHR},
+    {"VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL_KHR",
+            VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL_KHR},
+    {"VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL_KHR",
+            VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL_KHR},
+    // {"VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL_KHR",
+    //         VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL_KHR},
+    // {"VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR",
+    //         VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR},
+};
+
+template <> inline VkImageLayout get_enum_val<VkImageLayout>(fkyaml::node &n) {
+    return get_enum_val(n, vk_image_layout_from_str);
 }
 
 } /* virt_composer */

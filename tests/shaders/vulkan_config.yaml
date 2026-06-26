@@ -111,7 +111,7 @@ bindings_initer:
     - m_type: vku::desc_set_initializer_t::buff_binding_t
       m_buffer: !ref mvp_buff
       m_desc:
-        m_type: vkc::binding_t
+        m_type: vku::binding_t
         m_binding: 0
         m_stage: VK_SHADER_STAGE_VERTEX_BIT
         m_desc_type: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
@@ -121,7 +121,7 @@ bindings_initer:
         m_type: vku::img_sampl_t
         m_device: !ref dev
       m_desc:
-        m_type: vkc::binding_t
+        m_type: vku::binding_t
         m_binding: 1
         m_stage: VK_SHADER_STAGE_VERTEX_BIT
         m_desc_type: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
