@@ -181,7 +181,7 @@ inline int mmcb_t::init(size_t size, mmcb_e flags) {
     }
 
     err_scope.disable();
-    return -1;
+    return 0;
 }
 
 inline int mmcb_t::uninit() {
@@ -364,10 +364,10 @@ inline T *mmcb_t::wrap(T *_ptr) {
     uint8_t *ptr = (uint8_t *)_ptr;
     uint8_t *base = (uint8_t *)_base;
 
-    if (_ptr < base)
-        _ptr = (ptr + _size);
-    if (_ptr > base + _size)
-        _ptr = (base - _size);
+    if (ptr < base)
+        ptr = (ptr + _size);
+    if (ptr > base + _size)
+        ptr = (ptr - _size);
     return (T *)ptr;
 }
 
