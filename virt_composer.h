@@ -1244,7 +1244,10 @@ struct luaw_param_t<vc::ref_t<T>, index> {
         // DBG("Ref at index: %zd", index);
         if (lua_isnil(L, index))
             return vc::ref_t<T>{}; /* if the user intended to pass a nill, we give it as a nullptr */
-        return ((vc::object_t *)lua_touserdata(L, index))->to_related<T>();
+        auto obj = (vc::object_t *)lua_touserdata(L, index);
+        if (!obj)
+            luaw_push_error(L, std::format("Expected userdata at index {}", index));
+        return obj->to_related<T>();
     }
 };
 
