@@ -1324,16 +1324,7 @@ struct luaw_param_t<bm_t<T>, index> {
 template <std::integral Integer, ssize_t index>
 struct luaw_param_t<Integer, index> {
     Integer luaw_single_param(lua_State *L) {
-        // DBG("Integer at index: %zd", index);
-        int valid = 0;
-        Integer ret = lua_tointegerx(L, index, &valid);
-        if (!valid) {
-            luaw_push_error(L,
-                    std::format("Invalid parameter at index {}, failed conversion to integer from "
-                    "[{}]",
-                    index, lua_typename(L, lua_type(L, index))));
-        }
-        return ret;
+        return lua_tointeger(L, index);
     }
 };
 

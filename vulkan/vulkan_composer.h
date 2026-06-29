@@ -676,7 +676,8 @@ inline int register_meta(vc::virt_state_t *vs) {
                              vc::bm_t<VkPipelineStageFlagBits>>>,
                              vc::ref_t<vku::cmdbuff_t>,
                              vc::ref_t<vku::fence_t>,
-                             std::vector<vc::ref_t<vku::sem_t>>
+                             std::vector<vc::ref_t<vku::sem_t>>,
+                             uint32_t
         >},
         {"present", vc::luaw_function_wrapper<
                 /* FN:    */ vku::present,
@@ -730,6 +731,10 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_OBJECT(vs, vku::instance_t, m_engine_name);
     VC_REGISTER_MEMBER_OBJECT(vs, vku::instance_t, m_extensions);
     VC_REGISTER_MEMBER_OBJECT(vs, vku::instance_t, m_layers);
+
+    // /* vku::device_t
+    // ----------------------------------------------------------------------------------------- */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::device_t, get_graphics_queue_cnt);
 
     // /* vku::cmdbuff_t
     // ----------------------------------------------------------------------------------------- */

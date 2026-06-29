@@ -184,7 +184,8 @@ inline void submit_cmdbuff(
         std::vector<std::pair<ref_t<sem_t>, VkPipelineStageFlagBits>> wait_sems,
         ref_t<cmdbuff_t> cbuff,
         ref_t<fence_t> fence,
-        std::vector<ref_t<sem_t>> sig_sems);
+        std::vector<ref_t<sem_t>> sig_sems,
+        uint32_t queue_id = 0);
 
 inline void present(
         ref_t<swapchain_t> swc,
@@ -227,6 +228,7 @@ inline std::string to_string(VkShaderStageFlagBits flags);
 inline std::string to_string(VkPipelineStageFlagBits flags);
 inline std::string to_string(VkAccessFlagBits flags);
 inline std::string to_string(VkDependencyFlagBits flags);
+inline std::string to_string(VkQueueFlagBits flags);
 
 /* TODO: this needs to be implemented in a newer version of vulkan, tested and as such */
 // inline std::string to_string(VkPipelineStageFlagBits2 flags);
@@ -242,6 +244,7 @@ inline std::string glfw_err();
 
 
 struct gpu_family_ids_t {
+    uint32_t max_graphics_queue_cnt = 0;
     union {
         int graphics_id = -1;   /* same as compute id */
         int compute_id;
@@ -557,21 +560,23 @@ private:
  * - Add options for selecting the phys dev
  */
 struct device_t : public object_t {
-    VkPhysicalDevice    vk_phy_dev;
-    VkDevice            vk_dev;
-    VkQueue             vk_graphics_que;
-    VkQueue             vk_present_que;
-    std::set<int>       m_que_ids;
-    gpu_family_ids_t    m_que_fams;
+    VkPhysicalDevice        vk_phy_dev;
+    VkDevice                vk_dev;
+    std::vector<VkQueue>    vk_graphics_que;
+    VkQueue                 vk_present_que;
+    std::set<int>           m_que_ids;
+    gpu_family_ids_t        m_que_fams;
 
-    ref_t<instance_t>   m_instance;
-    ref_t<surface_t>    m_surface;
+    ref_t<instance_t>       m_instance;
+    ref_t<surface_t>        m_surface;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_DEVICE; }
     virtual std::string to_string() const override;
 
     static  object_type_e type_id_static() { return VKU_TYPE_DEVICE; }
     static ref_t<device_t> create(ref_t<instance_t> inst, ref_t<surface_t> surf = nullptr);
+
+    uint32_t get_graphics_queue_cnt() { return vk_graphics_que.size(); }
 
 private:
     virtual vc::ret_t init() override;
@@ -1101,6 +1106,7 @@ struct buffer_t : public object_t {
     VkBufferUsageFlags      m_usage_flags;
     VkSharingMode           m_sharing_mode;
     VkMemoryPropertyFlags   m_memory_flags;
+    void *                  m_host_ptr = nullptr;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_BUFFER; }
     virtual std::string to_string() const override;
@@ -1111,7 +1117,8 @@ struct buffer_t : public object_t {
             size_t                  size,
             VkBufferUsageFlags      usage,
             VkSharingMode           sh_mode,
-            VkMemoryPropertyFlags   mem_flags);
+            VkMemoryPropertyFlags   mem_flags,
+            void *                  host_ptr = nullptr);
 
     void *map_data(VkDeviceSize offset, VkDeviceSize size);
     void unmap_data();
@@ -2279,23 +2286,33 @@ inline vc::ret_t device_t::init() {
 
     m_que_fams = find_queue_families(vk_phy_dev, m_surface ? m_surface->vk_surface : nullptr);
     m_que_ids = { m_que_fams.graphics_id, m_que_fams.present_id };
-    std::vector<VkDeviceQueueCreateInfo> dev_ques;
-
-    float queue_prio = 1.0f;
-    for (auto id : m_que_ids)
-        dev_ques.push_back({
+    std::vector<float> queue_prio(m_que_fams.max_graphics_queue_cnt, 1.0f);
+    std::vector<VkDeviceQueueCreateInfo> dev_ques = {
+        VkDeviceQueueCreateInfo {
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             .pNext = nullptr,
             .flags = 0,
-            .queueFamilyIndex = (uint32_t)id,
+            .queueFamilyIndex = (uint32_t)m_que_fams.graphics_id,
+            .queueCount = m_que_fams.max_graphics_queue_cnt,
+            .pQueuePriorities = queue_prio.data()
+        },
+        VkDeviceQueueCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .queueFamilyIndex = (uint32_t)m_que_fams.present_id,
             .queueCount = 1,
-            .pQueuePriorities = &queue_prio
-        });
+            .pQueuePriorities = queue_prio.data() /* only one and gpu_queue_cnt at least 1 so ok */
+        }
+    };
 
     VkPhysicalDeviceFeatures dev_feat{};
     vkGetPhysicalDeviceFeatures(vk_phy_dev, &dev_feat);
 
-    std::vector<const char*> dev_exts = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    std::vector<const char*> dev_exts = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME
+    };
     std::vector<const char*> dev_layers = { "VK_LAYER_KHRONOS_validation" };
     dev_feat.samplerAnisotropy = VK_TRUE;
 
@@ -2314,7 +2331,10 @@ inline vc::ret_t device_t::init() {
 
     VK_ASSERT(vkCreateDevice(vk_phy_dev, &dev_info, NULL, &vk_dev));
 
-    vkGetDeviceQueue(vk_dev, m_que_fams.graphics_id, 0, &vk_graphics_que);
+    vk_graphics_que.resize(m_que_fams.max_graphics_queue_cnt);
+    for (uint32_t i = 0; i < m_que_fams.max_graphics_queue_cnt; i++) {
+        vkGetDeviceQueue(vk_dev, m_que_fams.graphics_id, i, &vk_graphics_que[i]);
+    }
     vkGetDeviceQueue(vk_dev, m_que_fams.present_id, 0, &vk_present_que);
 
     DBG("Created Vulkan Logical Device %p", this);
@@ -3155,15 +3175,15 @@ inline void cmdbuff_t::dispatch_compute(uint32_t x, uint32_t y, uint32_t z) {
     vkCmdDispatch(vk_buff, x, y, z);
 }
 
-void cmdbuff_t::set_event(ref_t<event_t> event, VkPipelineStageFlags stage) {
+inline void cmdbuff_t::set_event(ref_t<event_t> event, VkPipelineStageFlags stage) {
     vkCmdSetEvent(vk_buff, event->vk_event, stage);
 }
 
-void cmdbuff_t::reset_event(ref_t<event_t> event, VkPipelineStageFlags stage) {
+inline void cmdbuff_t::reset_event(ref_t<event_t> event, VkPipelineStageFlags stage) {
     vkCmdResetEvent(vk_buff, event->vk_event, stage);
 }
 
-void cmdbuff_t::wait_events(const std::vector<ref_t<event_t>>& events,
+inline void cmdbuff_t::wait_events(const std::vector<ref_t<event_t>>& events,
         ref_t<dependency_info_t> dep_info)
 {
     std::vector<VkEvent> vk_events(events.size());
@@ -3177,7 +3197,7 @@ void cmdbuff_t::wait_events(const std::vector<ref_t<event_t>>& events,
             dep_info->img_mem_bars.size(), dep_info->img_mem_bars.data());
 }
 
-void cmdbuff_t::pipeline_barrier(ref_t<dependency_info_t> dep_info) {
+inline void cmdbuff_t::pipeline_barrier(ref_t<dependency_info_t> dep_info) {
     vkCmdPipelineBarrier(vk_buff,
             dep_info->m_src_stage_mask, dep_info->m_dst_stage_mask, dep_info->m_dep_flags,
             dep_info->mem_bars.size(), dep_info->mem_bars.data(),
@@ -3298,7 +3318,8 @@ inline ref_t<buffer_t> buffer_t::create(
         size_t size,
         VkBufferUsageFlags usage,
         VkSharingMode sh_mode,
-        VkMemoryPropertyFlags mem_flags)
+        VkMemoryPropertyFlags mem_flags,
+        void *host_ptr)
 {
     auto ret = std::make_shared<buffer_t>();
     ret->m_device = dev;
@@ -3306,6 +3327,7 @@ inline ref_t<buffer_t> buffer_t::create(
     ret->m_usage_flags = usage;
     ret->m_sharing_mode = sh_mode;
     ret->m_memory_flags = mem_flags;
+    ret->m_host_ptr = host_ptr;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -3327,9 +3349,17 @@ inline vc::ret_t buffer_t::init() {
     VkMemoryRequirements mem_req;
     vkGetBufferMemoryRequirements(m_device->vk_dev, vk_buff, &mem_req);
 
-    VkMemoryAllocateInfo alloc_info{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+    VkImportMemoryHostPointerInfoEXT host_ext {
+        .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
         .pNext = nullptr,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+                    /*VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT*/
+        .pHostPointer = m_host_ptr,
+    };
+    DBG("m_host_ptr: %p", m_host_ptr);
+    VkMemoryAllocateInfo alloc_info {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = m_host_ptr ? &host_ext : nullptr,
         .allocationSize = mem_req.size,
         .memoryTypeIndex = find_memory_type(m_device, mem_req.memoryTypeBits, m_memory_flags)
     };
@@ -4140,7 +4170,8 @@ inline void submit_cmdbuff(
         std::vector<std::pair<ref_t<sem_t>, VkPipelineStageFlagBits>> wait_sems,
         ref_t<cmdbuff_t> cbuff,
         ref_t<fence_t> fence,
-        std::vector<ref_t<sem_t>> sig_sems)
+        std::vector<ref_t<sem_t>> sig_sems,
+        uint32_t queue_id)
 {
     std::vector<VkPipelineStageFlags> vk_wait_stages;
     std::vector<VkSemaphore> vk_wait_sems;
@@ -4165,7 +4196,9 @@ inline void submit_cmdbuff(
         .pSignalSemaphores = vk_sig_sems.size() == 0 ? nullptr : vk_sig_sems.data(),
     };
 
-    VK_ASSERT(vkQueueSubmit(cbuff->m_cmdpool->m_device->vk_graphics_que, 1, &submit_info,
+    if (queue_id > cbuff->m_cmdpool->m_device->vk_graphics_que.size())
+        throw vku::except_t("Invalid queue index");
+    VK_ASSERT(vkQueueSubmit(cbuff->m_cmdpool->m_device->vk_graphics_que[queue_id], 1, &submit_info,
             fence == nullptr ? nullptr : fence->vk_fence));
 }
 
@@ -4907,6 +4940,30 @@ inline std::string to_string(VkDependencyFlagBits flags) {
     return ret + "]";
 }
 
+inline std::string to_string(VkQueueFlagBits flags) {
+    std::string ret = "[";
+    if (flags & VK_QUEUE_GRAPHICS_BIT)
+        ret += "VK_QUEUE_GRAPHICS_BIT, ";
+    if (flags & VK_QUEUE_COMPUTE_BIT)
+        ret += "VK_QUEUE_COMPUTE_BIT, ";
+    if (flags & VK_QUEUE_TRANSFER_BIT)
+        ret += "VK_QUEUE_TRANSFER_BIT, ";
+    if (flags & VK_QUEUE_SPARSE_BINDING_BIT)
+        ret += "VK_QUEUE_SPARSE_BINDING_BIT, ";
+    if (flags & VK_QUEUE_PROTECTED_BIT)
+        ret += "VK_QUEUE_PROTECTED_BIT, ";
+    if (flags & VK_QUEUE_VIDEO_DECODE_BIT_KHR)
+        ret += "VK_QUEUE_VIDEO_DECODE_BIT_KHR, ";
+    if (flags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR)
+        ret += "VK_QUEUE_VIDEO_ENCODE_BIT_KHR, ";
+    if (flags & VK_QUEUE_OPTICAL_FLOW_BIT_NV)
+        ret += "VK_QUEUE_OPTICAL_FLOW_BIT_NV, ";
+    if (flags & VK_QUEUE_DATA_GRAPH_BIT_ARM)
+        ret += "VK_QUEUE_DATA_GRAPH_BIT_ARM, ";
+    return ret + "]";
+}
+
+
 
 /* TODO: this needs to be implemented in a newer version of vulkan, tested and as such */
 // inline std::string to_string(VkPipelineStageFlagBits2 flags) {
@@ -5321,9 +5378,16 @@ inline gpu_family_ids_t find_queue_families(VkPhysicalDevice dev,
     std::vector<VkQueueFamilyProperties> queue_families(cnt);
     vkGetPhysicalDeviceQueueFamilyProperties(dev, &cnt, queue_families.data());
 
+    ret.max_graphics_queue_cnt = 0;
     for (int i = 0; auto qf : queue_families) {
-        if ((qf.queueFlags & VK_QUEUE_GRAPHICS_BIT) && (qf.queueFlags & VK_QUEUE_COMPUTE_BIT))
-            ret.graphics_id = i;
+        DBG("Family[%d]: queueCount: %d flags: %s",
+                i, qf.queueCount, vku::to_string((VkQueueFlagBits)qf.queueFlags).c_str());
+        if ((qf.queueFlags & VK_QUEUE_GRAPHICS_BIT) && (qf.queueFlags & VK_QUEUE_COMPUTE_BIT)) {
+            if (qf.queueCount > ret.max_graphics_queue_cnt) {
+                ret.graphics_id = i;
+                ret.max_graphics_queue_cnt = qf.queueCount;
+            }
+        }
         VkBool32 res = 0;
         if (surface)
             vkGetPhysicalDeviceSurfaceSupportKHR(dev, i, surface, &res);
