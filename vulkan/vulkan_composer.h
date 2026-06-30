@@ -767,6 +767,11 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, pipeline_barrier,
             vku::ref_t<vku::dependency_info_t>);
 
+    // /* vkc::buffer_t
+    // ----------------------------------------------------------------------------------------- */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::buffer_t, map_data, VkDeviceSize, VkDeviceSize);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::buffer_t, unmap_data);
+
     // /* vkc::cpu_buffer_t
     // ----------------------------------------------------------------------------------------- */
     VC_REGISTER_MEMBER_FUNCTION(vs, vkc::cpu_buffer_t, data);
@@ -781,6 +786,20 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::event_t, get_status);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::event_t, set_event);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::event_t, reset_event);
+
+    // /* vku::desc_set_initializer_t::buff_binding_t
+    // ----------------------------------------------------------------------------------------- */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::desc_set_initializer_t::buff_binding_t, set_buff,
+            vku::ref_t<vku::buffer_t>, size_t, size_t);
+
+    // /* vku::desc_set_initializer_t::sampl_binding_t
+    // ----------------------------------------------------------------------------------------- */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::desc_set_initializer_t::sampl_binding_t, set_view,
+            vku::ref_t<vku::img_view_t>);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::desc_set_initializer_t::sampl_binding_t, set_sampler,
+            vku::ref_t<vku::img_sampl_t>);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::desc_set_initializer_t::sampl_binding_t, set_layout,
+            vc::bm_t<VkImageLayout>);
 
     /* Done objects
     ----------------------------------------------------------------------------------------- */
@@ -1097,16 +1116,23 @@ inline int register_meta(vc::virt_state_t *vs) {
     );
     ASSERT_FN(ret);
 
-
     ret = add_named_builder_callback(vs,
         "vku::desc_set_initializer_t::sampl_binding_t",
         [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
             -> co::task<vc::ref_t<vc::object_t>>
         {
-            auto view = co_await resolve_obj<vku::img_view_t>(vs, node["m_view"]);
-            auto sampler = co_await resolve_obj<vku::img_sampl_t>(vs, node["m_sampler"]);
+            auto view = node["m_view"].is_null()
+                    ? nullptr
+                    : co_await resolve_obj<vku::img_view_t>(vs, node["m_view"]);
+            auto sampler = node["m_sampler"].is_null()
+                    ? nullptr
+                    : co_await resolve_obj<vku::img_sampl_t>(vs, node["m_sampler"]);
+            auto layout = node["m_layout"].is_null()
+                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                    : vc::get_enum_val<VkImageLayout>(node["m_layout"]);
             auto desc = co_await resolve_obj<vku::binding_t>(vs, node["m_desc"]);
-            auto obj = vku::desc_set_initializer_t::sampl_binding_t::create(desc->bd, view, sampler);
+            auto obj = vku::desc_set_initializer_t::sampl_binding_t::create(
+                    desc->bd, view, sampler, layout);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -1118,9 +1144,17 @@ inline int register_meta(vc::virt_state_t *vs) {
         [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
             -> co::task<vc::ref_t<vc::object_t>>
         {
-            auto buff = co_await resolve_obj<vku::buffer_t>(vs, node["m_buffer"]);
+            auto buff = node["m_buffer"].is_null()
+                    ? nullptr
+                    : co_await resolve_obj<vku::buffer_t>(vs, node["m_buffer"]);
+            auto offset = node["m_offset"].is_null()
+                    ? 0
+                    : co_await resolve_int(vs, node["m_offset"]);
+            auto size = node["m_size"].is_null()
+                    ? 0
+                    : co_await resolve_int(vs, node["m_size"]);
             auto desc = co_await resolve_obj<vku::binding_t>(vs, node["m_desc"]);
-            auto obj = vku::desc_set_initializer_t::buff_binding_t::create(desc->bd, buff);
+            auto obj = vku::desc_set_initializer_t::buff_binding_t::create(desc->bd, buff, offset, size);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }

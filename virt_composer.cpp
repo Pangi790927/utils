@@ -923,6 +923,26 @@ static fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
     else if (lua_istable(L, index)) {
         ; /* we continue bellow */
     }
+    else if (lua_islightuserdata(L, index)) {
+        /* TODO: I don't find it ok that an object needs a name to be included in the object
+        building mechanism, as such we may need a way to resolve it
+        OPTIONS: - make two build_object one that depends on yaml and one that depends on lua
+                 - swithc to only-lua */
+        auto vs = luaw_get_virt_state(L);
+        auto obj = (vc::object_t *)lua_touserdata(L, index);
+        std::string name;
+        if (has(vs->object_to_name, obj))
+            name = vs->object_to_name[obj];
+        else {
+            name = new_anon_name(vs);
+            vs->name_to_object[name] = obj;
+            vs->object_to_name[obj] = name;
+        }
+        fkyaml::node ret(fkyaml::node_type::STRING);
+        ret.as_str() = name;
+        ret.add_tag_name("!ref");
+        return ret;
+    }
     else {
         luaw_push_error(L, std::format("Unknown conversion from type: {} to yaml object",
                 lua_typename(L, lua_type(L, index))));

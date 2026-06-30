@@ -1120,7 +1120,7 @@ struct buffer_t : public object_t {
             VkMemoryPropertyFlags   mem_flags,
             void *                  host_ptr = nullptr);
 
-    void *map_data(VkDeviceSize offset, VkDeviceSize size);
+    void *map_data(VkDeviceSize offset = 0, VkDeviceSize size = 0);
     void unmap_data();
 
 private:
@@ -1575,8 +1575,6 @@ struct desc_set_initializer_t : public object_t {
     struct buff_binding_t : public binding_desc_t {
         VkDescriptorBufferInfo  desc_buff_info;
 
-        ref_t<buffer_t>         m_buffer;
-
         virtual VkWriteDescriptorSet get_write() const override;
         virtual object_type_e type_id() const override { return VKU_TYPE_BUFFER_BINDING; }
         virtual std::string to_string() const override;
@@ -1584,17 +1582,19 @@ struct desc_set_initializer_t : public object_t {
         static  object_type_e type_id_static() { return VKU_TYPE_BUFFER_BINDING; }
         static ref_t<buff_binding_t> create(
                 VkDescriptorSetLayoutBinding    desc,
-                ref_t<buffer_t>                 buff);
+                ref_t<buffer_t>                 buff = nullptr,
+                size_t                          offset = 0,
+                size_t                          size = 0);
+
+        void set_buff(ref_t<buffer_t> buff, size_t size, size_t offset);
 
     private:
-        virtual vc::ret_t init() override;
+        virtual vc::ret_t init() override { return VK_SUCCESS; }
+        virtual vc::ret_t uninit() override { return VK_SUCCESS; }
     };
 
     struct sampl_binding_t : public binding_desc_t {
         VkDescriptorImageInfo   imag_info;
-
-        ref_t<img_view_t>       m_view;
-        ref_t<img_sampl_t>      m_sampler;
 
         virtual VkWriteDescriptorSet get_write() const override;
         virtual object_type_e type_id() const override { return VKU_TYPE_SAMPLER_BINDING; }
@@ -1603,11 +1603,17 @@ struct desc_set_initializer_t : public object_t {
         static  object_type_e type_id_static() { return VKU_TYPE_SAMPLER_BINDING; }
         static ref_t<sampl_binding_t> create(
                 VkDescriptorSetLayoutBinding    desc,
-                ref_t<img_view_t>               view,
-                ref_t<img_sampl_t>              sampl);
+                ref_t<img_view_t>               view = nullptr,
+                ref_t<img_sampl_t>              sampl = nullptr,
+                VkImageLayout                   layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        void set_view(ref_t<img_view_t> sampl);
+        void set_sampler(ref_t<img_sampl_t> view);
+        void set_layout(VkImageLayout layout);
 
     private:
-        virtual vc::ret_t init() override;
+        virtual vc::ret_t init() override { return VK_SUCCESS; }
+        virtual vc::ret_t uninit() override { return VK_SUCCESS; }
     };
 
     virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET_INITIALIZER; }
@@ -3352,8 +3358,7 @@ inline vc::ret_t buffer_t::init() {
     VkImportMemoryHostPointerInfoEXT host_ext {
         .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
         .pNext = nullptr,
-        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
-                    /*VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT*/
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_MAPPED_FOREIGN_MEMORY_BIT_EXT,
         .pHostPointer = m_host_ptr,
     };
     DBG("m_host_ptr: %p", m_host_ptr);
@@ -3392,7 +3397,7 @@ inline void *buffer_t::map_data(VkDeviceSize offset, VkDeviceSize size) {
         DBG("Memory is already mapped!");
         throw vku::except_t(VK_ERROR_UNKNOWN);
     }
-    VK_ASSERT(vkMapMemory(m_device->vk_dev, vk_mem, offset, size, 0, &m_map_ptr));
+    VK_ASSERT(vkMapMemory(m_device->vk_dev, vk_mem, offset, size ? size : m_size, 0, &m_map_ptr));
     return m_map_ptr;
 }
 
@@ -3972,30 +3977,37 @@ inline std::string pipeline_layout_t::to_string() const {
 
 inline ref_t<desc_set_initializer_t::buff_binding_t> desc_set_initializer_t::buff_binding_t::create(
         VkDescriptorSetLayoutBinding desc,
-        ref_t<buffer_t> buff)
+        ref_t<buffer_t> buff,
+        size_t off,
+        size_t sz)
 {
     using bd_t = desc_set_initializer_t::buff_binding_t;
     ref_t<bd_t> ret = std::make_shared<bd_t>();
     ret->m_desc = desc;
-    ret->m_buffer = buff;
+    ret->set_buff(buff, off, sz);
     VK_ASSERT(ret->init());
     return ret;
 }
 
-inline std::string desc_set_initializer_t::buff_binding_t::to_string() const {
-    return std::format("vku::desc_set_initializer_t::buff_binding_t[{}]: m_desc={} m_buffer={}",
-            (void*)this, vulkan_utils::to_string(m_desc), (void*)m_buffer.get());
+inline void desc_set_initializer_t::buff_binding_t::set_buff(ref_t<buffer_t> buff,
+        uint64_t size, uint64_t offset)
+{
+    desc_buff_info.offset = offset;
+    if (buff) {
+        desc_buff_info.buffer = buff->vk_buff;
+        desc_buff_info.range = size ? size : buff->m_size;
+    }
+    else if (size) {
+        desc_buff_info.range = size;
+    }
 }
 
-inline vc::ret_t desc_set_initializer_t::buff_binding_t::init() {
-    if (m_buffer) {
-        desc_buff_info = VkDescriptorBufferInfo {
-            .buffer = m_buffer->vk_buff,
-            .offset = 0,
-            .range = m_buffer->m_size
-        };
-    }
-    return VK_SUCCESS;
+
+inline std::string desc_set_initializer_t::buff_binding_t::to_string() const {
+    return std::format("vku::desc_set_initializer_t::buff_binding_t[{}]: m_desc={} "
+            "buff = {} range = {} offset = {}",
+            (void*)this, vulkan_utils::to_string(m_desc),
+            (void*)desc_buff_info.buffer, desc_buff_info.range, desc_buff_info.offset);
 }
 
 inline VkWriteDescriptorSet desc_set_initializer_t::buff_binding_t::get_write() const {
@@ -4019,32 +4031,36 @@ inline VkWriteDescriptorSet desc_set_initializer_t::buff_binding_t::get_write() 
 inline ref_t<desc_set_initializer_t::sampl_binding_t> desc_set_initializer_t::sampl_binding_t::create(
         VkDescriptorSetLayoutBinding desc,
         ref_t<img_view_t> view,
-        ref_t<img_sampl_t> sampl)
+        ref_t<img_sampl_t> sampl,
+        VkImageLayout img_layout)
 {
     using sb_t = desc_set_initializer_t::sampl_binding_t;
     ref_t<sb_t> ret = std::make_shared<sb_t>();
     ret->m_desc = desc;
-    ret->m_view = view;
-    ret->m_sampler = sampl;
+    ret->set_view(view);
+    ret->set_sampler(sampl);
+    ret->set_layout(img_layout);
     VK_ASSERT(ret->init()); /* init does nothing */
     return ret;
 }
 
-inline std::string desc_set_initializer_t::sampl_binding_t::to_string() const {
-    return std::format("vku::desc_set_initializer_t::sampl_binding_t[{}]: m_desc={} m_view={} "
-            "m_sampler={}",
-            (void*)this, vulkan_utils::to_string(m_desc), (void*)m_view.get(), (void*)m_sampler.get());
+inline void desc_set_initializer_t::sampl_binding_t::set_view(ref_t<img_view_t> view) {
+    imag_info.imageView = view ? view->vk_view : nullptr;
 }
 
-inline vc::ret_t desc_set_initializer_t::sampl_binding_t::init() {
-    if (m_view && m_sampler) {
-        imag_info = VkDescriptorImageInfo {
-            .sampler = m_sampler->vk_sampler,
-            .imageView = m_view->vk_view,
-            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        };
-    }
-    return VK_SUCCESS;
+inline void desc_set_initializer_t::sampl_binding_t::set_sampler(ref_t<img_sampl_t> sampl) {
+    imag_info.sampler = sampl ? sampl->vk_sampler : nullptr;
+}
+
+inline void desc_set_initializer_t::sampl_binding_t::set_layout(VkImageLayout img_layout) {
+    imag_info.imageLayout = img_layout;
+}
+
+inline std::string desc_set_initializer_t::sampl_binding_t::to_string() const {
+    return std::format("vku::desc_set_initializer_t::sampl_binding_t[{}]: m_desc={} "
+            "view={} sampler={} layout={}",
+            (void*)this, vulkan_utils::to_string(m_desc),
+            (void*)imag_info.imageView, (void*)imag_info.sampler, (uint32_t)imag_info.imageLayout);
 }
 
 inline VkWriteDescriptorSet desc_set_initializer_t::sampl_binding_t::get_write() const {
