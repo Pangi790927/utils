@@ -72,6 +72,10 @@ window:
   m_name: "Window Name Goes Here"
 inst:
   m_type: vku::instance_t
+  m_app_name: "Vulkan Composer Test"
+  m_engine_name: "Vulkan Composer Engine"
+  m_extensions: ["VK_EXT_debug_utils", "VK_EXT_external_memory_host"]
+  m_layers: ["VK_LAYER_KHRONOS_validation"]
 surf:
   m_type: vku::surface_t
   m_window: !ref window

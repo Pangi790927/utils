@@ -51,8 +51,8 @@ public:
         auto ret = std::dynamic_pointer_cast<T>(shared_this());
         if (!ret)
             throw std::runtime_error{
-                    std::format("Tried to build a reference of invalid type {} to {}",
-                    demangle(typeid(this).name()), demangle<T>())};
+                    std::format("Tried to build a reference of invalid type {}[{}] to {}",
+                    demangle(typeid(this).name()), type_id().name(), demangle<T>())};
         return ret;
     }
 

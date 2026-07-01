@@ -953,8 +953,9 @@ static fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
     int array_len;
 
     /* AFAIK only arrays have a rawlen */
-    if ((array_len = lua_rawlen(L, index)) != 0)
+    if ((array_len = lua_rawlen(L, index)) != 0) {
         array_detected = true;
+    }
 
     /* Assuming that lua_next is continuous for arrays (next(t, k) -> k+1), we must do two things:
     First check if the first key is in the array, if not, than this table also has dict keys, else
@@ -962,7 +963,7 @@ static fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
     lua_pushnil(L);
     if (lua_next(L, index) != 0) {
         if ((lua_type(L, -2) != LUA_TNUMBER || lua_tointeger(L, -2) < 1 ||
-                lua_tointeger(L, -2) >= array_len))
+                lua_tointeger(L, -2) > array_len))
         {
             dict_detected = true;
         }

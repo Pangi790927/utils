@@ -63,7 +63,7 @@
 do {                                                                                               \
     VkResult vk_err = VkResult(fn_call);                                                           \
     if (vk_err != VK_SUCCESS) {                                                                    \
-        DBG("Failed vk assert: [%s: %d]", vk_err_cstr(vk_err), vk_err);                            \
+        DBG("Failed vk assert: [%s: %d] %s", vk_err_cstr(vk_err), vk_err, #fn_call);               \
         throw vulkan_utils::except_t(vk_err);                                                      \
     }                                                                                              \
 } while (false);
@@ -1586,7 +1586,7 @@ struct desc_set_initializer_t : public object_t {
                 size_t                          offset = 0,
                 size_t                          size = 0);
 
-        void set_buff(ref_t<buffer_t> buff, size_t size, size_t offset);
+        void set_buffer(ref_t<buffer_t> buff, size_t size, size_t offset);
 
     private:
         virtual vc::ret_t init() override { return VK_SUCCESS; }
@@ -3339,7 +3339,7 @@ inline ref_t<buffer_t> buffer_t::create(
 }
 
 inline vc::ret_t buffer_t::init() {
-    VkBufferCreateInfo buff_info{
+    VkBufferCreateInfo buff_info {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
@@ -3352,24 +3352,57 @@ inline vc::ret_t buffer_t::init() {
 
     VK_ASSERT(vkCreateBuffer(m_device->vk_dev, &buff_info, nullptr, &vk_buff));
 
-    VkMemoryRequirements mem_req;
-    vkGetBufferMemoryRequirements(m_device->vk_dev, vk_buff, &mem_req);
+    if (m_host_ptr) {
+        /* TODO: figure out if this stuff can actually work */
+        DBG("m_host_ptr: %p size %ld", m_host_ptr, m_size);
 
-    VkImportMemoryHostPointerInfoEXT host_ext {
-        .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
-        .pNext = nullptr,
-        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_MAPPED_FOREIGN_MEMORY_BIT_EXT,
-        .pHostPointer = m_host_ptr,
-    };
-    DBG("m_host_ptr: %p", m_host_ptr);
-    VkMemoryAllocateInfo alloc_info {
-        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-        .pNext = m_host_ptr ? &host_ext : nullptr,
-        .allocationSize = mem_req.size,
-        .memoryTypeIndex = find_memory_type(m_device, mem_req.memoryTypeBits, m_memory_flags)
-    };
+        auto vkGetMemoryHostPointerPropertiesEXT =
+                (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(
+                        m_device->vk_dev, "vkGetMemoryHostPointerPropertiesEXT");
 
-    VK_ASSERT(vkAllocateMemory(m_device->vk_dev, &alloc_info, nullptr, &vk_mem));
+        VkMemoryHostPointerPropertiesEXT ptr_props {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT,
+            .pNext = nullptr,
+            .memoryTypeBits = 1,
+        };
+        VK_ASSERT(vkGetMemoryHostPointerPropertiesEXT(m_device->vk_dev,
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+                m_host_ptr,
+                &ptr_props))
+
+        // VkMemoryRequirements mem_req;
+        // vkGetBufferMemoryRequirements(m_device->vk_dev, vk_buff, &mem_req);
+
+        VkImportMemoryHostPointerInfoEXT host_ext {
+            .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
+            .pNext = nullptr,
+            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+            .pHostPointer = m_host_ptr,
+        };
+        VkMemoryAllocateInfo alloc_info {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = &host_ext,
+            .allocationSize = m_size,
+            .memoryTypeIndex = find_memory_type(m_device, ptr_props.memoryTypeBits, m_memory_flags)
+        };
+
+        DBG("Will 'alloc' memory for: %p", m_host_ptr);
+        VK_ASSERT(vkAllocateMemory(m_device->vk_dev, &alloc_info, nullptr, &vk_mem));
+    }
+    else {
+        VkMemoryRequirements mem_req;
+        vkGetBufferMemoryRequirements(m_device->vk_dev, vk_buff, &mem_req);
+
+        VkMemoryAllocateInfo alloc_info {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = nullptr,
+            .allocationSize = mem_req.size,
+            .memoryTypeIndex = find_memory_type(m_device, mem_req.memoryTypeBits, m_memory_flags)
+        };        
+
+        VK_ASSERT(vkAllocateMemory(m_device->vk_dev, &alloc_info, nullptr, &vk_mem));
+    }
+    
     VK_ASSERT(vkBindBufferMemory(m_device->vk_dev, vk_buff, vk_mem, 0));
     DBG("Created Buffer %p", this);
     return VK_SUCCESS;
@@ -3984,12 +4017,12 @@ inline ref_t<desc_set_initializer_t::buff_binding_t> desc_set_initializer_t::buf
     using bd_t = desc_set_initializer_t::buff_binding_t;
     ref_t<bd_t> ret = std::make_shared<bd_t>();
     ret->m_desc = desc;
-    ret->set_buff(buff, off, sz);
+    ret->set_buffer(buff, off, sz);
     VK_ASSERT(ret->init());
     return ret;
 }
 
-inline void desc_set_initializer_t::buff_binding_t::set_buff(ref_t<buffer_t> buff,
+inline void desc_set_initializer_t::buff_binding_t::set_buffer(ref_t<buffer_t> buff,
         uint64_t size, uint64_t offset)
 {
     desc_buff_info.offset = offset;
@@ -4026,7 +4059,6 @@ inline VkWriteDescriptorSet desc_set_initializer_t::buff_binding_t::get_write() 
 
     return desc_write;
 }
-
 
 inline ref_t<desc_set_initializer_t::sampl_binding_t> desc_set_initializer_t::sampl_binding_t::create(
         VkDescriptorSetLayoutBinding desc,
@@ -5869,13 +5901,16 @@ inline uint32_t find_memory_type(ref_t<device_t> dev,
     VkPhysicalDeviceMemoryProperties mem_props;
     vkGetPhysicalDeviceMemoryProperties(dev->vk_phy_dev, &mem_props);
 
+    int to_ret = -1;
     for (uint32_t i = 0; i < mem_props.memoryTypeCount; i++) {
         if (type_filter & (1 << i) && 
                 (mem_props.memoryTypes[i].propertyFlags & properties) == properties)
         {
-            return i;
+            to_ret = i;
         }
     }
+    if (to_ret > 0)
+        return to_ret;
 
     DBG("Couldn't find suitable memory type");
     throw vku::except_t(VK_ERROR_UNKNOWN);

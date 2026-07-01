@@ -789,7 +789,7 @@ inline int register_meta(vc::virt_state_t *vs) {
 
     // /* vku::desc_set_initializer_t::buff_binding_t
     // ----------------------------------------------------------------------------------------- */
-    VC_REGISTER_MEMBER_FUNCTION(vs, vku::desc_set_initializer_t::buff_binding_t, set_buff,
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::desc_set_initializer_t::buff_binding_t, set_buffer,
             vku::ref_t<vku::buffer_t>, size_t, size_t);
 
     // /* vku::desc_set_initializer_t::sampl_binding_t
