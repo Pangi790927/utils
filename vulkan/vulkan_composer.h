@@ -215,6 +215,12 @@ extern inline std::unordered_map<std::string, VkResult>
 extern inline std::unordered_map<std::string, VkBufferUsageFlagBits>
         vk_buffer_usage_flag_bits_from_str;
 
+extern inline std::unordered_map<std::string, VkImageUsageFlagBits>
+        vk_image_usage_flag_bits_from_str;
+
+extern inline std::unordered_map<std::string, VkImageTiling>
+        vk_image_tiling_from_str;
+
 extern inline std::unordered_map<std::string, VkSharingMode>
         vk_sharing_mode_from_str;
 
@@ -277,6 +283,8 @@ extern inline std::unordered_map<std::string, VkFenceCreateFlagBits>
 
 template <> inline VkResult get_enum_val<VkResult>(fkyaml::node &n);
 template <> inline VkBufferUsageFlagBits get_enum_val<VkBufferUsageFlagBits>(fkyaml::node &n);
+template <> inline VkImageUsageFlagBits get_enum_val<VkImageUsageFlagBits>(fkyaml::node &n);
+template <> inline VkImageTiling get_enum_val<VkImageTiling>(fkyaml::node &n);
 template <> inline VkSharingMode get_enum_val<VkSharingMode>(fkyaml::node &n);
 template <> inline VkMemoryPropertyFlagBits get_enum_val<VkMemoryPropertyFlagBits>(fkyaml::node &n);
 template <> inline VkPrimitiveTopology get_enum_val<VkPrimitiveTopology>(fkyaml::node &n);
@@ -679,6 +687,15 @@ inline int register_meta(vc::virt_state_t *vs) {
                              std::vector<vc::ref_t<vku::sem_t>>,
                              uint32_t
         >},
+        {"submit_cmdbuff_tl", vc::luaw_function_wrapper<
+                /* FN:    */ vku::submit_cmdbuff_tl,
+                /* PARAMS:*/ std::vector<std::tuple<vc::ref_t<vku::sem_t>,
+                                    vc::bm_t<VkPipelineStageFlagBits>, uint64_t>>,
+                             vc::ref_t<vku::cmdbuff_t>,
+                             vc::ref_t<vku::fence_t>,
+                             std::vector<std::tuple<vc::ref_t<vku::sem_t>, uint64_t>>,
+                             uint32_t
+        >},
         {"present", vc::luaw_function_wrapper<
                 /* FN:    */ vku::present,
                 /* PARAMS:*/ vc::ref_t<vku::swapchain_t>,
@@ -688,6 +705,13 @@ inline int register_meta(vc::virt_state_t *vs) {
         {"wait_fences", vc::luaw_function_wrapper<
                 /* FN:    */ vku::wait_fences,
                 /* PARAMS:*/ std::vector<vc::ref_t<vku::fence_t>>,
+                             bool,
+                             uint64_t
+        >},
+        {"wait_semaphores", vc::luaw_function_wrapper<
+                /* FN:    */ vku::wait_semaphores,
+                /* PARAMS:*/ std::vector<vc::ref_t<vku::sem_t>>,
+                             std::vector<uint64_t>,
                              bool,
                              uint64_t
         >},
@@ -740,7 +764,8 @@ inline int register_meta(vc::virt_state_t *vs) {
     // ----------------------------------------------------------------------------------------- */
 
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, begin, vc::bm_t<VkCommandBufferUsageFlagBits>);
-    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, begin_rpass, vku::ref_t<vku::framebuffs_t>, uint32_t);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, begin_rpass,
+            vku::ref_t<vku::framebuffs_t>, uint32_t);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_vert_buffs,
             uint32_t, std::vector<std::pair<vku::ref_t<vku::buffer_t>, VkDeviceSize>>);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_desc_set,
@@ -754,7 +779,8 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, end);
     vc::luaw_register_member_function<vku::cmdbuff_t, &vku::cmdbuff_t::end>(vs, "end_begin");
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, reset);
-    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_compute, vku::ref_t<vku::compute_pipeline_t>);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_compute,
+            vku::ref_t<vku::compute_pipeline_t>);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, dispatch_compute, uint32_t, uint32_t, uint32_t);
 
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, set_event, vku::ref_t<vku::event_t>,
@@ -780,6 +806,11 @@ inline int register_meta(vc::virt_state_t *vs) {
     // /* vku::fence_t
     // ----------------------------------------------------------------------------------------- */
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::fence_t, get_status);
+
+    // /* vku::fence_t
+    // ----------------------------------------------------------------------------------------- */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::sem_t, get_counter);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::sem_t, signal, uint64_t);
 
     // /* vku::event_t
     // ----------------------------------------------------------------------------------------- */
@@ -920,69 +951,91 @@ inline int register_meta(vc::virt_state_t *vs) {
                     ? 0
                     : vc::get_enum_val<VkDependencyFlagBits>(node["m_dep_flags"]);
             std::vector<VkMemoryBarrier> mem_bars;
-            for (auto& subnode : node["m_mem_bars"]) {
-                VkMemoryBarrier bar {
-                    .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-                    .pNext = nullptr,
-                    .srcAccessMask = vc::get_enum_val<VkAccessFlagBits>(subnode["m_src_access_mask"]),
-                    .dstAccessMask = vc::get_enum_val<VkAccessFlagBits>(subnode["m_dst_access_mask"]),
-                };
-                mem_bars.push_back(bar);
+            if (!node["m_mem_bars"].is_null()) {
+                if (!node["m_mem_bars"].is_sequence())
+                    throw vc::except_t("m_mem_bars must be an array");
+                for (auto& subnode : node["m_mem_bars"]) {
+                    VkMemoryBarrier bar {
+                        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                        .pNext = nullptr,
+                        .srcAccessMask = vc::get_enum_val<VkAccessFlagBits>(
+                                subnode["m_src_access_mask"]),
+                        .dstAccessMask = vc::get_enum_val<VkAccessFlagBits>(
+                                subnode["m_dst_access_mask"]),
+                    };
+                    mem_bars.push_back(bar);
+                }
             }
             std::vector<VkBufferMemoryBarrier> buff_mem_bars;
-            for (auto& subnode : node["m_buff_mem_bars"]) {
-                auto buff = co_await resolve_obj<vku::buffer_t>(vs, subnode["m_buffer"]);
-                VkBufferMemoryBarrier bar {
-                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-                    .pNext = nullptr,
-                    .srcAccessMask = vc::get_enum_val<VkAccessFlagBits>(subnode["m_src_access_mask"]),
-                    .dstAccessMask = vc::get_enum_val<VkAccessFlagBits>(subnode["m_dst_access_mask"]),
-                    .srcQueueFamilyIndex = subnode["m_src_queue_family_index"].is_null()
-                            ? VK_QUEUE_FAMILY_IGNORED
-                            : (uint32_t)co_await resolve_int(vs, subnode["m_src_queue_family_index"]),
-                    .dstQueueFamilyIndex = subnode["m_dst_queue_family_index"].is_null()
-                            ? VK_QUEUE_FAMILY_IGNORED
-                            : (uint32_t)co_await resolve_int(vs, subnode["m_dst_queue_family_index"]),
-                    .buffer = buff->vk_buff,
-                    .offset = subnode["m_offset"].is_null()
-                            ? 0
-                            : (VkDeviceSize)co_await resolve_int(vs, subnode["m_offset"]),
-                    .size = subnode["m_size"].is_null()
-                            ? buff->m_size
-                            : (VkDeviceSize)co_await resolve_int(vs, subnode["m_size"]),
-                };
-                buff_mem_bars.push_back(bar);
+            if (!node["m_buff_mem_bars"].is_null()) {
+                if (!node["m_buff_mem_bars"].is_sequence())
+                    throw vc::except_t("m_buff_mem_bars must be an array");
+                for (auto& subnode : node["m_buff_mem_bars"]) {
+                    auto buff = co_await resolve_obj<vku::buffer_t>(vs, subnode["m_buffer"]);
+                    VkBufferMemoryBarrier bar {
+                        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                        .pNext = nullptr,
+                        .srcAccessMask = vc::get_enum_val<VkAccessFlagBits>(
+                                subnode["m_src_access_mask"]),
+                        .dstAccessMask = vc::get_enum_val<VkAccessFlagBits>(
+                                subnode["m_dst_access_mask"]),
+                        .srcQueueFamilyIndex = subnode["m_src_queue_family_index"].is_null()
+                                ? VK_QUEUE_FAMILY_IGNORED
+                                : (uint32_t)co_await resolve_int(vs,
+                                        subnode["m_src_queue_family_index"]),
+                        .dstQueueFamilyIndex = subnode["m_dst_queue_family_index"].is_null()
+                                ? VK_QUEUE_FAMILY_IGNORED
+                                : (uint32_t)co_await resolve_int(vs,
+                                        subnode["m_dst_queue_family_index"]),
+                        .buffer = buff->vk_buff,
+                        .offset = subnode["m_offset"].is_null()
+                                ? 0
+                                : (VkDeviceSize)co_await resolve_int(vs, subnode["m_offset"]),
+                        .size = subnode["m_size"].is_null()
+                                ? buff->m_size
+                                : (VkDeviceSize)co_await resolve_int(vs, subnode["m_size"]),
+                    };
+                    buff_mem_bars.push_back(bar);
+                }
             }
             std::vector<VkImageMemoryBarrier> img_mem_bars;
-            for (auto& subnode : node["m_img_mem_bars"]) {
-                auto img = co_await resolve_obj<vku::image_t>(vs, subnode["m_image"]);
-                auto img_subrange = subnode["m_subrange"].is_null()
-                        ? VkImageSubresourceRange {
-                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                            .baseMipLevel = 0,
-                            .levelCount = 1,
-                            .baseArrayLayer = 0,
-                            .layerCount = 1,
-                        }
-                        : (co_await resolve_obj<vku::image_subresource_range_t>(
-                                vs, subnode["m_subrange"]))->m_img_subrange;
-                VkImageMemoryBarrier bar {
-                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                    .pNext = nullptr,
-                    .srcAccessMask = vc::get_enum_val<VkAccessFlagBits>(subnode["src_access_mask"]),
-                    .dstAccessMask = vc::get_enum_val<VkAccessFlagBits>(subnode["dst_access_mask"]),
-                    .oldLayout = vc::get_enum_val<VkImageLayout>(subnode["m_old_layout"]),
-                    .newLayout = vc::get_enum_val<VkImageLayout>(subnode["m_new_layout"]),
-                    .srcQueueFamilyIndex = subnode["m_src_queue_family_index"].is_null()
-                            ? VK_QUEUE_FAMILY_IGNORED
-                            : (uint32_t)co_await resolve_int(vs, subnode["m_src_queue_family_index"]),
-                    .dstQueueFamilyIndex = subnode["m_dst_queue_family_index"].is_null()
-                            ? VK_QUEUE_FAMILY_IGNORED
-                            : (uint32_t)co_await resolve_int(vs, subnode["m_dst_queue_family_index"]),
-                    .image = img->vk_img,
-                    .subresourceRange = img_subrange,
-                };
-                img_mem_bars.push_back(bar);
+            if (!node["m_img_mem_bars"].is_null()) {
+                if (!node["m_img_mem_bars"].is_sequence())
+                    throw vc::except_t("m_img_mem_bars must be an array");
+                for (auto& subnode : node["m_img_mem_bars"]) {
+                    auto img = co_await resolve_obj<vku::image_t>(vs, subnode["m_image"]);
+                    auto img_subrange = subnode["m_subrange"].is_null()
+                            ? VkImageSubresourceRange {
+                                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                .baseMipLevel = 0,
+                                .levelCount = 1,
+                                .baseArrayLayer = 0,
+                                .layerCount = 1,
+                            }
+                            : (co_await resolve_obj<vku::image_subresource_range_t>(
+                                    vs, subnode["m_subrange"]))->m_img_subrange;
+                    VkImageMemoryBarrier bar {
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                        .pNext = nullptr,
+                        .srcAccessMask = vc::get_enum_val<VkAccessFlagBits>(
+                                subnode["src_access_mask"]),
+                        .dstAccessMask = vc::get_enum_val<VkAccessFlagBits>(
+                                subnode["dst_access_mask"]),
+                        .oldLayout = vc::get_enum_val<VkImageLayout>(subnode["m_old_layout"]),
+                        .newLayout = vc::get_enum_val<VkImageLayout>(subnode["m_new_layout"]),
+                        .srcQueueFamilyIndex = subnode["m_src_queue_family_index"].is_null()
+                                ? VK_QUEUE_FAMILY_IGNORED
+                                : (uint32_t)co_await resolve_int(vs,
+                                        subnode["m_src_queue_family_index"]),
+                        .dstQueueFamilyIndex = subnode["m_dst_queue_family_index"].is_null()
+                                ? VK_QUEUE_FAMILY_IGNORED
+                                : (uint32_t)co_await resolve_int(vs,
+                                        subnode["m_dst_queue_family_index"]),
+                        .image = img->vk_img,
+                        .subresourceRange = img_subrange,
+                    };
+                    img_mem_bars.push_back(bar);
+                }
             }
             auto obj = vku::dependency_info_t::create(src_stage, dst_stage,
                     mem_bars, buff_mem_bars, img_mem_bars, dep_flags);
@@ -1011,8 +1064,27 @@ inline int register_meta(vc::virt_state_t *vs) {
         [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
             -> co::task<vc::ref_t<vc::object_t>>
         {
-            (void)node;
-            auto obj = vku::instance_t::create();
+            std::string name = node["m_app_name"].is_null()
+                    ? "vku::app_name_placeholder"
+                    : co_await resolve_str(vs, node["m_app_name"]);
+            std::string engine_name = node["m_engine_name"].is_null()
+                    ? "vku::engine_name_placeholder"
+                    : co_await resolve_str(vs, node["m_engine_name"]);
+            std::vector<std::string> exts;
+            if (!node["m_extensions"].is_null()) {
+                if (!node["m_extensions"].is_sequence())
+                    throw vc::except_t("m_extensions must be an array");
+                for (auto &ext : node["m_extensions"])
+                    exts.push_back(ext.as_str());
+            }
+            std::vector<std::string> layers;
+            if (!node["m_layers"].is_null()) {
+                if (!node["m_layers"].is_sequence())
+                    throw vc::except_t("m_layers must be an array");
+                for (auto &layer : node["m_layers"])
+                    layers.push_back(layer.as_str());
+            }
+            auto obj = vku::instance_t::create(name, engine_name, exts, layers);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -1053,11 +1125,30 @@ inline int register_meta(vc::virt_state_t *vs) {
         [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
             -> co::task<vc::ref_t<vc::object_t>>
         {
-            auto cp = co_await resolve_obj<vku::cmdpool_t>(vs, node["m_cmdpool"]);
-            auto path = co_await resolve_str(vs, node["m_path"]);
-            auto obj = vku::load_image(cp, path);
-            mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
-            co_return obj->to_related<vku::object_t>();
+            if (node["m_path"].is_null()) {
+                auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+                auto w = co_await resolve_int(vs, node["m_width"]);
+                auto h = co_await resolve_int(vs, node["m_height"]);
+                auto fmt = node["m_format"].is_null()
+                        ? VK_FORMAT_R8G8B8A8_SRGB
+                        : vc::get_enum_val<VkFormat>(node["m_format"]);
+                auto usage = node["m_usage"].is_null()
+                        ? VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
+                        : vc::get_enum_val<VkImageUsageFlagBits>(node["m_usage"]);
+                auto tiling = node["m_tiling"].is_null()
+                        ? VK_IMAGE_TILING_OPTIMAL
+                        : vc::get_enum_val<VkImageTiling>(node["m_tiling"]);
+                auto obj = vku::image_t::create(dev, w, h, fmt, usage, tiling);
+                mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+                co_return obj->to_related<vku::object_t>();
+            }
+            else {
+                auto cp = co_await resolve_obj<vku::cmdpool_t>(vs, node["m_cmdpool"]);
+                auto path = co_await resolve_str(vs, node["m_path"]);
+                auto obj = vku::load_image(cp, path);
+                mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
+                co_return obj->to_related<vku::object_t>();
+            }
         }
     );
     ASSERT_FN(ret);
@@ -1082,7 +1173,14 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto inst = co_await resolve_obj<vku::instance_t>(vs, node["m_instance"]);
             auto surf = co_await resolve_obj<vku::surface_t>(vs, node["m_surface"]);
-            auto obj = vku::device_t::create(inst, surf);
+            std::vector<std::string> exts;
+            if (!node["m_extensions"].is_null()) {
+                if (!node["m_extensions"].is_sequence())
+                    throw vc::except_t("m_extensions must be an array");
+                for (auto &ext : node["m_extensions"])
+                    exts.push_back(ext.as_str());
+            }
+            auto obj = vku::device_t::create(inst, surf, exts);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -1167,9 +1265,15 @@ inline int register_meta(vc::virt_state_t *vs) {
             -> co::task<vc::ref_t<vc::object_t>>
         {
             std::vector<vku::ref_t<vku::desc_set_initializer_t::binding_desc_t>> bindings;
-            for (auto& subnode : node["m_descriptors"])
-                bindings.push_back(
-                        co_await resolve_obj<vku::desc_set_initializer_t::binding_desc_t>(vs, subnode));
+            if (!node["m_descriptors"].is_null()) {
+                if (!node["m_descriptors"].is_sequence())
+                    throw vc::except_t("m_descriptors must be an array");
+                for (auto& subnode : node["m_descriptors"]) {
+                    bindings.push_back(
+                            co_await resolve_obj<vku::desc_set_initializer_t::binding_desc_t>(vs,
+                                    subnode));
+                }
+            }
             auto obj = vku::desc_set_initializer_t::create(bindings);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
@@ -1203,8 +1307,12 @@ inline int register_meta(vc::virt_state_t *vs) {
             auto h = co_await resolve_int(vs, node["m_height"]);
             auto rp = co_await resolve_obj<vku::renderpass_t>(vs, node["m_renderpass"]);
             std::vector<vku::ref_t<vku::shader_t>> shaders;
-            for (auto& sh : node["m_shaders"])
-                shaders.push_back(co_await resolve_obj<vku::shader_t>(vs, sh));
+            if (!node["m_shaders"].is_null()) {
+                if (!node["m_shaders"].is_sequence())
+                    throw vc::except_t("m_shaders must be an array");
+                for (auto& sh : node["m_shaders"])
+                    shaders.push_back(co_await resolve_obj<vku::shader_t>(vs, sh));
+            }
             auto topol = vc::get_enum_val<VkPrimitiveTopology>(node["m_topology"]);
             auto indesc = co_await resolve_obj<vkc::vertex_input_desc_t>(vs, node["m_input_desc"]);
             auto pl = co_await resolve_obj<vku::pipeline_layout_t>(vs, node["m_pipeline_layout"]);
@@ -1816,6 +1924,73 @@ inline std::unordered_map<std::string, VkResult> vk_result_from_str = {
 
 template <> inline VkResult get_enum_val<VkResult>(fkyaml::node &n) {
     return get_enum_val(n, vk_result_from_str);
+}
+
+inline std::unordered_map<std::string, VkImageTiling> vk_image_tiling_from_str = {
+    {"VK_IMAGE_TILING_OPTIMAL", VK_IMAGE_TILING_OPTIMAL},
+    {"VK_IMAGE_TILING_LINEAR", VK_IMAGE_TILING_LINEAR},
+    {"VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT", VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT},
+};
+
+template <> inline VkImageTiling get_enum_val<VkImageTiling>(fkyaml::node &n) {
+    return get_enum_val(n, vk_image_tiling_from_str);
+}
+
+inline std::unordered_map<std::string, VkImageUsageFlagBits> vk_image_usage_flag_bits_from_str = {
+    {"VK_IMAGE_USAGE_TRANSFER_SRC_BIT",
+            VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+    {"VK_IMAGE_USAGE_TRANSFER_DST_BIT",
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+    {"VK_IMAGE_USAGE_SAMPLED_BIT",
+            VK_IMAGE_USAGE_SAMPLED_BIT},
+    {"VK_IMAGE_USAGE_STORAGE_BIT",
+            VK_IMAGE_USAGE_STORAGE_BIT},
+    {"VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT",
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT},
+    {"VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT",
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT},
+    {"VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT",
+            VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT},
+    {"VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT",
+            VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT},
+    {"VK_IMAGE_USAGE_HOST_TRANSFER_BIT",
+            VK_IMAGE_USAGE_HOST_TRANSFER_BIT},
+    {"VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR",
+            VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR},
+    {"VK_IMAGE_USAGE_VIDEO_DECODE_SRC_BIT_KHR",
+            VK_IMAGE_USAGE_VIDEO_DECODE_SRC_BIT_KHR},
+    {"VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR",
+            VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR},
+    {"VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT",
+            VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT},
+    {"VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR",
+            VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR},
+    {"VK_IMAGE_USAGE_VIDEO_ENCODE_DST_BIT_KHR",
+            VK_IMAGE_USAGE_VIDEO_ENCODE_DST_BIT_KHR},
+    {"VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR",
+            VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR},
+    {"VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR",
+            VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR},
+    {"VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT",
+            VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT},
+    {"VK_IMAGE_USAGE_INVOCATION_MASK_BIT_HUAWEI",
+            VK_IMAGE_USAGE_INVOCATION_MASK_BIT_HUAWEI},
+    {"VK_IMAGE_USAGE_SAMPLE_WEIGHT_BIT_QCOM",
+            VK_IMAGE_USAGE_SAMPLE_WEIGHT_BIT_QCOM},
+    {"VK_IMAGE_USAGE_SAMPLE_BLOCK_MATCH_BIT_QCOM",
+            VK_IMAGE_USAGE_SAMPLE_BLOCK_MATCH_BIT_QCOM},
+    {"VK_IMAGE_USAGE_TENSOR_ALIASING_BIT_ARM",
+            VK_IMAGE_USAGE_TENSOR_ALIASING_BIT_ARM},
+    {"VK_IMAGE_USAGE_TILE_MEMORY_BIT_QCOM",
+            VK_IMAGE_USAGE_TILE_MEMORY_BIT_QCOM},
+    {"VK_IMAGE_USAGE_VIDEO_ENCODE_QUANTIZATION_DELTA_MAP_BIT_KHR",
+            VK_IMAGE_USAGE_VIDEO_ENCODE_QUANTIZATION_DELTA_MAP_BIT_KHR},
+    {"VK_IMAGE_USAGE_VIDEO_ENCODE_EMPHASIS_MAP_BIT_KHR",
+            VK_IMAGE_USAGE_VIDEO_ENCODE_EMPHASIS_MAP_BIT_KHR},
+};
+
+template <> inline VkImageUsageFlagBits get_enum_val<VkImageUsageFlagBits>(fkyaml::node &n) {
+    return get_enum_val(n, vk_image_usage_flag_bits_from_str);
 }
 
 inline std::unordered_map<std::string, VkBufferUsageFlagBits> vk_buffer_usage_flag_bits_from_str = {

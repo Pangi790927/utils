@@ -196,6 +196,11 @@ std::shared_ptr<virt_state_t> create_state() {
 
     ASSERT_RET(nullptr, CHK_PTR(vs->L = luaw_init(vs.get())));
     ASSERT_RET(nullptr, add_lua_tab_funcs(vs.get(), {{"create_object", internal_create_object}}));
+
+    VC_REGISTER_MEMBER_OBJECT(vs.get(), integer_t, value);
+    VC_REGISTER_MEMBER_OBJECT(vs.get(), float_t, value);
+    VC_REGISTER_MEMBER_OBJECT(vs.get(), string_t, value);
+
     return vs;
 }
 

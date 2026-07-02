@@ -1966,6 +1966,9 @@ inline T get_enum_val(fkyaml::node &node, const std::unordered_map<std::string, 
                     demangle<T>(), node.as_str()));
         return enum_vals.find(node.as_str())->second;
     }
+    if (node.is_integer()) {
+        return T(node.as_int());
+    }
     if (node.is_sequence()) {
         lua_Integer ret = 0;
         for (auto &val : node.as_seq())

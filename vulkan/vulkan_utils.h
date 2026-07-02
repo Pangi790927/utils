@@ -175,6 +175,9 @@ inline vc::ret_t uninit();
 inline void wait_fences(std::vector<ref_t<fence_t>> fences, bool wait_all, uint64_t timeout);
 inline void reset_fences(std::vector<ref_t<fence_t>> fences);
 
+void wait_semaphores(const std::vector<ref_t<sem_t>> &sems, const std::vector<uint64_t> vals,
+            bool wait_any = false, uint64_t timeo_ns = -1);
+
 inline void aquire_next_img(
         ref_t<swapchain_t> swc,
         ref_t<sem_t> sem,
@@ -185,6 +188,14 @@ inline void submit_cmdbuff(
         ref_t<cmdbuff_t> cbuff,
         ref_t<fence_t> fence,
         std::vector<ref_t<sem_t>> sig_sems,
+        uint32_t queue_id = 0);
+
+/* specialization for timeline semaphore extension */
+inline void submit_cmdbuff_tl(
+        std::vector<std::tuple<ref_t<sem_t>, VkPipelineStageFlagBits, uint64_t>> wait_sems,
+        ref_t<cmdbuff_t> cbuff,
+        ref_t<fence_t> fence,
+        std::vector<std::tuple<ref_t<sem_t>, uint64_t>> sig_sems,
         uint32_t queue_id = 0);
 
 inline void present(
@@ -560,21 +571,23 @@ private:
  * - Add options for selecting the phys dev
  */
 struct device_t : public object_t {
-    VkPhysicalDevice        vk_phy_dev;
-    VkDevice                vk_dev;
-    std::vector<VkQueue>    vk_graphics_que;
-    VkQueue                 vk_present_que;
-    std::set<int>           m_que_ids;
-    gpu_family_ids_t        m_que_fams;
+    VkPhysicalDevice            vk_phy_dev;
+    VkDevice                    vk_dev;
+    std::vector<VkQueue>        vk_graphics_que;
+    VkQueue                     vk_present_que;
+    std::set<int>               m_que_ids;
+    gpu_family_ids_t            m_que_fams;
 
-    ref_t<instance_t>       m_instance;
-    ref_t<surface_t>        m_surface;
+    ref_t<instance_t>           m_instance;
+    ref_t<surface_t>            m_surface;
+    std::vector<std::string>    m_extensions;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_DEVICE; }
     virtual std::string to_string() const override;
 
     static  object_type_e type_id_static() { return VKU_TYPE_DEVICE; }
-    static ref_t<device_t> create(ref_t<instance_t> inst, ref_t<surface_t> surf = nullptr);
+    static ref_t<device_t> create(ref_t<instance_t> inst, ref_t<surface_t> surf = nullptr,
+            std::vector<std::string> exts = {});
 
     uint32_t get_graphics_queue_cnt() { return vk_graphics_que.size(); }
 
@@ -991,9 +1004,8 @@ struct sem_t : public object_t {
 
     virtual std::string to_string() const override;
 
-    /* TODO: get_counter() -- this is for timeline semaphore */
-    /* TODO: static/global wait_semaphores({sems...}, {vals...}, wait_all) -- for timeline */
-    /* TODO: signal(value) -- for timeline, wait for value */
+    uint64_t get_counter();
+    void signal(uint64_t val);
 
 private:
     virtual vc::ret_t init() override;
@@ -1169,6 +1181,7 @@ struct image_t : public object_t {
     uint32_t            m_height;
     VkFormat            m_format;
     VkImageUsageFlags   m_usage;
+    VkImageTiling       m_tiling;
 
     virtual object_type_e type_id() const override { return VKU_TYPE_IMAGE; }
     virtual std::string to_string() const override;
@@ -1180,7 +1193,8 @@ struct image_t : public object_t {
             uint32_t            height,
             VkFormat            fmt,
             VkImageUsageFlags   usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT
-                                      | VK_IMAGE_USAGE_SAMPLED_BIT);
+                                      | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VkImageTiling       tiling = VK_IMAGE_TILING_OPTIMAL);
 
     /* if no command buffer is provided, one will be allocated from the command pool */
     void transition_layout(
@@ -1586,7 +1600,7 @@ struct desc_set_initializer_t : public object_t {
                 size_t                          offset = 0,
                 size_t                          size = 0);
 
-        void set_buffer(ref_t<buffer_t> buff, size_t size, size_t offset);
+        void set_buffer(ref_t<buffer_t> buff, size_t offset = 0, size_t size = 0);
 
     private:
         virtual vc::ret_t init() override { return VK_SUCCESS; }
@@ -1690,7 +1704,7 @@ inline spirv_t spirv_compile(vku_shader_stage_e vk_stage, const char *code);
 inline int spirv_save(const spirv_t& code, const char *filepath);
 
 inline uint32_t find_memory_type(ref_t<device_t> dev,
-        uint32_t type_filter, VkMemoryPropertyFlags properties);
+        uint32_t type_filter, VkMemoryPropertyFlags properties, size_t sz);
 
 /* IMPLEMENTATION:
 =================================================================================================
@@ -2251,10 +2265,13 @@ inline std::string surface_t::to_string() const {
 ================================================================================================= */
 
 /* TODO: device_t should only depend on instance, not on surface */
-inline ref_t<device_t> device_t::create(ref_t<instance_t> inst, ref_t<surface_t> surf) {
+inline ref_t<device_t> device_t::create(ref_t<instance_t> inst, ref_t<surface_t> surf,
+        std::vector<std::string> exts)
+{
     auto ret = std::make_shared<device_t>();
     ret->m_instance = inst;
     ret->m_surface = surf;
+    ret->m_extensions = exts;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -2317,14 +2334,67 @@ inline vc::ret_t device_t::init() {
 
     std::vector<const char*> dev_exts = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-        VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME
     };
+    for (auto &e : m_extensions)
+        dev_exts.push_back(e.c_str());
     std::vector<const char*> dev_layers = { "VK_LAYER_KHRONOS_validation" };
     dev_feat.samplerAnisotropy = VK_TRUE;
 
+    VkPhysicalDeviceVulkan12Features vk11_features {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+        .pNext = nullptr,
+        .samplerMirrorClampToEdge                           = true, //TODO: is there a reason not to
+        .drawIndirectCount                                  = true, //      make all of those true?
+        .storageBuffer8BitAccess                            = true,
+        .uniformAndStorageBuffer8BitAccess                  = true,
+        .storagePushConstant8                               = true,
+        .shaderBufferInt64Atomics                           = true,
+        .shaderSharedInt64Atomics                           = true,
+        .shaderFloat16                                      = true,
+        .shaderInt8                                         = true,
+        .descriptorIndexing                                 = true,
+        .shaderInputAttachmentArrayDynamicIndexing          = true,
+        .shaderUniformTexelBufferArrayDynamicIndexing       = true,
+        .shaderStorageTexelBufferArrayDynamicIndexing       = true,
+        .shaderUniformBufferArrayNonUniformIndexing         = true,
+        .shaderSampledImageArrayNonUniformIndexing          = true,
+        .shaderStorageBufferArrayNonUniformIndexing         = true,
+        .shaderStorageImageArrayNonUniformIndexing          = true,
+        .shaderInputAttachmentArrayNonUniformIndexing       = true,
+        .shaderUniformTexelBufferArrayNonUniformIndexing    = true,
+        .shaderStorageTexelBufferArrayNonUniformIndexing    = true,
+        .descriptorBindingUniformBufferUpdateAfterBind      = true,
+        .descriptorBindingSampledImageUpdateAfterBind       = true,
+        .descriptorBindingStorageImageUpdateAfterBind       = true,
+        .descriptorBindingStorageBufferUpdateAfterBind      = true,
+        .descriptorBindingUniformTexelBufferUpdateAfterBind = true,
+        .descriptorBindingStorageTexelBufferUpdateAfterBind = true,
+        .descriptorBindingUpdateUnusedWhilePending          = true,
+        .descriptorBindingPartiallyBound                    = true,
+        .descriptorBindingVariableDescriptorCount           = true,
+        .runtimeDescriptorArray                             = true,
+        .samplerFilterMinmax                                = true,
+        .scalarBlockLayout                                  = true,
+        .imagelessFramebuffer                               = true,
+        .uniformBufferStandardLayout                        = true,
+        .shaderSubgroupExtendedTypes                        = true,
+        .separateDepthStencilLayouts                        = true,
+        .hostQueryReset                                     = true,
+        .timelineSemaphore                                  = true,
+        .bufferDeviceAddress                                = true,
+        .bufferDeviceAddressCaptureReplay                   = true,
+        .bufferDeviceAddressMultiDevice                     = true,
+        .vulkanMemoryModel                                  = true,
+        .vulkanMemoryModelDeviceScope                       = true,
+        .vulkanMemoryModelAvailabilityVisibilityChains      = true,
+        .shaderOutputViewportIndex                          = true,
+        .shaderOutputLayer                                  = true,
+        .subgroupBroadcastDynamicId                         = true,
+    };
+
     VkDeviceCreateInfo dev_info {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pNext = nullptr,
+        .pNext = &vk11_features,
         .flags = 0,
         .queueCreateInfoCount = (uint32_t)dev_ques.size(),
         .pQueueCreateInfos = dev_ques.data(),
@@ -3117,6 +3187,9 @@ inline void cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
 inline void cmdbuff_t::bind_desc_set(VkPipelineBindPoint bind_point,
         ref_t<pipeline_layout_t> pl, ref_t<desc_set_t> desc_set)
 {
+    /* TODO: I should add ptr checks everywhere */
+    if (!pl || !desc_set)
+        throw except_t("Invalid param");
     DBGVVV("bind desc_set: %p with layout: %p bind_point: %d",
             desc_set->vk_desc_set, pl->vk_pipeline_layout, bind_point);
     vkCmdBindDescriptorSets(vk_buff, bind_point, pl->vk_pipeline_layout, 0, 1,
@@ -3249,6 +3322,24 @@ inline vc::ret_t sem_t::uninit() {
 inline std::string sem_t::to_string() const {
     return std::format("vku::sem_t[{}]: m_device={}", (void*)this, (void*)m_device.get());
 }
+
+inline uint64_t sem_t::get_counter() {
+    uint64_t ret;
+    VK_ASSERT(vkGetSemaphoreCounterValue(m_device->vk_dev, vk_sem, &ret));
+    return ret;
+}
+
+
+inline void sem_t::signal(uint64_t val) {
+    VkSemaphoreSignalInfo sig_info {
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO,
+        .pNext = nullptr,
+        .semaphore = vk_sem,
+        .value = val,
+    };
+    VK_ASSERT(vkSignalSemaphore(m_device->vk_dev, &sig_info));
+}
+
 
 /* event_t
 ================================================================================================= */
@@ -3383,7 +3474,7 @@ inline vc::ret_t buffer_t::init() {
             .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
             .pNext = &host_ext,
             .allocationSize = m_size,
-            .memoryTypeIndex = find_memory_type(m_device, ptr_props.memoryTypeBits, m_memory_flags)
+            .memoryTypeIndex = find_memory_type(m_device, ptr_props.memoryTypeBits, m_memory_flags, m_size)
         };
 
         DBG("Will 'alloc' memory for: %p", m_host_ptr);
@@ -3397,7 +3488,7 @@ inline vc::ret_t buffer_t::init() {
             .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
             .pNext = nullptr,
             .allocationSize = mem_req.size,
-            .memoryTypeIndex = find_memory_type(m_device, mem_req.memoryTypeBits, m_memory_flags)
+            .memoryTypeIndex = find_memory_type(m_device, mem_req.memoryTypeBits, m_memory_flags, mem_req.size)
         };        
 
         VK_ASSERT(vkAllocateMemory(m_device->vk_dev, &alloc_info, nullptr, &vk_mem));
@@ -3451,7 +3542,8 @@ inline ref_t<image_t> image_t::create(
         uint32_t width,
         uint32_t height,
         VkFormat fmt,
-        VkImageUsageFlags usage)
+        VkImageUsageFlags usage,
+        VkImageTiling tiling)
 {
     auto ret = std::make_shared<image_t>();
     ret->m_device = dev;
@@ -3459,6 +3551,7 @@ inline ref_t<image_t> image_t::create(
     ret->m_height = height;
     ret->m_format = fmt;
     ret->m_usage = usage;
+    ret->m_tiling = tiling;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -3478,7 +3571,7 @@ inline vc::ret_t image_t::init() {
         .mipLevels = 1,
         .arrayLayers = 1,
         .samples = VK_SAMPLE_COUNT_1_BIT,
-        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .tiling = m_tiling,
         .usage = m_usage,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = 0,
@@ -3497,7 +3590,7 @@ inline vc::ret_t image_t::init() {
         .pNext = nullptr,
         .allocationSize = mem_req.size,
         .memoryTypeIndex = find_memory_type(m_device, mem_req.memoryTypeBits,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mem_req.size),
     };
 
     VK_ASSERT(vkAllocateMemory(m_device->vk_dev, &alloc_info, nullptr, &vk_img_mem));
@@ -4023,7 +4116,7 @@ inline ref_t<desc_set_initializer_t::buff_binding_t> desc_set_initializer_t::buf
 }
 
 inline void desc_set_initializer_t::buff_binding_t::set_buffer(ref_t<buffer_t> buff,
-        uint64_t size, uint64_t offset)
+        uint64_t offset, uint64_t size)
 {
     desc_buff_info.offset = offset;
     if (buff) {
@@ -4207,6 +4300,28 @@ inline void reset_fences(std::vector<ref_t<fence_t>> fences) {
             vk_fences.size(), vk_fences.data()));
 }
 
+inline void wait_semaphores(const std::vector<ref_t<sem_t>> &sems, const std::vector<uint64_t> vals,
+        bool wait_any, uint64_t timeo_ns)
+{
+    if (sems.empty())
+        return ;
+    if (sems.size() != vals.size())
+        throw vku::except_t("sems.size() must be equal to vals.size()");
+    std::vector<VkSemaphore> vk_sems(sems.size());
+    for (size_t i = 0; i < sems.size(); i++)
+        vk_sems[i] = sems[i]->vk_sem;
+    VkSemaphoreWaitInfo wait_info {
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+        .pNext = nullptr,
+        .flags = (uint32_t)(wait_any ? VK_SEMAPHORE_WAIT_ANY_BIT : 0),
+        .semaphoreCount = (uint32_t)sems.size(),
+        .pSemaphores = &vk_sems[0],
+        .pValues = &vals[0],
+    };
+    VK_ASSERT(vkWaitSemaphores(sems[0]->m_device->vk_dev, &wait_info, timeo_ns));
+}
+
+
 inline void aquire_next_img(ref_t<swapchain_t> swc, ref_t<sem_t> sem,
         uint32_t *img_idx)
 {
@@ -4235,6 +4350,54 @@ inline void submit_cmdbuff(
     VkSubmitInfo submit_info {
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .pNext = nullptr,
+        .waitSemaphoreCount = (uint32_t)vk_wait_sems.size(),
+        .pWaitSemaphores = vk_wait_sems.size() == 0 ? nullptr : vk_wait_sems.data(),
+        .pWaitDstStageMask = vk_wait_sems.size() == 0 ? nullptr : vk_wait_stages.data(),
+        .commandBufferCount = 1,
+        .pCommandBuffers = &cbuff->vk_buff,
+        .signalSemaphoreCount = (uint32_t)vk_sig_sems.size(),
+        .pSignalSemaphores = vk_sig_sems.size() == 0 ? nullptr : vk_sig_sems.data(),
+    };
+
+    if (queue_id > cbuff->m_cmdpool->m_device->vk_graphics_que.size())
+        throw vku::except_t("Invalid queue index");
+    VK_ASSERT(vkQueueSubmit(cbuff->m_cmdpool->m_device->vk_graphics_que[queue_id], 1, &submit_info,
+            fence == nullptr ? nullptr : fence->vk_fence));
+}
+
+inline void submit_cmdbuff_tl(
+        std::vector<std::tuple<ref_t<sem_t>, VkPipelineStageFlagBits, uint64_t>> wait_sems,
+        ref_t<cmdbuff_t> cbuff,
+        ref_t<fence_t> fence,
+        std::vector<std::tuple<ref_t<sem_t>, uint64_t>> sig_sems,
+        uint32_t queue_id)
+{
+    std::vector<VkPipelineStageFlags> vk_wait_stages;
+    std::vector<VkSemaphore> vk_wait_sems;
+    std::vector<VkSemaphore> vk_sig_sems;
+    std::vector<uint64_t> wait_vals;
+    std::vector<uint64_t> sig_vals;
+
+    for (auto [s, wait_stage, val] : wait_sems) {
+        vk_wait_stages.push_back((VkPipelineStageFlags)wait_stage);
+        vk_wait_sems.push_back(s->vk_sem);
+        wait_vals.push_back(val);
+    }
+    for (auto [s, val] : sig_sems) {
+        vk_sig_sems.push_back(s->vk_sem);
+        sig_vals.push_back(val);
+    }
+    VkTimelineSemaphoreSubmitInfo tl_info {
+        .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+        .pNext = nullptr,
+        .waitSemaphoreValueCount = (uint32_t)wait_vals.size(),
+        .pWaitSemaphoreValues = wait_vals.data(),
+        .signalSemaphoreValueCount = (uint32_t)sig_vals.size(),
+        .pSignalSemaphoreValues = sig_vals.data(),
+    };
+    VkSubmitInfo submit_info {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = &tl_info,
         .waitSemaphoreCount = (uint32_t)vk_wait_sems.size(),
         .pWaitSemaphores = vk_wait_sems.size() == 0 ? nullptr : vk_wait_sems.data(),
         .pWaitDstStageMask = vk_wait_sems.size() == 0 ? nullptr : vk_wait_stages.data(),
@@ -5896,15 +6059,16 @@ inline void spirv_uninit() {
 #endif /* VKU_HAS_NEW_GLSLANG */
 
 inline uint32_t find_memory_type(ref_t<device_t> dev,
-        uint32_t type_filter, VkMemoryPropertyFlags properties)
+        uint32_t type_filter, VkMemoryPropertyFlags properties, size_t sz)
 {
     VkPhysicalDeviceMemoryProperties mem_props;
     vkGetPhysicalDeviceMemoryProperties(dev->vk_phy_dev, &mem_props);
 
     int to_ret = -1;
     for (uint32_t i = 0; i < mem_props.memoryTypeCount; i++) {
-        if (type_filter & (1 << i) && 
-                (mem_props.memoryTypes[i].propertyFlags & properties) == properties)
+        if (type_filter & (1 << i)
+                && (mem_props.memoryTypes[i].propertyFlags & properties) == properties
+                && mem_props.memoryHeaps[mem_props.memoryTypes[i].heapIndex].size >= sz)
         {
             to_ret = i;
         }
