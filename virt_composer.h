@@ -288,22 +288,21 @@ struct bm_t {
 struct integer_t : public vc::object_t {
     int64_t value = 0;
 
-    static vc::object_type_e type_id_static() { return VC_TYPE_INTEGER; }
+    integer_t(vc::object_t::Private priv) : vc::object_t(priv) {}
+    virtual ~integer_t() {}
+
     static vc::ref_t<integer_t> create(int64_t value) {
-        auto ret = std::make_shared<integer_t>();
+        auto ret = std::make_shared<integer_t>(vc::object_t::Private{type_id_static()});
         ret->value = value;
         return ret;
     }
 
     virtual vc::object_type_e type_id() const override { return VC_TYPE_INTEGER; }
+    static vc::object_type_e type_id_static() { return VC_TYPE_INTEGER; }
 
     inline std::string to_string() const override {
         return std::format("vkc::integer[{}]: value={} ", (void*)this, value);
     }
-
-private:
-    virtual vc::ret_t init() override { return VC_ERROR_OK; }
-    virtual vc::ret_t uninit() override { return VC_ERROR_OK; }
 };
 
 /*!
@@ -329,22 +328,22 @@ private:
 struct float_t : public vc::object_t {
     double value = 0;
 
-    static vc::object_type_e type_id_static() { return VC_TYPE_FLOAT; }
+    float_t(vc::object_t::Private priv) : vc::object_t(priv) {}
+    virtual ~float_t() {}
+
     static vc::ref_t<float_t> create(double value) {
-        auto ret = std::make_shared<float_t>();
+        auto ret = std::make_shared<float_t>(vc::object_t::Private{type_id_static()});
         ret->value = value;
         return ret;
     }
 
     virtual vc::object_type_e type_id() const override { return VC_TYPE_FLOAT; }
+    static vc::object_type_e type_id_static() { return VC_TYPE_FLOAT; }
 
     inline std::string to_string() const override {
         return std::format("vkc::float[{}]: value={} ", (void*)this, value);
     }
 
-private:
-    virtual vc::ret_t init() override { return VC_ERROR_OK; }
-    virtual vc::ret_t uninit() override { return VC_ERROR_OK; }
 };
 
 /*!
@@ -367,22 +366,21 @@ private:
 struct string_t : public vc::object_t {
     std::string value;
 
-    static vc::object_type_e type_id_static() { return VC_TYPE_STRING; }
+    string_t(vc::object_t::Private priv) : vc::object_t(priv) {}
+    virtual ~string_t() {}
+
     static vc::ref_t<string_t> create(const std::string& value) {
-        auto ret = std::make_shared<string_t>();
+        auto ret = std::make_shared<string_t>(vc::object_t::Private{type_id_static()});
         ret->value = value;
         return ret;
     }
 
     virtual vc::object_type_e type_id() const override { return VC_TYPE_STRING; }
+    static vc::object_type_e type_id_static() { return VC_TYPE_STRING; }
 
     inline std::string to_string() const override {
         return std::format("vkc::string[{}]: value={} ", (void*)this, value);
     }
-
-private:
-    virtual vc::ret_t init() override { return VC_ERROR_OK; }
-    virtual vc::ret_t uninit() override { return VC_ERROR_OK; }
 };
 
 /* TODO: add `!lua` */
@@ -405,9 +403,12 @@ private:
 struct lua_script_t : public vc::object_t {
     std::string content;
 
+    lua_script_t(vc::object_t::Private priv) : vc::object_t(priv) {}
+    virtual ~lua_script_t() {}
+
     static vc::object_type_e type_id_static() { return VC_TYPE_LUA_SCRIPT; }
     static vc::ref_t<lua_script_t> create(std::string content) {
-        auto ret = std::make_shared<lua_script_t>();
+        auto ret = std::make_shared<lua_script_t>(vc::object_t::Private{type_id_static()});
         ret->content = content;
         return ret;
     }
@@ -417,10 +418,6 @@ struct lua_script_t : public vc::object_t {
     inline std::string to_string() const override {
         return std::format("vkc::lua_script[{}]: m_content=\n{}", (void*)this, content);
     }
-
-private:
-    virtual vc::ret_t init() override { return VC_ERROR_OK; }
-    virtual vc::ret_t uninit() override { return VC_ERROR_OK; }
 };
 
 /* Does this really have any irl usage? ANSW: YES! It holds (should hold) C lua callbacks */
@@ -449,9 +446,11 @@ struct lua_function_t : public vc::object_t {
     std::string m_name;
     std::string m_source;
 
-    static vc::object_type_e type_id_static() { return VC_TYPE_LUA_FUNCTION; }
+    lua_function_t(vc::object_t::Private priv) : vc::object_t(priv) {}
+    virtual ~lua_function_t() { uninit(); }
+
     static vc::ref_t<lua_function_t> create(std::string name, std::string source) {
-        auto ret = std::make_shared<lua_function_t>();
+        auto ret = std::make_shared<lua_function_t>(vc::object_t::Private{type_id_static()});
         ret->m_name = name;
         ret->m_source = source;
         if (ret->init() < 0)
@@ -461,6 +460,7 @@ struct lua_function_t : public vc::object_t {
     }
 
     virtual vc::object_type_e type_id() const override { return VC_TYPE_LUA_FUNCTION; }
+    static vc::object_type_e type_id_static() { return VC_TYPE_LUA_FUNCTION; }
 
     int call(lua_State *L) {
         if (!_fn) {
@@ -487,7 +487,7 @@ private:
     static std::map<std::string, void *> dll_handles;
     static std::map<std::string, std::function<int(lua_State *L)>> dll_funcs;
 
-    virtual vc::ret_t init() override {
+    vc::ret_t init() {
         if (m_source == "[INTERNAL]" && has(internal_funcs, m_name)) {
             _fn = internal_funcs[m_name];
             return VC_ERROR_OK;
@@ -497,7 +497,7 @@ private:
             return VC_ERROR_GENERIC;
         }
     }
-    virtual vc::ret_t uninit() override { return VC_ERROR_OK; }
+    vc::ret_t uninit() { return VC_ERROR_OK; }
 };
 
 inline std::map<std::string, std::function<int(lua_State *L)>>  lua_function_t::internal_funcs;

@@ -334,18 +334,17 @@ using vertex3d_t = vertex_p3n3c3t2_t;
 struct binding_t : public object_t {
     VkDescriptorSetLayoutBinding bd;
 
+    binding_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~binding_t() {}
+
     static vku::object_type_e type_id_static() { return VKU_TYPE_BINDING_DESC; }
     virtual vku::object_type_e type_id() const override { return VKU_TYPE_BINDING_DESC; }
 
     static vku::ref_t<binding_t> create(const VkDescriptorSetLayoutBinding& bd);
     inline std::string to_string() const override;
-
-private:
-    virtual vc::ret_t init() override { return VK_SUCCESS; }
-    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
 };
 
-struct dependency_info_t : public vku::object_t {
+struct dependency_info_t : public object_t {
     VkPipelineStageFlags m_src_stage_mask;
     VkPipelineStageFlags m_dst_stage_mask;
     VkDependencyFlags m_dep_flags;
@@ -353,6 +352,9 @@ struct dependency_info_t : public vku::object_t {
     std::vector<VkMemoryBarrier> mem_bars;
     std::vector<VkBufferMemoryBarrier> buff_mem_bars;
     std::vector<VkImageMemoryBarrier> img_mem_bars;
+
+    dependency_info_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~dependency_info_t() {}
 
     static vku::object_type_e type_id_static() { return VKU_TYPE_DEPENDENCY_INFO; }
     virtual vku::object_type_e type_id() const override { return VKU_TYPE_DEPENDENCY_INFO; }
@@ -364,9 +366,6 @@ struct dependency_info_t : public vku::object_t {
             const std::vector<VkBufferMemoryBarrier> &buff_mem_bars,
             const std::vector<VkImageMemoryBarrier> &img_mem_bars,
             VkDependencyFlags dep_flags = 0);
-
-    virtual vc::ret_t init() override { return VK_SUCCESS; }
-    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
 
     inline std::string to_string() const override;
 };
@@ -406,13 +405,13 @@ struct dependency_info_t : public vku::object_t {
 struct image_subresource_range_t : public object_t {
     VkImageSubresourceRange m_img_subrange;
 
+    image_subresource_range_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~image_subresource_range_t() {}
+
     static vku::object_type_e type_id_static() { return VKU_TYPE_IMAGE_SUBRESOURCE_RANGE; }
     virtual vku::object_type_e type_id() const override { return VKU_TYPE_IMAGE_SUBRESOURCE_RANGE; }
 
     static vku::ref_t<image_subresource_range_t> create(const VkImageSubresourceRange& img_subrange);
-
-    virtual vc::ret_t init() override { return VK_SUCCESS; }
-    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
 
     inline std::string to_string() const override;
 };
@@ -442,6 +441,9 @@ struct window_t : public object_t {
     int m_width;
     int m_height;
 
+    window_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~window_t() { uninit(); }
+
     static ref_t<window_t> create(int width = 800, int height = 600,
             std::string name = "vku::window_name_placeholder");
 
@@ -452,8 +454,8 @@ struct window_t : public object_t {
     GLFWwindow *get_window() const { return _window; }
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 
     GLFWwindow *_window = NULL;
 };
@@ -493,6 +495,9 @@ struct instance_t : public object_t {
     std::vector<std::string>    m_extensions;
     std::vector<std::string>    m_layers;
 
+    instance_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~instance_t() { uninit(); }
+
     virtual object_type_e type_id() const override { return VKU_TYPE_INSTANCE; }
     virtual std::string to_string() const override;
 
@@ -504,8 +509,8 @@ struct instance_t : public object_t {
             const std::vector<std::string>& layers = { "VK_LAYER_KHRONOS_validation" });
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -536,6 +541,9 @@ struct surface_t : public object_t {
     ref_t<window_t>     m_window;
     ref_t<instance_t>   m_instance;
 
+    surface_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~surface_t() { uninit(); }
+
     virtual object_type_e type_id() const override { return VKU_TYPE_SURFACE; }
     virtual std::string to_string() const override;
 
@@ -543,8 +551,8 @@ struct surface_t : public object_t {
     static ref_t<surface_t> create(ref_t<window_t> window, ref_t<instance_t> inst);
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -581,19 +589,24 @@ struct device_t : public object_t {
     ref_t<instance_t>           m_instance;
     ref_t<surface_t>            m_surface;
     std::vector<std::string>    m_extensions;
+    std::vector<std::string>    m_layers;
+
+    device_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~device_t() { uninit(); }
 
     virtual object_type_e type_id() const override { return VKU_TYPE_DEVICE; }
     virtual std::string to_string() const override;
 
     static  object_type_e type_id_static() { return VKU_TYPE_DEVICE; }
     static ref_t<device_t> create(ref_t<instance_t> inst, ref_t<surface_t> surf = nullptr,
-            std::vector<std::string> exts = {});
+            std::vector<std::string> exts = {},
+            std::vector<std::string> layers = {});
 
     uint32_t get_graphics_queue_cnt() { return vk_graphics_que.size(); }
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -634,14 +647,19 @@ struct swapchain_t : public object_t {
     ref_t<device_t>             m_device;
     ref_t<surface_t>            m_surface;
 
+    swapchain_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~swapchain_t() { uninit(); }
+
     virtual object_type_e type_id() const override { return VKU_TYPE_SWAPCHAIN; }
     virtual std::string to_string() const override;
 
     static  object_type_e type_id_static() { return VKU_TYPE_SWAPCHAIN; }
     static ref_t<swapchain_t> create(ref_t<device_t> dev, ref_t<surface_t> surf);
 
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
+
+    uint32_t img_count() { return vk_sc_images.size(); }
 };
 
 /*!
@@ -676,6 +694,9 @@ struct shader_t : public object_t {
     ref_t<device_t>     m_device;
     spirv_t             m_spirv;    /* TODO: maybe switch to vku::ref_t? */
 
+    shader_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~shader_t() { uninit(); }
+
     virtual object_type_e type_id() const override { return VKU_TYPE_SHADER; }
     virtual std::string to_string() const override;
 
@@ -688,8 +709,8 @@ struct shader_t : public object_t {
     static ref_t<shader_t> create(ref_t<device_t> dev, const char *path, vku_shader_stage_e type);
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -717,14 +738,17 @@ struct renderpass_t : public object_t {
 
     ref_t<swapchain_t>  m_swapchain;
 
+    renderpass_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~renderpass_t() { uninit(); }
+
     virtual object_type_e type_id() const override { return VKU_TYPE_RENDERPASS; }
     virtual std::string to_string() const override;
 
     static  object_type_e type_id_static() { return VKU_TYPE_RENDERPASS; }
     static ref_t<renderpass_t> create(ref_t<swapchain_t> swc);
 
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -770,10 +794,12 @@ struct pipeline_t : public object_t {
     vertex_input_desc_t             m_input_desc;
     ref_t<pipeline_layout_t>        m_pipeline_layout;
 
-    virtual object_type_e type_id() const override { return VKU_TYPE_PIPELINE; }
-    virtual std::string to_string() const override;
+    pipeline_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~pipeline_t() { uninit(); }
 
+    virtual object_type_e type_id() const override { return VKU_TYPE_PIPELINE; }
     static  object_type_e type_id_static() { return VKU_TYPE_PIPELINE; }
+
     static ref_t<pipeline_t> create(
             int                                 width,
             int                                 height,
@@ -782,9 +808,10 @@ struct pipeline_t : public object_t {
             VkPrimitiveTopology                 topology,
             vertex_input_desc_t                 input_desc,
             ref_t<pipeline_layout_t>            pipeline_layout);
+    virtual std::string to_string() const override;
 
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -814,18 +841,21 @@ struct compute_pipeline_t : public object_t {
     ref_t<shader_t>                 m_shader;
     ref_t<pipeline_layout_t>        m_pipeline_layout;
 
-    virtual object_type_e type_id() const override { return VKU_TYPE_COMPUTE_PIPELINE; }
-    virtual std::string to_string() const override;
+    compute_pipeline_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~compute_pipeline_t() { uninit(); }
 
+    virtual object_type_e type_id() const override { return VKU_TYPE_COMPUTE_PIPELINE; }
     static  object_type_e type_id_static() { return VKU_TYPE_COMPUTE_PIPELINE; }
+
     static ref_t<compute_pipeline_t> create(
             ref_t<device_t>                 dev,
             ref_t<shader_t>                 shader,
             ref_t<pipeline_layout_t>        pipeline_layout);
+    virtual std::string to_string() const override;
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -849,14 +879,17 @@ struct framebuffs_t : public object_t {
 
     ref_t<renderpass_t>         m_renderpass;
 
+    framebuffs_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~framebuffs_t() { uninit(); }
+
     virtual object_type_e type_id() const override { return VKU_TYPE_FRAMEBUFFERS; }
+    static  object_type_e type_id_static() { return VKU_TYPE_FRAMEBUFFERS; }
+
+    static ref_t<framebuffs_t> create(ref_t<renderpass_t> rp);
     virtual std::string to_string() const override;
 
-    static  object_type_e type_id_static() { return VKU_TYPE_FRAMEBUFFERS; }
-    static ref_t<framebuffs_t> create(ref_t<renderpass_t> rp);
-
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -883,15 +916,18 @@ struct cmdpool_t : public object_t {
 
     ref_t<device_t> m_device;
 
-    virtual object_type_e type_id() const override { return VKU_TYPE_COMMAND_POOL; }
-    virtual std::string to_string() const override;
+    cmdpool_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~cmdpool_t() { uninit(); }
 
+    virtual object_type_e type_id() const override { return VKU_TYPE_COMMAND_POOL; }
     static  object_type_e type_id_static() { return VKU_TYPE_COMMAND_POOL; }
+
+    virtual std::string to_string() const override;
     static ref_t<cmdpool_t> create(ref_t<device_t> dev);
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -936,11 +972,14 @@ struct cmdbuff_t : public object_t {
     ref_t<cmdpool_t>    m_cmdpool;
     bool                m_host_free;
 
-    virtual object_type_e type_id() const override { return VKU_TYPE_COMMAND_BUFFER; }
-    virtual std::string to_string() const override;
+    cmdbuff_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~cmdbuff_t() { uninit(); }
 
     static  object_type_e type_id_static() { return VKU_TYPE_COMMAND_BUFFER; }
+    virtual object_type_e type_id() const override { return VKU_TYPE_COMMAND_BUFFER; }
+
     static ref_t<cmdbuff_t> create(ref_t<cmdpool_t> cp, bool host_free = false);
+    virtual std::string to_string() const override;
 
     void begin(VkCommandBufferUsageFlags flags);
     void begin_rpass(ref_t<framebuffs_t> fbs, uint32_t img_idx);
@@ -966,8 +1005,8 @@ struct cmdbuff_t : public object_t {
     void pipeline_barrier(ref_t<dependency_info_t> dep_info);
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -996,6 +1035,9 @@ struct sem_t : public object_t {
     VkSemaphoreType m_sem_type;
     ref_t<device_t> m_device;
 
+    sem_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~sem_t() { uninit(); }
+
     virtual object_type_e type_id() const override { return VKU_TYPE_SEMAPHORE; }
     static object_type_e type_id_static() { return VKU_TYPE_SEMAPHORE; }
 
@@ -1008,14 +1050,17 @@ struct sem_t : public object_t {
     void signal(uint64_t val);
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 struct event_t : public object_t {
     VkEvent vk_event;
 
     ref_t<device_t> m_device;
+
+    event_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~event_t() { uninit(); }
 
     virtual object_type_e type_id() const override { return VKU_TYPE_EVENT; }
     static object_type_e type_id_static() { return VKU_TYPE_EVENT; }
@@ -1028,8 +1073,8 @@ struct event_t : public object_t {
     VkResult reset_event() { return vkResetEvent(m_device->vk_dev, vk_event); }
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -1059,19 +1104,22 @@ struct fence_t : public object_t {
     ref_t<device_t>     m_device;
     VkFenceCreateFlags  m_flags;
 
-    virtual object_type_e type_id() const override { return VKU_TYPE_FENCE; }
-    virtual std::string to_string() const override;
+    fence_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~fence_t() { uninit(); }
 
+    virtual object_type_e type_id() const override { return VKU_TYPE_FENCE; }
     static object_type_e type_id_static() { return VKU_TYPE_FENCE; }
+
     static ref_t<fence_t> create(ref_t<device_t> dev, VkFenceCreateFlags flags = 0);
+    virtual std::string to_string() const override;
 
     VkResult get_status() { return vkGetFenceStatus(m_device->vk_dev, vk_fence); }
 
     /* TODO: check (IF NEEDED) handle exports (fd or handle) */
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -1120,10 +1168,12 @@ struct buffer_t : public object_t {
     VkMemoryPropertyFlags   m_memory_flags;
     void *                  m_host_ptr = nullptr;
 
-    virtual object_type_e type_id() const override { return VKU_TYPE_BUFFER; }
-    virtual std::string to_string() const override;
+    buffer_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~buffer_t() { uninit(); }
 
+    virtual object_type_e type_id() const override { return VKU_TYPE_BUFFER; }
     static object_type_e type_id_static() { return VKU_TYPE_BUFFER; }
+
     static ref_t<buffer_t> create(
             ref_t<device_t>         dev,
             size_t                  size,
@@ -1131,13 +1181,14 @@ struct buffer_t : public object_t {
             VkSharingMode           sh_mode,
             VkMemoryPropertyFlags   mem_flags,
             void *                  host_ptr = nullptr);
+    virtual std::string to_string() const override;
 
     void *map_data(VkDeviceSize offset = 0, VkDeviceSize size = 0);
     void unmap_data();
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -1183,10 +1234,12 @@ struct image_t : public object_t {
     VkImageUsageFlags   m_usage;
     VkImageTiling       m_tiling;
 
-    virtual object_type_e type_id() const override { return VKU_TYPE_IMAGE; }
-    virtual std::string to_string() const override;
+    image_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~image_t() { uninit(); }
 
+    virtual object_type_e type_id() const override { return VKU_TYPE_IMAGE; }
     static object_type_e type_id_static() { return VKU_TYPE_IMAGE; }
+
     static ref_t<image_t> create(
             ref_t<device_t>     dev,
             uint32_t            width,
@@ -1195,6 +1248,7 @@ struct image_t : public object_t {
             VkImageUsageFlags   usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT
                                       | VK_IMAGE_USAGE_SAMPLED_BIT,
             VkImageTiling       tiling = VK_IMAGE_TILING_OPTIMAL);
+    virtual std::string to_string() const override;
 
     /* if no command buffer is provided, one will be allocated from the command pool */
     void transition_layout(
@@ -1211,8 +1265,8 @@ struct image_t : public object_t {
             ref_t<cmdbuff_t>    cbuff = nullptr);
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -1248,6 +1302,9 @@ struct img_view_t : public object_t {
     ref_t<image_t>      m_image;
     VkImageAspectFlags  m_aspect_mask;
 
+    img_view_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~img_view_t() { uninit(); }
+
     virtual object_type_e type_id() const override { return VKU_TYPE_IMAGE_VIEW; }
     virtual std::string to_string() const override;
 
@@ -1255,8 +1312,8 @@ struct img_view_t : public object_t {
     static ref_t<img_view_t> create(ref_t<image_t> img, VkImageAspectFlags aspect_mask);
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -1290,16 +1347,20 @@ struct img_sampl_t : public object_t {
     ref_t<device_t> m_device;
     VkFilter        m_filter;
 
+    img_sampl_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~img_sampl_t() { uninit(); }
+
     virtual object_type_e type_id() const override { return VKU_TYPE_IMAGE_SAMPLER; }
+    static object_type_e type_id_static() { return VKU_TYPE_IMAGE_SAMPLER; }
+
+    static ref_t<img_sampl_t> create(ref_t<device_t> dev, VkFilter filter = VK_FILTER_LINEAR);
     virtual std::string to_string() const override;
 
-    static object_type_e type_id_static() { return VKU_TYPE_IMAGE_SAMPLER; }
-    static ref_t<img_sampl_t> create(ref_t<device_t> dev, VkFilter filter = VK_FILTER_LINEAR);
     static VkDescriptorSetLayoutBinding get_desc_set(uint32_t binding, VkShaderStageFlags stage);
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -1332,18 +1393,21 @@ struct desc_pool_t : public object_t {
     ref_t<desc_set_initializer_t>   m_bindings_initer;
     uint32_t                        m_cnt;
 
-    virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_POOL; }
-    virtual std::string to_string() const override;
+    desc_pool_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~desc_pool_t() { uninit(); }
 
+    virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_POOL; }
     static  object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_POOL; }
+
     static ref_t<desc_pool_t> create(
             ref_t<device_t>                 dev,
             ref_t<desc_set_initializer_t>   bindings_initer,
             uint32_t                        cnt);
+    virtual std::string to_string() const override;
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -1393,18 +1457,21 @@ struct desc_set_t : public object_t {
     ref_t<desc_set_layout_t>        m_desc_set_layout;
     ref_t<desc_set_initializer_t>   m_bindings_initer;
 
-    virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET; }
-    virtual std::string to_string() const override;
+    desc_set_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~desc_set_t() { uninit(); }
 
+    virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET; }
     static object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET; }
+
     static ref_t<desc_set_t> create(
             ref_t<desc_pool_t>              dp,
             ref_t<desc_set_layout_t>        desc_set_layout,
             ref_t<desc_set_initializer_t>   bindings_initer);
+    virtual std::string to_string() const override;
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*! TODO: desc */
@@ -1414,16 +1481,19 @@ struct desc_set_layout_t : public object_t {
     ref_t<device_t>                 m_device;
     ref_t<desc_set_initializer_t>   m_bindings_initer;
 
+    desc_set_layout_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~desc_set_layout_t() { uninit(); }
+
     virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET_LAYOUT; }
     static object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET_LAYOUT; }
-    virtual std::string to_string() const override;
 
     static ref_t<desc_set_layout_t> create(
             ref_t<device_t> dev, ref_t<desc_set_initializer_t> bindings_initer);
+    virtual std::string to_string() const override;
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*! TODO: desc */
@@ -1432,15 +1502,18 @@ struct pipeline_layout_t : public object_t {
 
     ref_t<desc_set_layout_t>    m_desc_set_layout;
 
+    pipeline_layout_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~pipeline_layout_t() { uninit(); }
+
     virtual object_type_e type_id() const override { return VKU_TYPE_PIPELINE_LAYOUT; }
     static object_type_e type_id_static() { return VKU_TYPE_PIPELINE_LAYOUT; }
-    virtual std::string to_string() const override;
 
     static ref_t<pipeline_layout_t> create(ref_t<desc_set_layout_t> bindings_initer);
+    virtual std::string to_string() const override;
 
 private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    vc::ret_t init();
+    vc::ret_t uninit();
 };
 
 /*!
@@ -1578,16 +1651,17 @@ struct desc_set_initializer_t : public object_t {
     struct binding_desc_t : public object_t {
         VkDescriptorSetLayoutBinding m_desc;
 
+        binding_desc_t(object_t::Private priv) : object_t(priv) {}
         virtual ~binding_desc_t() {}
-        virtual VkWriteDescriptorSet get_write() const = 0;
 
-    private:
-        virtual vc::ret_t init() = 0;
-        virtual vc::ret_t uninit() override { return VK_SUCCESS; };
+        virtual VkWriteDescriptorSet get_write() const = 0;
     };
 
     struct buff_binding_t : public binding_desc_t {
         VkDescriptorBufferInfo  desc_buff_info;
+
+        buff_binding_t(object_t::Private priv) : binding_desc_t(priv) {}
+        virtual ~buff_binding_t() {}
 
         virtual VkWriteDescriptorSet get_write() const override;
         virtual object_type_e type_id() const override { return VKU_TYPE_BUFFER_BINDING; }
@@ -1601,14 +1675,13 @@ struct desc_set_initializer_t : public object_t {
                 size_t                          size = 0);
 
         void set_buffer(ref_t<buffer_t> buff, size_t offset = 0, size_t size = 0);
-
-    private:
-        virtual vc::ret_t init() override { return VK_SUCCESS; }
-        virtual vc::ret_t uninit() override { return VK_SUCCESS; }
     };
 
     struct sampl_binding_t : public binding_desc_t {
         VkDescriptorImageInfo   imag_info;
+
+        sampl_binding_t(object_t::Private priv) : binding_desc_t(priv) {}
+        virtual ~sampl_binding_t() {}
 
         virtual VkWriteDescriptorSet get_write() const override;
         virtual object_type_e type_id() const override { return VKU_TYPE_SAMPLER_BINDING; }
@@ -1624,11 +1697,10 @@ struct desc_set_initializer_t : public object_t {
         void set_view(ref_t<img_view_t> sampl);
         void set_sampler(ref_t<img_sampl_t> view);
         void set_layout(VkImageLayout layout);
-
-    private:
-        virtual vc::ret_t init() override { return VK_SUCCESS; }
-        virtual vc::ret_t uninit() override { return VK_SUCCESS; }
     };
+
+    desc_set_initializer_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~desc_set_initializer_t() { uninit(); }
 
     virtual object_type_e type_id() const override { return VKU_TYPE_DESCRIPTOR_SET_INITIALIZER; }
     virtual std::string to_string() const override;
@@ -1636,15 +1708,13 @@ struct desc_set_initializer_t : public object_t {
     static  object_type_e type_id_static() { return VKU_TYPE_DESCRIPTOR_SET_INITIALIZER; }
     static ref_t<desc_set_initializer_t> create(std::vector<ref_t<binding_desc_t>> binds);
 
-    std::vector<ref_t<binding_desc_t>> m_binds;
-
+    ref_t<binding_desc_t> get_binding(uint32_t i);
     void update_set(ref_t<desc_set_t> ds);
+
     std::vector<VkWriteDescriptorSet> get_writes(VkDescriptorSet dst_set) const;
     std::vector<VkDescriptorSetLayoutBinding> get_descriptors() const;
 
-private:
-    virtual vc::ret_t init() override;
-    virtual vc::ret_t uninit() override;
+    std::vector<ref_t<binding_desc_t>> m_binds;
 };
 
 /* Internal:
@@ -1832,7 +1902,7 @@ inline VkDescriptorSetLayoutBinding ssbo_t::get_desc_set(uint32_t binding,
 ================================================================================================= */
 
 inline vku::ref_t<binding_t> binding_t::create(const VkDescriptorSetLayoutBinding& bd) {
-    auto ret = std::make_shared<binding_t>();
+    auto ret = std::make_shared<binding_t>(object_t::Private{type_id_static()});
     ret->bd = bd;
     return ret;
 }
@@ -1856,14 +1926,13 @@ inline vku::ref_t<dependency_info_t> dependency_info_t::create(
         const std::vector<VkImageMemoryBarrier> &img_mem_bars,
         VkDependencyFlags dep_flags)
 {
-    auto ret = std::make_shared<dependency_info_t>();
+    auto ret = std::make_shared<dependency_info_t>(object_t::Private{type_id_static()});
     ret->m_src_stage_mask = src_stage_mask;
     ret->m_dst_stage_mask = dst_stage_mask;
     ret->m_dep_flags = dep_flags;
     ret->mem_bars = mem_bars;
     ret->buff_mem_bars = buff_mem_bars;
     ret->img_mem_bars = img_mem_bars;
-    ret->init();
     return ret;
 }
 
@@ -1931,7 +2000,7 @@ inline std::string dependency_info_t::to_string() const {
 //         const std::vector<VkBufferMemoryBarrier2> &buff_mem_bars,
 //         const std::vector<VkImageMemoryBarrier2> &img_mem_bars)
 // {
-//     auto ret = std::make_shared<dependency_info2_t>();
+//     auto ret = std::make_shared<dependency_info2_t>(object_t::Private{type_id_static()});
 //     ret->dep_info = dep_info;
 //     ret->mem_bars = mem_bars;
 //     ret->buff_mem_bars = buff_mem_bars;
@@ -2014,7 +2083,7 @@ inline std::string dependency_info_t::to_string() const {
 inline vku::ref_t<image_subresource_range_t> image_subresource_range_t::create(
         const VkImageSubresourceRange& img_subrange)
 {
-    auto ret = std::make_shared<image_subresource_range_t>();
+    auto ret = std::make_shared<image_subresource_range_t>(object_t::Private{type_id_static()});
     ret->m_img_subrange = img_subrange;
     return ret;
 }
@@ -2031,7 +2100,7 @@ inline std::string image_subresource_range_t::to_string() const {
 ================================================================================================= */
 
 inline ref_t<window_t> window_t::create(int width, int height, std::string name) {
-    auto ret = std::make_shared<window_t>();
+    auto ret = std::make_shared<window_t>(object_t::Private{type_id_static()});
     ret->m_name = name;
     ret->m_width = width;
     ret->m_height = height;
@@ -2071,7 +2140,7 @@ inline ref_t<instance_t> instance_t::create(
         const std::vector<std::string>& extensions,
         const std::vector<std::string>& layers)
 {
-    auto ret = std::make_shared<instance_t>();
+    auto ret = std::make_shared<instance_t>(object_t::Private{type_id_static()});
     ret->m_app_name = app_name;
     ret->m_engine_name = engine_name;
     ret->m_extensions = extensions;
@@ -2187,6 +2256,7 @@ inline vc::ret_t instance_t::init() {
         .pNext = nullptr,
         .flags = 0,
         .messageSeverity =
+                VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
@@ -2233,7 +2303,7 @@ inline ref_t<surface_t> surface_t::create(
         ref_t<window_t> window,
         ref_t<instance_t> inst)
 {
-    auto ret = std::make_shared<surface_t>();
+    auto ret = std::make_shared<surface_t>(object_t::Private{type_id_static()});
     ret->m_window = window;
     ret->m_instance = inst;
     VK_ASSERT(ret->init());
@@ -2241,6 +2311,8 @@ inline ref_t<surface_t> surface_t::create(
 }
 
 inline vc::ret_t surface_t::init() {
+    if (!m_instance || !m_window)
+        throw except_t("Invalid internal pointers");
     if (glfwCreateWindowSurface(m_instance->vk_instance, m_window->get_window(),
             NULL, &vk_surface) != VK_SUCCESS)
     {
@@ -2266,17 +2338,20 @@ inline std::string surface_t::to_string() const {
 
 /* TODO: device_t should only depend on instance, not on surface */
 inline ref_t<device_t> device_t::create(ref_t<instance_t> inst, ref_t<surface_t> surf,
-        std::vector<std::string> exts)
+        std::vector<std::string> exts, std::vector<std::string> layers)
 {
-    auto ret = std::make_shared<device_t>();
+    auto ret = std::make_shared<device_t>(object_t::Private{type_id_static()});
     ret->m_instance = inst;
     ret->m_surface = surf;
     ret->m_extensions = exts;
+    ret->m_layers = layers;
     VK_ASSERT(ret->init());
     return ret;
 }
 
 inline vc::ret_t device_t::init() {
+    if (!m_instance)
+        throw except_t("Invalid m_instance");
     uint32_t dev_cnt = 0;
     VK_ASSERT(vkEnumeratePhysicalDevices(m_instance->vk_instance, &dev_cnt, NULL));
 
@@ -2332,12 +2407,14 @@ inline vc::ret_t device_t::init() {
     VkPhysicalDeviceFeatures dev_feat{};
     vkGetPhysicalDeviceFeatures(vk_phy_dev, &dev_feat);
 
-    std::vector<const char*> dev_exts = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-    };
+    std::vector<const char*> dev_exts = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     for (auto &e : m_extensions)
         dev_exts.push_back(e.c_str());
+
     std::vector<const char*> dev_layers = { "VK_LAYER_KHRONOS_validation" };
+    for (auto &l : m_layers)
+        dev_layers.push_back(l.c_str());
+
     dev_feat.samplerAnisotropy = VK_TRUE;
 
     VkPhysicalDeviceVulkan12Features vk11_features {
@@ -2430,7 +2507,7 @@ inline std::string device_t::to_string() const {
 ================================================================================================= */
 
 inline ref_t<swapchain_t> swapchain_t::create(ref_t<device_t> dev, ref_t<surface_t> surf) {
-    auto ret = std::make_shared<swapchain_t>();
+    auto ret = std::make_shared<swapchain_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     ret->m_surface = surf;
     VK_ASSERT(ret->init());
@@ -2438,6 +2515,8 @@ inline ref_t<swapchain_t> swapchain_t::create(ref_t<device_t> dev, ref_t<surface
 }
 
 inline vc::ret_t swapchain_t::init() {
+    if (!m_device || !m_surface)
+        throw except_t("Invalid internal ptr");
     FnScope err_scope;
     auto sc_detail = get_swapchain_details(m_device->vk_phy_dev, m_surface->vk_surface);
 
@@ -2558,7 +2637,7 @@ inline std::string swapchain_t::to_string() const {
 ================================================================================================= */
 
 inline ref_t<shader_t> shader_t::create(ref_t<device_t> dev, const spirv_t& spirv) {
-    auto ret = std::make_shared<shader_t>();
+    auto ret = std::make_shared<shader_t>(object_t::Private{type_id_static()});
     ret->m_init_from_path = false;
     ret->m_device = dev;
     ret->m_spirv = spirv;
@@ -2569,7 +2648,7 @@ inline ref_t<shader_t> shader_t::create(ref_t<device_t> dev, const spirv_t& spir
 inline ref_t<shader_t> shader_t::create(ref_t<device_t> dev, const char *path,
         vku_shader_stage_e type)
 {
-    auto ret = std::make_shared<shader_t>();
+    auto ret = std::make_shared<shader_t>(object_t::Private{type_id_static()});
     ret->m_init_from_path = true;
     ret->m_path = path;
     ret->m_type = type;
@@ -2579,6 +2658,8 @@ inline ref_t<shader_t> shader_t::create(ref_t<device_t> dev, const char *path,
 }
 
 inline vc::ret_t shader_t::init() {
+    if (!m_device)
+        throw except_t("Invalid m_device null");
     if (m_init_from_path) {
         std::ifstream file(m_path, std::ios::binary | std::ios::ate);
         std::streamsize size = file.tellg();
@@ -2632,13 +2713,15 @@ inline std::string shader_t::to_string() const {
 ================================================================================================= */
 
 inline ref_t<renderpass_t> renderpass_t::create(ref_t<swapchain_t> swc) {
-    auto ret = std::make_shared<renderpass_t>();
+    auto ret = std::make_shared<renderpass_t>(object_t::Private{type_id_static()});
     ret->m_swapchain = swc;
     VK_ASSERT(ret->init());
     return ret;
 }
 
 inline vc::ret_t renderpass_t::init() {
+    if (!m_swapchain)
+        throw except_t("Invalid m_swapchain null");
     VkAttachmentDescription color_attach {
         .flags = 0,
         .format = m_swapchain->vk_surf_fmt.format,
@@ -2745,7 +2828,7 @@ inline ref_t<pipeline_t> pipeline_t::create(
         vertex_input_desc_t input_desc,
         ref_t<pipeline_layout_t> pipeline_layout)
 {
-    auto ret = std::make_shared<pipeline_t>();
+    auto ret = std::make_shared<pipeline_t>(object_t::Private{type_id_static()});
     ret->m_width = width;
     ret->m_height = height;
     ret->m_renderpass = rp;
@@ -2758,10 +2841,14 @@ inline ref_t<pipeline_t> pipeline_t::create(
 }
 
 inline vc::ret_t pipeline_t::init() {
+    if (!m_renderpass || !m_pipeline_layout)
+        throw except_t("Invalid internal pointers");
     FnScope err_scope;
 
     std::vector<VkPipelineShaderStageCreateInfo> shader_stages;
     for (auto sh : m_shaders) {
+        if (!sh)
+            throw except_t("Invalid shader pointer");
         shader_stages.push_back(VkPipelineShaderStageCreateInfo {
             .sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .pNext               = nullptr,
@@ -2955,7 +3042,7 @@ inline ref_t<compute_pipeline_t> compute_pipeline_t::create(
         ref_t<shader_t> shader,
         ref_t<pipeline_layout_t> pipeline_layout)
 {
-    auto ret = std::make_shared<compute_pipeline_t>();
+    auto ret = std::make_shared<compute_pipeline_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     ret->m_shader = shader;
     ret->m_pipeline_layout = pipeline_layout;
@@ -2964,6 +3051,8 @@ inline ref_t<compute_pipeline_t> compute_pipeline_t::create(
 }
 
 inline vc::ret_t compute_pipeline_t::init() {
+    if (!m_device || !m_shader || !m_pipeline_layout)
+        throw except_t("Invalid internal references");
     FnScope err_scope;
 
     if (get_shader_type(m_shader->m_type) != VK_SHADER_STAGE_COMPUTE_BIT) {
@@ -3012,13 +3101,15 @@ inline std::string compute_pipeline_t::to_string() const {
 ================================================================================================= */
 
 inline ref_t<framebuffs_t> framebuffs_t::create(ref_t<renderpass_t> rp){
-    auto ret = std::make_shared<framebuffs_t>();
+    auto ret = std::make_shared<framebuffs_t>(object_t::Private{type_id_static()});
     ret->m_renderpass = rp;
     VK_ASSERT(ret->init());
     return ret;
 }
 
 inline vc::ret_t framebuffs_t::init() {
+    if (!m_renderpass)
+        throw except_t("Invalid m_renderpass");
     vk_fbuffs.resize(m_renderpass->m_swapchain->vk_sc_image_views.size());
 
     FnScope err_scope;
@@ -3068,13 +3159,15 @@ inline std::string framebuffs_t::to_string() const {
 ================================================================================================= */
 
 inline ref_t<cmdpool_t> cmdpool_t::create(ref_t<device_t> dev) {
-    auto ret = std::make_shared<cmdpool_t>();
+    auto ret = std::make_shared<cmdpool_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     VK_ASSERT(ret->init());
     return ret;
 }
 
 inline vc::ret_t cmdpool_t::init() {
+    if (!m_device)
+        throw except_t("Invalid m_device");
     VkCommandPoolCreateInfo pool_info{
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .pNext = nullptr,
@@ -3100,7 +3193,7 @@ inline std::string cmdpool_t::to_string() const {
 ================================================================================================= */
 
 inline ref_t<cmdbuff_t> cmdbuff_t::create(ref_t<cmdpool_t> cp, bool host_free) {
-    auto ret = std::make_shared<cmdbuff_t>();
+    auto ret = std::make_shared<cmdbuff_t>(object_t::Private{type_id_static()});
     ret->m_cmdpool = cp;
     ret->m_host_free = host_free;
     VK_ASSERT(ret->init());
@@ -3108,6 +3201,8 @@ inline ref_t<cmdbuff_t> cmdbuff_t::create(ref_t<cmdpool_t> cp, bool host_free) {
 }
 
 inline vc::ret_t cmdbuff_t::init() {
+    if (!m_cmdpool)
+        throw except_t("Invalid m_cmdpool");
     VkCommandBufferAllocateInfo buff_info {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext = nullptr,
@@ -3144,6 +3239,8 @@ inline void cmdbuff_t::begin(VkCommandBufferUsageFlags flags) {
 }
 
 inline void cmdbuff_t::begin_rpass(ref_t<framebuffs_t> fbs, uint32_t img_idx) {
+    if (!fbs)
+        throw except_t("Invalid fbs param");
     VkClearValue clear_color[] = {
         {
             .color = {{ 0.0f, 0.0f, 0.0f, 1.0f }},
@@ -3176,6 +3273,8 @@ inline void cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
     std::vector<VkBuffer> vk_buffs;
     std::vector<VkDeviceSize> vk_offsets;
     for (auto [b, off] : buffs) {
+        if (!b)
+            throw except_t("Invalid buffer in param");
         vk_buffs.push_back(b->vk_buff);
         vk_offsets.push_back(off);
     }
@@ -3189,7 +3288,7 @@ inline void cmdbuff_t::bind_desc_set(VkPipelineBindPoint bind_point,
 {
     /* TODO: I should add ptr checks everywhere */
     if (!pl || !desc_set)
-        throw except_t("Invalid param");
+        throw except_t("Invalid null param");
     DBGVVV("bind desc_set: %p with layout: %p bind_point: %d",
             desc_set->vk_desc_set, pl->vk_pipeline_layout, bind_point);
     vkCmdBindDescriptorSets(vk_buff, bind_point, pl->vk_pipeline_layout, 0, 1,
@@ -3203,6 +3302,8 @@ inline void cmdbuff_t::bind_idx_buff(ref_t<buffer_t> ibuff, uint64_t off,
 }
 
 inline void cmdbuff_draw_helper(VkCommandBuffer vk_buff, ref_t<pipeline_t> pl) {
+    if (!pl)
+        throw except_t("Invalid pipeline param");
     vkCmdBindPipeline(vk_buff, VK_PIPELINE_BIND_POINT_GRAPHICS, pl->vk_pipeline);
 
     VkViewport viewport {
@@ -3224,11 +3325,15 @@ inline void cmdbuff_draw_helper(VkCommandBuffer vk_buff, ref_t<pipeline_t> pl) {
 }
 
 inline void cmdbuff_t::draw(ref_t<pipeline_t> pl, uint64_t vert_cnt) {
+    if (!pl)
+        throw except_t("Invalid pipeline param");
     cmdbuff_draw_helper(vk_buff, pl);
     vkCmdDraw(vk_buff, vert_cnt, 1, 0, 0);
 }
 
 inline void cmdbuff_t::draw_idx(ref_t<pipeline_t> pl, uint64_t vert_cnt) {
+    if (!pl)
+        throw except_t("Invalid pipeline param");
     cmdbuff_draw_helper(vk_buff, pl);
     vkCmdDrawIndexed(vk_buff, vert_cnt, 1, 0, 0, 0);
 }
@@ -3246,6 +3351,8 @@ inline void cmdbuff_t::reset() {
 }
 
 inline void cmdbuff_t::bind_compute(ref_t<compute_pipeline_t> cpl) {
+    if (!cpl)
+        throw except_t("Invalid pipeline param");
     DBGVVV("bind compute pipeline: %p", cpl->vk_pipeline);
     vkCmdBindPipeline(vk_buff, VK_PIPELINE_BIND_POINT_COMPUTE, cpl->vk_pipeline);
 }
@@ -3255,19 +3362,28 @@ inline void cmdbuff_t::dispatch_compute(uint32_t x, uint32_t y, uint32_t z) {
 }
 
 inline void cmdbuff_t::set_event(ref_t<event_t> event, VkPipelineStageFlags stage) {
+    if (!event)
+        throw except_t("Invalid event param");
     vkCmdSetEvent(vk_buff, event->vk_event, stage);
 }
 
 inline void cmdbuff_t::reset_event(ref_t<event_t> event, VkPipelineStageFlags stage) {
+    if (!event)
+        throw except_t("Invalid event param");
     vkCmdResetEvent(vk_buff, event->vk_event, stage);
 }
 
 inline void cmdbuff_t::wait_events(const std::vector<ref_t<event_t>>& events,
         ref_t<dependency_info_t> dep_info)
 {
+    if (!dep_info)
+        throw except_t("Invalid dep_info param");
     std::vector<VkEvent> vk_events(events.size());
-    for (size_t i = 0; i < events.size(); i++)
+    for (size_t i = 0; i < events.size(); i++) {
+        if (!events[i])
+            throw except_t("Invalid events[i] param");
         vk_events[i] = events[i]->vk_event;
+    }
 
     vkCmdWaitEvents(vk_buff, vk_events.size(), vk_events.data(),
             dep_info->m_src_stage_mask, dep_info->m_dst_stage_mask,
@@ -3277,6 +3393,8 @@ inline void cmdbuff_t::wait_events(const std::vector<ref_t<event_t>>& events,
 }
 
 inline void cmdbuff_t::pipeline_barrier(ref_t<dependency_info_t> dep_info) {
+    if (!dep_info)
+        throw except_t("Invalid dep_info param");
     vkCmdPipelineBarrier(vk_buff,
             dep_info->m_src_stage_mask, dep_info->m_dst_stage_mask, dep_info->m_dep_flags,
             dep_info->mem_bars.size(), dep_info->mem_bars.data(),
@@ -3288,7 +3406,7 @@ inline void cmdbuff_t::pipeline_barrier(ref_t<dependency_info_t> dep_info) {
 ================================================================================================= */
 
 inline ref_t<sem_t> sem_t::create(ref_t<device_t> dev, VkSemaphoreType sem_type, uint64_t initial) {
-    auto ret = std::make_shared<sem_t>();
+    auto ret = std::make_shared<sem_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     ret->m_sem_type = sem_type;
     ret->m_initial = initial;
@@ -3297,6 +3415,8 @@ inline ref_t<sem_t> sem_t::create(ref_t<device_t> dev, VkSemaphoreType sem_type,
 }
 
 inline vc::ret_t sem_t::init() {
+    if (!m_device)
+        throw except_t("Invalid m_device ref");
     VkSemaphoreTypeCreateInfo sem_type_info {
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
         .pNext = nullptr,
@@ -3345,13 +3465,15 @@ inline void sem_t::signal(uint64_t val) {
 ================================================================================================= */
 
 inline ref_t<event_t> event_t::create(ref_t<device_t> dev) {
-    auto ret = std::make_shared<event_t>();
+    auto ret = std::make_shared<event_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     VK_ASSERT(ret->init());
     return ret;
 }
 
 inline vc::ret_t event_t::init() {
+    if (!m_device)
+        throw except_t("Invalid m_device ref");
     VkEventCreateInfo evt_info {
         .sType = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO,
         .pNext = nullptr,
@@ -3377,7 +3499,7 @@ inline ref_t<fence_t> fence_t::create(
         ref_t<device_t> dev,
         VkFenceCreateFlags flags)
 {
-    auto ret = std::make_shared<fence_t>();
+    auto ret = std::make_shared<fence_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     ret->m_flags = flags;
     VK_ASSERT(ret->init());
@@ -3385,6 +3507,8 @@ inline ref_t<fence_t> fence_t::create(
 }
 
 inline vc::ret_t fence_t::init() {
+    if (!m_device)
+        throw except_t("Invalid m_device ref");
     VkFenceCreateInfo fence_info {
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
         .pNext = nullptr,
@@ -3418,7 +3542,7 @@ inline ref_t<buffer_t> buffer_t::create(
         VkMemoryPropertyFlags mem_flags,
         void *host_ptr)
 {
-    auto ret = std::make_shared<buffer_t>();
+    auto ret = std::make_shared<buffer_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     ret->m_size = size;
     ret->m_usage_flags = usage;
@@ -3430,6 +3554,8 @@ inline ref_t<buffer_t> buffer_t::create(
 }
 
 inline vc::ret_t buffer_t::init() {
+    if (!m_device)
+        throw except_t("Invalid m_device ref");
     VkBufferCreateInfo buff_info {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = nullptr,
@@ -3545,7 +3671,7 @@ inline ref_t<image_t> image_t::create(
         VkImageUsageFlags usage,
         VkImageTiling tiling)
 {
-    auto ret = std::make_shared<image_t>();
+    auto ret = std::make_shared<image_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     ret->m_width = width;
     ret->m_height = height;
@@ -3557,6 +3683,8 @@ inline ref_t<image_t> image_t::create(
 }
 
 inline vc::ret_t image_t::init() {
+    if (!m_device)
+        throw except_t("Invalid m_device ref");
     VkImageCreateInfo image_info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .pNext = nullptr,
@@ -3616,6 +3744,8 @@ inline std::string image_t::to_string() const {
 inline void image_t::transition_layout(ref_t<cmdpool_t> cp,
         VkImageLayout old_layout, VkImageLayout new_layout, ref_t<cmdbuff_t> cbuff)
 {
+    if (!cp)
+        throw except_t("Invalid cp param");
     bool existing_cbuff = true;
     if (!cbuff) {
         cbuff = cmdbuff_t::create(cp, true);
@@ -3706,6 +3836,8 @@ inline void image_t::transition_layout(ref_t<cmdpool_t> cp,
 inline void image_t::set_data(ref_t<cmdpool_t> cp, void *data, uint32_t sz,
         ref_t<cmdbuff_t> cbuff)
 {
+    if (!cp)
+        throw except_t("Invalid cp ref");
     uint32_t img_sz = m_width * m_height * 4;
 
     if (img_sz != sz)
@@ -3776,7 +3908,9 @@ inline void image_t::set_data(ref_t<cmdpool_t> cp, void *data, uint32_t sz,
 ================================================================================================= */
 
 inline ref_t<img_view_t> img_view_t::create(ref_t<image_t> img, VkImageAspectFlags aspect_mask) {
-    auto ret = std::make_shared<img_view_t>();
+    if (!img)
+        throw except_t("Invalid img ref");
+    auto ret = std::make_shared<img_view_t>(object_t::Private{type_id_static()});
     ret->m_image = img;
     ret->m_aspect_mask = aspect_mask;
     VK_ASSERT(ret->init());
@@ -3824,7 +3958,7 @@ inline std::string img_view_t::to_string() const {
 ================================================================================================= */
 
 inline ref_t<img_sampl_t> img_sampl_t::create(ref_t<device_t> dev, VkFilter filter) {
-    auto ret = std::make_shared<img_sampl_t>();
+    auto ret = std::make_shared<img_sampl_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     ret->m_filter = filter;
     VK_ASSERT(ret->init());
@@ -3832,6 +3966,8 @@ inline ref_t<img_sampl_t> img_sampl_t::create(ref_t<device_t> dev, VkFilter filt
 }
 
 inline vc::ret_t img_sampl_t::init() {
+    if (!m_device)
+        throw except_t("Invalid m_device ref");
     VkPhysicalDeviceProperties dev_props;
     vkGetPhysicalDeviceProperties(m_device->vk_phy_dev, &dev_props);
 
@@ -3895,7 +4031,7 @@ inline ref_t<desc_pool_t> desc_pool_t::create(
         ref_t<desc_set_initializer_t> bindings_initer,
         uint32_t cnt)
 {
-    auto ret = std::make_shared<desc_pool_t>();
+    auto ret = std::make_shared<desc_pool_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     ret->m_bindings_initer = bindings_initer;
     ret->m_cnt = cnt;
@@ -3904,6 +4040,10 @@ inline ref_t<desc_pool_t> desc_pool_t::create(
 }
 
 inline vc::ret_t desc_pool_t::init() {
+    if (!m_device)
+        throw except_t("Invalid m_device ref");
+    if (!m_bindings_initer)
+        throw except_t("Invalid m_bindings_initer ref");
     std::vector<VkDescriptorPoolSize> pool_sizes;
     std::map<decltype(m_bindings_initer->m_binds[0]->m_desc.descriptorType), uint32_t> type_cnt;
     for (auto &b : m_bindings_initer->m_binds)
@@ -3971,7 +4111,7 @@ inline ref_t<desc_set_t> desc_set_t::create(
         ref_t<desc_set_layout_t> desc_set_layout,
         ref_t<desc_set_initializer_t> bindings_initer)
 {
-    auto ret = std::make_shared<desc_set_t>();
+    auto ret = std::make_shared<desc_set_t>(object_t::Private{type_id_static()});
     ret->m_descriptor_pool = desc_pool;
     ret->m_desc_set_layout = desc_set_layout;
     ret->m_bindings_initer = bindings_initer;
@@ -3980,6 +4120,10 @@ inline ref_t<desc_set_t> desc_set_t::create(
 }
 
 inline vc::ret_t desc_set_t::init() {
+    if (!m_descriptor_pool)
+        throw except_t("Invalid m_descriptor_pool ref");
+    if (!m_desc_set_layout)
+        throw except_t("Invalid m_desc_set_layout ref");
     VkDescriptorSetAllocateInfo alloc_info {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .pNext = nullptr,
@@ -3997,7 +4141,8 @@ inline vc::ret_t desc_set_t::init() {
     if the buffer is freed without it's knowledge. So the buffer and descriptor set must
     match in size, but the buffer doesn't know that, that's not ok. */
 
-    m_bindings_initer->update_set(this->to_related<desc_set_t>());
+    if (m_bindings_initer)
+        m_bindings_initer->update_set(this->to_related<desc_set_t>());
     DBG("Created Descriptor Set %p", this);
     return VK_SUCCESS;
 }
@@ -4018,7 +4163,7 @@ inline std::string desc_set_t::to_string() const {
 inline ref_t<desc_set_layout_t> desc_set_layout_t::create(ref_t<device_t> dev,
         ref_t<desc_set_initializer_t> bindings_initer)
 {
-    auto ret = std::make_shared<desc_set_layout_t>();
+    auto ret = std::make_shared<desc_set_layout_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     ret->m_bindings_initer = bindings_initer;
 
@@ -4027,6 +4172,10 @@ inline ref_t<desc_set_layout_t> desc_set_layout_t::create(ref_t<device_t> dev,
 }
 
 inline vc::ret_t desc_set_layout_t::init() {
+    if (!m_device)
+        throw except_t("Invalid m_device ref");
+    if (!m_bindings_initer)
+        throw except_t("Invalid m_bindings_initer ref");
     auto bind_descriptors = m_bindings_initer->get_descriptors();
     DBGVV("cnt bind_descriptors: %zu", bind_descriptors.size());
     for (auto &b : bind_descriptors) {
@@ -4063,7 +4212,7 @@ inline std::string desc_set_layout_t::to_string() const {
 ================================================================================================= */
 
 inline ref_t<pipeline_layout_t> pipeline_layout_t::create(ref_t<desc_set_layout_t> desc_set_layout) {
-    auto ret = std::make_shared<pipeline_layout_t>();
+    auto ret = std::make_shared<pipeline_layout_t>(object_t::Private{type_id_static()});
     ret->m_desc_set_layout = desc_set_layout;
 
     VK_ASSERT(ret->init());
@@ -4071,6 +4220,8 @@ inline ref_t<pipeline_layout_t> pipeline_layout_t::create(ref_t<desc_set_layout_
 }
 
 inline vc::ret_t pipeline_layout_t::init() {
+    if (!m_desc_set_layout)
+        throw except_t("Invalid m_desc_set_layout ref");
     VkPipelineLayoutCreateInfo pipeline_layout_info {
         .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .pNext                  = nullptr,
@@ -4108,10 +4259,9 @@ inline ref_t<desc_set_initializer_t::buff_binding_t> desc_set_initializer_t::buf
         size_t sz)
 {
     using bd_t = desc_set_initializer_t::buff_binding_t;
-    ref_t<bd_t> ret = std::make_shared<bd_t>();
+    ref_t<bd_t> ret = std::make_shared<bd_t>(object_t::Private{type_id_static()});
     ret->m_desc = desc;
     ret->set_buffer(buff, off, sz);
-    VK_ASSERT(ret->init());
     return ret;
 }
 
@@ -4160,12 +4310,11 @@ inline ref_t<desc_set_initializer_t::sampl_binding_t> desc_set_initializer_t::sa
         VkImageLayout img_layout)
 {
     using sb_t = desc_set_initializer_t::sampl_binding_t;
-    ref_t<sb_t> ret = std::make_shared<sb_t>();
+    ref_t<sb_t> ret = std::make_shared<sb_t>(object_t::Private{type_id_static()});
     ret->m_desc = desc;
     ret->set_view(view);
     ret->set_sampler(sampl);
     ret->set_layout(img_layout);
-    VK_ASSERT(ret->init()); /* init does nothing */
     return ret;
 }
 
@@ -4208,18 +4357,12 @@ inline VkWriteDescriptorSet desc_set_initializer_t::sampl_binding_t::get_write()
 inline ref_t<desc_set_initializer_t> desc_set_initializer_t::create(
         std::vector<ref_t<binding_desc_t>> binds)
 {
-    auto ret = std::make_shared<desc_set_initializer_t>();
+    auto ret = std::make_shared<desc_set_initializer_t>(object_t::Private{type_id_static()});
+    for (auto &b : binds)
+        if (!b)
+            throw vku::except_t("invalid binding ref in binds");
     ret->m_binds = binds;
-    VK_ASSERT(ret->init());
     return ret;
-}
-
-inline vc::ret_t desc_set_initializer_t::init() {
-    return VK_SUCCESS;
-}
-
-inline vc::ret_t desc_set_initializer_t::uninit() {
-    return VK_SUCCESS;
 }
 
 inline std::string desc_set_initializer_t::to_string() const {
@@ -4231,16 +4374,24 @@ inline std::string desc_set_initializer_t::to_string() const {
             (void*)this, binds_str);
 }
 
+inline ref_t<desc_set_initializer_t::binding_desc_t> desc_set_initializer_t::get_binding(uint32_t i) {
+    if (i >= m_binds.size())
+        throw vku::except_t("outside of bounds!");
+    return m_binds[i];
+}
+
 inline void desc_set_initializer_t::update_set(ref_t<desc_set_t> ds) {
+    if (!ds)
+        throw vku::except_t("invalid ds ref");
     /* TODO: maybe make a per-thread arrat of desc writes because this allocates memory for no
     reason */
     auto desc_writes = get_writes(ds->vk_desc_set);
 
     DBG("writes: %zu", desc_writes.size());
     for (auto &w : desc_writes) {
-        DBG("write: type: %s, bind: %d, dst_set: %p .pBufferInfo: %p",
+        DBG("write: type: %s, bind: %d, dst_set: %p .pBufferInfo: %p .pImageInfo: %p",
                 vulkan_utils::to_string(w.descriptorType).c_str(), w.dstBinding, w.dstSet,
-                w.pBufferInfo);
+                w.pBufferInfo, w.pImageInfo);
     }
 
     vkUpdateDescriptorSets(ds->m_descriptor_pool->m_device->vk_dev,
@@ -4279,8 +4430,11 @@ inline void wait_fences(std::vector<ref_t<fence_t>> fences, bool wait_all, uint6
         throw vku::except_t(VK_ERROR_UNKNOWN);
     }
     vk_fences.reserve(fences.size());
-    for (auto f : fences)
+    for (auto f : fences) {
+        if (!f)
+            throw except_t("Invalid fence in fences");
         vk_fences.push_back(f->vk_fence);
+    }
 
     VK_ASSERT(vkWaitForFences(fences[0]->m_device->vk_dev,
             vk_fences.size(), vk_fences.data(), wait_all, timeout));
@@ -4308,8 +4462,11 @@ inline void wait_semaphores(const std::vector<ref_t<sem_t>> &sems, const std::ve
     if (sems.size() != vals.size())
         throw vku::except_t("sems.size() must be equal to vals.size()");
     std::vector<VkSemaphore> vk_sems(sems.size());
-    for (size_t i = 0; i < sems.size(); i++)
+    for (size_t i = 0; i < sems.size(); i++) {
+        if (!sems[i])
+            throw except_t("Invalid semaphore in sems");
         vk_sems[i] = sems[i]->vk_sem;
+    }
     VkSemaphoreWaitInfo wait_info {
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
         .pNext = nullptr,
@@ -4325,6 +4482,10 @@ inline void wait_semaphores(const std::vector<ref_t<sem_t>> &sems, const std::ve
 inline void aquire_next_img(ref_t<swapchain_t> swc, ref_t<sem_t> sem,
         uint32_t *img_idx)
 {
+    if (!swc)
+        throw except_t("Invalid swc ref");
+    if (!sem)
+        throw except_t("Invalid sem ref");
     VK_ASSERT(vkAcquireNextImageKHR(swc->m_device->vk_dev, swc->vk_swapchain,
             UINT64_MAX, sem->vk_sem, VK_NULL_HANDLE, img_idx));
 }
@@ -4336,15 +4497,21 @@ inline void submit_cmdbuff(
         std::vector<ref_t<sem_t>> sig_sems,
         uint32_t queue_id)
 {
+    if (!cbuff)
+        throw except_t("Invalid cbuff ref");
     std::vector<VkPipelineStageFlags> vk_wait_stages;
     std::vector<VkSemaphore> vk_wait_sems;
     std::vector<VkSemaphore> vk_sig_sems;
 
     for (auto [s, wait_stage] : wait_sems) {
+        if (!s)
+            throw except_t("Invalid sem in wait_sems");
         vk_wait_stages.push_back((VkPipelineStageFlags)wait_stage);
         vk_wait_sems.push_back(s->vk_sem);
     }
     for (auto s : sig_sems) {
+        if (!s)
+            throw except_t("Invalid sem in sig_sems");
         vk_sig_sems.push_back(s->vk_sem);
     }
     VkSubmitInfo submit_info {
@@ -4372,6 +4539,8 @@ inline void submit_cmdbuff_tl(
         std::vector<std::tuple<ref_t<sem_t>, uint64_t>> sig_sems,
         uint32_t queue_id)
 {
+    if (!cbuff)
+        throw except_t("Invalid cbuff ref");
     std::vector<VkPipelineStageFlags> vk_wait_stages;
     std::vector<VkSemaphore> vk_wait_sems;
     std::vector<VkSemaphore> vk_sig_sems;
@@ -4379,11 +4548,15 @@ inline void submit_cmdbuff_tl(
     std::vector<uint64_t> sig_vals;
 
     for (auto [s, wait_stage, val] : wait_sems) {
+        if (!s)
+            throw except_t("Invalid sem in wait_sems");
         vk_wait_stages.push_back((VkPipelineStageFlags)wait_stage);
         vk_wait_sems.push_back(s->vk_sem);
         wait_vals.push_back(val);
     }
     for (auto [s, val] : sig_sems) {
+        if (!s)
+            throw except_t("Invalid sem in sig_sems");
         vk_sig_sems.push_back(s->vk_sem);
         sig_vals.push_back(val);
     }
@@ -4418,9 +4591,13 @@ inline void present(
         std::vector<ref_t<sem_t>> wait_sems,
         uint32_t img_idx)
 {
+    if (!swc)
+        throw except_t("Invalid swc ref");
     std::vector<VkSemaphore> vk_wait_sems;
 
     for (auto s : wait_sems) {
+        if (!s)
+            throw except_t("Invalid semaphore in wait_sems");
         vk_wait_sems.push_back(s->vk_sem);
     }
 
@@ -4441,6 +4618,10 @@ inline void present(
 inline void copy_buff(ref_t<cmdpool_t> cp, ref_t<buffer_t> dst,
         ref_t<buffer_t> src, VkDeviceSize sz, ref_t<cmdbuff_t> cbuff)
 {
+    if (!dst)
+        throw except_t("Invalid dst buff");
+    if (!src)
+        throw except_t("Invalid src buff");
     bool existing_cbuff = true;
     if (!cbuff) {
         cbuff = cmdbuff_t::create(cp, true);
@@ -5548,7 +5729,11 @@ inline VKAPI_ATTR VkBool32 VKAPI_CALL dbg_cbk(
     (void)msg_type;
     (void)ctx;
     if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-        DBG("[VK_DBG]: %s", data->pMessage);
+        DBG("[VK_DBG]: <---------------->\n%s", data->pMessage);
+        DBG("[VK_DBG]: >----------------<");
+    }
+    else {
+        DBG("%s", data->pMessage);
     }
     return VK_FALSE;
 }
@@ -5751,11 +5936,20 @@ inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
         throw vku::except_t("GLSL preprocessing failed");
     }
 
+    auto line_cnt_append = [](const std::string& to_change) {
+        std::string ret;
+        auto sv = ssplit_empty(to_change, "\n");
+        int line = 1;
+        for (auto &s : sv)
+            ret += sformat("%3d: %s\n", line++, s.c_str());
+        return ret;
+    };
+
     if (!glslang_shader_parse(shader, &input)) {
         DBG("GLSL parsing failed");
         DBG("%s", glslang_shader_get_info_log(shader));
         DBG("%s", glslang_shader_get_info_debug_log(shader));
-        DBG("%s", glslang_shader_get_preprocessed_code(shader));
+        DBG("%s", line_cnt_append(glslang_shader_get_preprocessed_code(shader)).c_str());
         glslang_shader_delete(shader);
         throw vku::except_t("GLSL parsing failed");
     }

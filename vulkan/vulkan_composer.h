@@ -361,26 +361,26 @@ inline std::string app_path = std::filesystem::canonical("./");
  * 
  */
 struct cpu_buffer_t : public vku::object_t {
+    cpu_buffer_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~cpu_buffer_t() {}
+
     static vku::object_type_e type_id_static() { return VKC_TYPE_CPU_BUFFER; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_CPU_BUFFER; }
+
     static vku::ref_t<cpu_buffer_t> create(size_t sz) {
-        auto ret = std::make_shared<cpu_buffer_t>();
+        auto ret = std::make_shared<cpu_buffer_t>(vku::object_t::Private{type_id_static()});
         ret->_data.resize(sz);
         return ret;
     }
-
-    void *data() { return (void *)_data.data(); }
-    size_t size() const { return _data.size(); }
-
-    virtual vku::object_type_e type_id() const override { return VKC_TYPE_CPU_BUFFER; }
 
     inline std::string to_string() const override {
         return std::format("vkc::cpu_buffer_t[{}]: size={} ", (void*)this, size());
     }
 
-private:
-    virtual vc::ret_t init() override { return VK_SUCCESS; }
-    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
+    void *data() { return (void *)_data.data(); }
+    size_t size() const { return _data.size(); }
 
+private:
     std::vector<uint8_t> _data;
 };
 
@@ -407,24 +407,23 @@ private:
 struct spirv_t : public vku::object_t {
     vku::spirv_t spirv;
 
+    spirv_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~spirv_t() {}
+
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_SPIRV; }
     static vku::object_type_e type_id_static() { return VKC_TYPE_SPIRV; }
+
     static vku::ref_t<spirv_t> create(const vku::spirv_t& spirv) {
-        auto ret = std::make_shared<spirv_t>();
+        auto ret = std::make_shared<spirv_t>(vku::object_t::Private{type_id_static()});
         ret->spirv = spirv;
         return ret;
     }
-
-    virtual vku::object_type_e type_id() const override { return VKC_TYPE_SPIRV; }
 
     inline std::string to_string() const override {
         return std::format("vkc::spirv[{}]: spirv-type={} spirv-content=\n{}", (void*)this,
                 vulkan_utils::to_string(spirv.type),
                 hexdump_str((void *)spirv.content.data(), spirv.content.size() * sizeof(uint32_t)));
     }
-
-private:
-    virtual vc::ret_t init() override { return VK_SUCCESS; }
-    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
 };
 
 /*!
@@ -452,14 +451,17 @@ private:
 struct vertex_input_desc_t : public vku::object_t {
     vku::vertex_input_desc_t vid;
 
+    vertex_input_desc_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~vertex_input_desc_t() {}
+
     static vku::object_type_e type_id_static() { return VKC_TYPE_VERTEX_INPUT_DESC; }
+    virtual vku::object_type_e type_id() const override { return VKC_TYPE_VERTEX_INPUT_DESC; }
+
     static vku::ref_t<vertex_input_desc_t> create(const vku::vertex_input_desc_t& vid) {
-        auto ret = std::make_shared<vertex_input_desc_t>();
+        auto ret = std::make_shared<vertex_input_desc_t>(vku::object_t::Private{type_id_static()});
         ret->vid = vid;
         return ret;
     }
-
-    virtual vku::object_type_e type_id() const override { return VKC_TYPE_VERTEX_INPUT_DESC; }
 
     inline std::string to_string() const override {
         std::string ret = std::format("[binding={}, stride={}, in_rate={}]{{",
@@ -471,10 +473,6 @@ struct vertex_input_desc_t : public vku::object_t {
         ret += "}}";
         return ret;
     }
-
-private:
-    virtual vc::ret_t init() override { return VK_SUCCESS; }
-    virtual vc::ret_t uninit() override { return VK_SUCCESS; }
 };
 
 /*! IMPLEMENTATION
@@ -795,6 +793,10 @@ inline int register_meta(vc::virt_state_t *vs) {
 
     // /* vkc::buffer_t
     // ----------------------------------------------------------------------------------------- */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::swapchain_t, img_count);
+
+    // /* vkc::buffer_t
+    // ----------------------------------------------------------------------------------------- */
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::buffer_t, map_data, VkDeviceSize, VkDeviceSize);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::buffer_t, unmap_data);
 
@@ -817,6 +819,12 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::event_t, get_status);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::event_t, set_event);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::event_t, reset_event);
+
+    // /* vku::desc_set_initializer_t
+    // ----------------------------------------------------------------------------------------- */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::desc_set_initializer_t, get_binding, uint32_t);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::desc_set_initializer_t, update_set,
+            vku::ref_t<vku::desc_set_t>);
 
     // /* vku::desc_set_initializer_t::buff_binding_t
     // ----------------------------------------------------------------------------------------- */
@@ -1180,7 +1188,14 @@ inline int register_meta(vc::virt_state_t *vs) {
                 for (auto &ext : node["m_extensions"])
                     exts.push_back(ext.as_str());
             }
-            auto obj = vku::device_t::create(inst, surf, exts);
+            std::vector<std::string> layers;
+            if (!node["m_layers"].is_null()) {
+                if (!node["m_layers"].is_sequence())
+                    throw vc::except_t("m_layers must be an array");
+                for (auto &lay : node["m_layers"])
+                    layers.push_back(lay.as_str());
+            }
+            auto obj = vku::device_t::create(inst, surf, exts, layers);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }

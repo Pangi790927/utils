@@ -160,6 +160,7 @@ struct virt_state_t {
             std::vector<std::unordered_set<int>>{VIRT_TYPE_CNT};
 
     ~virt_state_t() {
+        DBG_SCOPE();
         if (L) {
             lua_close(L);
             L = nullptr;
