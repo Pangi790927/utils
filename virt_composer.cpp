@@ -13,6 +13,10 @@
 #include "yaml.h"
 #include "tinyexpr.h"
 
+/* TODO: - add object dependencyes, ie objects that need to load before loading the curent one
+         - in the same idea, make a vector of variables, such that those vars will be available in
+           both lua and tinyexpr resolver */
+
 namespace virt_composer
 {
 
@@ -305,9 +309,6 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
 static double resolve_string_as_expression(std::string expr_str,
         vc::virt_state_t *vs)
 {
-    /* TODO: Try to resolve user-defined vars as well (may be bit hard to do, as I think I need to
-    modify tinyexpr to make something usefull, because I may want to wait for that respective value
-    to exist) */
     std::vector<texpr::te_variable> vars;
     for (auto &[name, value] : vs->constants)
         vars.push_back(texpr::te_variable{
@@ -393,7 +394,6 @@ static std::string get_file_string_content(const std::string& file_path_relative
 
 #if !(VIRT_COMPOSER_ENABLE_LUA_IO || VIRT_COMPOSER_ENABLE_LUA_OS)
     if (!starts_with(file_path, app_path)) {
-        /* TODO: sure about this? */
         DBG("The path is restricted to the application main directory");
         throw vc::except_t(std::format("File_error [{} vs {}]", file_path, app_path));
     }
@@ -754,7 +754,6 @@ static lua_State *luaw_init(vc::virt_state_t *vs) {
     luaL_requiref(L, LUA_UTF8LIBNAME, luaopen_utf8, 1);    lua_pop(L, 1);
     luaL_requiref(L, LUA_DBLIBNAME, luaopen_debug, 1);     lua_pop(L, 1);
 
-    /* TODO: configure if we want or don't want to be able to access the system */
     /* We don't want lua to access our system, so we intentionally don't include those */
 
 #if VIRT_COMPOSER_ENABLE_LUA_IO

@@ -9,9 +9,16 @@
  * + some structs must be added to composer, as such it will make things easyer (all those things
  * that have more than one handle are suspicious, in particular pipeline_t)
  * + some structs must be added to yaml parser of composer (not sure how or if I really should)
- * - sync primitives must be added to vku and vkc
+ * + sync primitives must be added to vku and vkc
  * + some way to rebuild the resize window would be nice
  * - search for all "TODO:" in virt_composer.h/cpp vulkan_composer.h vulkan_utils.h
+ *   - Create an ImGui backend using this helper
+ *   - Add the "#include ..." macro for shaders and test if the rest work as expected
+ *   - Add the option to use multiple include dirs for shader compilation
+ *   - this needs to be implemented in a newer version of vulkan, tested and as such
+ *      inline std::string to_string(VkPipelineStageFlagBits2 flags);
+ *      inline std::string to_string(VkAccessFlagBits2 flags);
+ *   - pipeline Layouts should have multiple sets that can be bound
  */
 
 #define GLM_FORCE_RADIANS
@@ -58,7 +65,6 @@
 # error "VULKAN_UTILS_ADD_TYPE already defined"
 #endif
 
-/* TODO: Check if throw may be better transformed in a return. */
 #define VK_ASSERT(fn_call)                                                                         \
 do {                                                                                               \
     VkResult vk_err = VkResult(fn_call);                                                           \
@@ -122,13 +128,6 @@ VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_DESCRIPTOR_POOL);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_SAMPLER_BINDING);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_BUFFER_BINDING);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_DESCRIPTOR_SET_INITIALIZER);
-
-/* TODO:
-    - Add logs for all the creations/deletions of objects with type and id(ptr)
-    - Create an ImGui backend using this helper
-    - Add the "#include ..." macro for shaders and test if the rest work as expected
-    - Add the option to use multiple include dirs for shader compilation
- */
 
 struct gpu_family_ids_t;
 struct spirv_t;
@@ -240,10 +239,6 @@ inline std::string to_string(VkPipelineStageFlagBits flags);
 inline std::string to_string(VkAccessFlagBits flags);
 inline std::string to_string(VkDependencyFlagBits flags);
 inline std::string to_string(VkQueueFlagBits flags);
-
-/* TODO: this needs to be implemented in a newer version of vulkan, tested and as such */
-// inline std::string to_string(VkPipelineStageFlagBits2 flags);
-// inline std::string to_string(VkAccessFlagBits2 flags);
 
 /* VKU Objects:
 ================================================================================================= */
@@ -576,7 +571,7 @@ private:
  * - Provides access to device-local and host-visible memory through buffer objects.
  * 
  * TODO:
- * - Add options for selecting the phys dev
+ * - Add options for selecting the phys dev (no idea what exactly to do)
  */
 struct device_t : public object_t {
     VkPhysicalDevice            vk_phy_dev;
@@ -692,7 +687,7 @@ struct shader_t : public object_t {
     vku_shader_stage_e  m_type;
 
     ref_t<device_t>     m_device;
-    spirv_t             m_spirv;    /* TODO: maybe switch to vku::ref_t? */
+    spirv_t             m_spirv;
 
     shader_t(object_t::Private priv) : object_t(priv) {}
     virtual ~shader_t() { uninit(); }
@@ -962,9 +957,6 @@ private:
  *   - Parameters:
  *     - cmdpool: Reference to the cmdpool_t object from which this buffer will be allocated.
  *     - host_free: Optional flag indicating whether the buffer is host-allocated (default: false).
- *
- * TODO:
- * - check this description again
  */
 struct cmdbuff_t : public object_t {
     VkCommandBuffer     vk_buff;
@@ -1221,7 +1213,7 @@ private:
  *     - usage: Usage flags describing intended image use.
  *
  * TODO:
- * - add m_tiling and m_mem_flags? 
+ * - add m_mem_flags? 
  */
 struct image_t : public object_t {
     VkImage             vk_img;
@@ -2420,8 +2412,8 @@ inline vc::ret_t device_t::init() {
     VkPhysicalDeviceVulkan12Features vk11_features {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext = nullptr,
-        .samplerMirrorClampToEdge                           = true, //TODO: is there a reason not to
-        .drawIndirectCount                                  = true, //      make all of those true?
+        .samplerMirrorClampToEdge                           = true,
+        .drawIndirectCount                                  = true,
         .storageBuffer8BitAccess                            = true,
         .uniformAndStorageBuffer8BitAccess                  = true,
         .storagePushConstant8                               = true,
@@ -2771,8 +2763,6 @@ inline vc::ret_t renderpass_t::init() {
         .pPreserveAttachments = nullptr,
     };
 
-    /* TODO: expose dependency to exterior because else it doesn't make sense to have sems waiting
-    on different stages */
     VkSubpassDependency dependency {
         .srcSubpass = VK_SUBPASS_EXTERNAL,
         .dstSubpass = 0,
@@ -3266,7 +3256,6 @@ inline void cmdbuff_t::begin_rpass(ref_t<framebuffs_t> fbs, uint32_t img_idx) {
     vkCmdBeginRenderPass(vk_buff, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
 }
 
-/* TODO: there is no point in a first_bind if we have only one vertex binding */
 inline void cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
         std::vector<std::pair<ref_t<buffer_t>, VkDeviceSize>> buffs)
 {
@@ -3286,7 +3275,6 @@ inline void cmdbuff_t::bind_vert_buffs(uint32_t first_bind,
 inline void cmdbuff_t::bind_desc_set(VkPipelineBindPoint bind_point,
         ref_t<pipeline_layout_t> pl, ref_t<desc_set_t> desc_set)
 {
-    /* TODO: I should add ptr checks everywhere */
     if (!pl || !desc_set)
         throw except_t("Invalid null param");
     DBGVVV("bind desc_set: %p with layout: %p bind_point: %d",
@@ -3819,6 +3807,7 @@ inline void image_t::transition_layout(ref_t<cmdpool_t> cp,
                 old_layout, new_layout));
     }
 
+    /* TODO: actually get rid of this transition_layout altogheter and move it as an outside fn */
     /* TODO: don't we need a transition from shader_read to transfer_dst? That for transfering
     inside the image later on? */
 
@@ -4085,8 +4074,7 @@ inline std::string desc_pool_t::to_string() const {
 /* desc_set_t
 ================================================================================================= */
 
-/* TODO:
-
+/*
 Follow this logical steps (check if they are correct):
     - The layout describes the structure,
     - Then you allocate a set,
@@ -4136,10 +4124,6 @@ inline vc::ret_t desc_set_t::init() {
             &vk_desc_set));
     DBGVV("Allocated descriptor set: %p from pool: %p with layout: %p",
             vk_desc_set, m_descriptor_pool->vk_descpool, m_desc_set_layout->vk_desc_set_layout);
-
-    /* TODO: this sucks, it references the buffer, but doesn't have a mechanism to do something
-    if the buffer is freed without it's knowledge. So the buffer and descriptor set must
-    match in size, but the buffer doesn't know that, that's not ok. */
 
     if (m_bindings_initer)
         m_bindings_initer->update_set(this->to_related<desc_set_t>());
@@ -5862,7 +5846,6 @@ inline int score_phydev(VkPhysicalDevice dev, VkSurfaceKHR surf) {
         return -1;
     }
 
-    /* TODO: add logging functions for our current support */
     return score;
 }
 
