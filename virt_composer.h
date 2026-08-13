@@ -1131,7 +1131,8 @@ struct depend_resolver_t : depend_resolver_internal_t {
     }
 
     vc::ref_t<T> await_resume() {
-        auto ret = internal_get_dep_object(required_depend)->to_related<T>();
+        auto obj = internal_get_dep_object(required_depend);
+        auto ret = obj ? obj->to_related<T>() : nullptr;
         if (!ret) {
             DBG("Invalid ref...");
             throw vc::except_t(
@@ -1276,7 +1277,7 @@ struct luaw_param_t<bm_t<T>, index> {
         };
         auto from_integer = [this](lua_State *L, int idx) -> T {
             int valid = 0;
-            uint32_t val = lua_tointegerx(L, idx, &valid);
+            auto val = lua_tointegerx(L, idx, &valid);
             if (!valid) {
                 throw_error(L, std::format(
                         "Invalid parameter at index {}, failed conversion to [vc-bitmask] "
@@ -1749,7 +1750,7 @@ int luaw_push_cpp_object(lua_State *L, const T &object) {
             lua_pushnil(L);
             return 0;
         }
-        ASSRT_FN(push_vc_object(L, object));
+        ASSERT_FN(push_vc_object(L, object));
         return 0;
     }
     else {
@@ -1945,15 +1946,19 @@ call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
 {
     auto L = luaw_get_lua_state(vs);
     lua_getglobal(L, function_name);
+    int pushcnt = 0;
     try {
         ([&](auto &obj){
             if (luaw_push_cpp_object(L, obj) < 0){
                 DBG("Failed to push cpp argument onto lua stack");
                 throw "";
             }
+            pushcnt++;
         }(args), ...);
     }
     catch (...) {
+        if (pushcnt)
+            lua_pop(L, pushcnt);
         return {0, VC_ERROR_FAILED_CALL};
     }
     int argc = std::tuple_size_v<std::tuple<Args...>>;
@@ -1999,9 +2004,7 @@ inline T get_enum_val(fkyaml::node &node, const std::unordered_map<std::string, 
 }
 
 template <typename T>
-inline T get_enum_val(fkyaml::node &n) {
-    throw vc::except_t{std::format("Type {} not implemented", demangle<T>())};
-}
+inline T get_enum_val(fkyaml::node &n) = delete;
 
 inline std::string to_string(object_type_e type) {
     return type.name();
