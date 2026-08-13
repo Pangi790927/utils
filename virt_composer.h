@@ -1320,6 +1320,14 @@ struct luaw_param_t<bm_t<T>, index> {
     }
 };
 
+/* This resolves bool received from lua to an vc parameter */
+template <ssize_t index>
+struct luaw_param_t<bool, index> {
+    bool luaw_single_param(lua_State *L) {
+        return lua_toboolean(L, index);
+    }
+};
+
 /* This resolves integers received from lua to an vc parameter */
 template <std::integral Integer, ssize_t index>
 struct luaw_param_t<Integer, index> {
@@ -1463,6 +1471,13 @@ struct luaw_returner_t {
     void luaw_ret_push(lua_State *L, T&& t) {
         (void)t;
         luaw_static_assert<false, T>(" - Is not a valid return type");
+    }
+};
+
+template <>
+struct luaw_returner_t<bool> {
+    void luaw_ret_push(lua_State *L, bool x) {
+        lua_pushboolean(L, x);
     }
 };
 
@@ -1681,6 +1696,10 @@ int luaw_push_cpp_object(lua_State *L, const T &object) {
         lua_pushstring(L, object.c_str());
         return 0;
     }
+    else if constexpr(std::is_same_v<Type, bool>) {
+        lua_pushboolean(L, object);
+        return 0;
+    }
     else if constexpr (std::is_integral_v<Type>) {
         lua_pushinteger(L, object);
         return 0;
@@ -1771,6 +1790,10 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
     if constexpr (std::is_same_v<Type, std::string>) {
         const char *str = lua_tostring(L, index);
         object = str ? str : "";
+        return 0;
+    }
+    else if constexpr (std::is_same_v<Type, bool>) {
+        object = lua_toboolean(L, index);
         return 0;
     }
     else if constexpr (std::is_integral_v<Type>) {

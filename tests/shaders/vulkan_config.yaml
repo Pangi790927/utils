@@ -247,7 +247,7 @@ lua_script:
           vc.cbuff, vc.fence, {vc.draw_sem})
       vc.present(vc.swc, {vc.draw_sem}, img_idx)
 
-      vc.wait_fences({vc.fence}, 1, -1)
+      vc.wait_fences({vc.fence}, true, -1)
       vc.reset_fences({vc.fence})
     end
 

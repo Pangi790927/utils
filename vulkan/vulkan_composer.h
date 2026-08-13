@@ -86,7 +86,7 @@
  *         vku.cbuff, vku.fence, {vku.draw_sem})
  *     vku.present(vku.swc, {vku.draw_sem}, img_idx)
  *
- *     vku.wait_fences({vku.fence}, 1, -1)
+ *     vku.wait_fences({vku.fence}, true, -1)
  *     vku.reset_fences({vku.fence})
  * end
  *
