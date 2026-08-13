@@ -1723,7 +1723,7 @@ int luaw_push_cpp_object(lua_State *L, const T &object) {
         [&]<size_t... I>(std::index_sequence<I...>) {
             ([&](auto &item, size_t i) {
                 luaw_push_cpp_object(L, item);
-                lua_rawseti(L, -2, i);
+                lua_rawseti(L, -2, i+1);
             }(std::get<I>(object), I), ...);
         }(std::make_index_sequence<std::tuple_size_v<Type>>{});
         return 0;
@@ -1829,7 +1829,7 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
         }
         [&]<size_t... I>(std::index_sequence<I...>) {
             ([&](auto &item, size_t i) {
-                lua_rawgeti(L, index, i);
+                lua_rawgeti(L, index, i+1);
                 luaw_lua_to_cpp_object(L, -1, item);
                 lua_pop(L, 1);
             }(std::get<I>(object), I), ...);
@@ -1871,7 +1871,12 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
         return 0;
     }
     else if constexpr (is_vc_ref_t<Type>::value) {
-        object = ((vc::object_t *)lua_touserdata(L, index))->to_related<Type::element_type>();
+        auto obj = ((vc::object_t *)lua_touserdata(L, index));
+        if (!obj) {
+            DBG("Invalid user object");
+            return -1;
+        }
+        object = obj->to_related<Type::element_type>();
         return 0;
     }
     else {
@@ -1946,7 +1951,7 @@ call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
 {
     auto L = luaw_get_lua_state(vs);
     lua_getglobal(L, function_name);
-    int pushcnt = 0;
+    int pushcnt = 1;
     try {
         ([&](auto &obj){
             if (luaw_push_cpp_object(L, obj) < 0){
@@ -1957,8 +1962,7 @@ call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
         }(args), ...);
     }
     catch (...) {
-        if (pushcnt)
-            lua_pop(L, pushcnt);
+        lua_pop(L, pushcnt);
         return {0, VC_ERROR_FAILED_CALL};
     }
     int argc = std::tuple_size_v<std::tuple<Args...>>;
