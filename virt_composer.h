@@ -1551,7 +1551,7 @@ struct luaw_returner_t<std::vector<T>> {
         lua_createtable(L, v.size(), 0);
         for (int i = 0; i < v.size(); i++) {
             luaw_returner_t<std::decay_t<T>>{}.luaw_ret_push(L, v[i]);
-            lua_rawseti(L, -2, i);
+            lua_rawseti(L, -2, i+1);
         }
     }
 };
@@ -1713,7 +1713,7 @@ int luaw_push_cpp_object(lua_State *L, const T &object) {
         lua_createtable(L, object.size(), 0);
         for (size_t i = 0; i < object.size(); i++) {
             luaw_push_cpp_object(L, object[i]);
-            lua_rawseti(L, -2, i++);
+            lua_rawseti(L, -2, i+1);
         }
         return 0;
     }
@@ -1728,12 +1728,7 @@ int luaw_push_cpp_object(lua_State *L, const T &object) {
         return 0;
     }
     else if constexpr (is_pair<Type>) {
-        lua_createtable(L, object.size(), 0);
-        for (size_t i = 0; i < object.size(); i++) {
-            luaw_push_cpp_object(L, object[i]);
-            lua_rawseti(L, -2, i++);
-        }
-        lua_createtable(L, object.size(), 0);
+        lua_createtable(L, 2, 0);
         luaw_push_cpp_object(L, object.first);
         lua_rawseti(L, -2, 1);
         luaw_push_cpp_object(L, object.second);
@@ -1812,10 +1807,10 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
             return -1;
         }
         int len = lua_rawlen(L, index);
-        std::vector<typename Type::value_type> to_asign;
+        std::vector<typename Type::value_type> to_asign(len);
         for (int i = 1; i <= len; i++) {
             lua_rawgeti(L, index, i);
-            luaw_lua_to_cpp_object(L, -1, to_asign[i]);
+            luaw_lua_to_cpp_object(L, -1, to_asign[i-1]);
             lua_pop(L, 1);
         }
         object = to_asign;
@@ -1876,6 +1871,7 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
     }
     else if constexpr (is_vc_ref_t<Type>::value) {
         object = ((vc::object_t *)lua_touserdata(L, index))->to_related<Type::element_type>();
+        return 0;
     }
     else {
         demangle_static_assert<false, decltype(object)>(" - Is not a valid object type");
@@ -1892,7 +1888,7 @@ int luaw_member_setter_object_wrapper(lua_State *L) {
     auto obj = o->to_related<T>();
     auto &member = obj.get()->*member_ptr;
 
-    if (luaw_lua_to_cpp_object(L, -1, member) < 1) {
+    if (luaw_lua_to_cpp_object(L, -1, member) < 0) {
         luaw_push_error(L, "Couldn't convert from type from lua to cpp type");
     }
     return 0;
