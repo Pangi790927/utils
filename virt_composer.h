@@ -141,9 +141,9 @@ at compile time, for whichever of the two is already enabled via these macros. *
  *
  * @see luaw_register_member_object
  * @note Only known object types can be used in those calls, usual data types: string, bool, int,
- *       double (compatible with Lua), vector, tuples, and `vc::bm_t<T>`, `vc::ref_t<T>` objects. In
- *       rest, this library doesn't know how to convert them from Lua to their C++ counterpart and
- *       vice versa.
+ *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>`, `vc::ref_t<T>`
+ *       objects. In rest, this library doesn't know how to convert them from Lua to their C++
+ *       counterpart and vice versa.
  * 
  * @example
  * VC_REGISTER_MEMBER_OBJECT(cmdbuff_t, m_cmdpool)
@@ -202,9 +202,9 @@ virt_composer::register_trivially_copyable_member<                  \
  *
  * @see luaw_register_member_function 
  * @note Only known object types can be used in those calls, usual data types: string, bool, int,
- *       double (compatible with Lua), vector, tuples, and `vc::bm_t<T>`, `vc::ref_t<T>` objects. In
- *       rest, this library doesn't know how to convert them from Lua to their C++ counterpart and
- *       vice versa.
+ *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>`, `vc::ref_t<T>`
+ *       objects. In rest, this library doesn't know how to convert them from Lua to their C++
+ *       counterpart and vice versa.
  *
  * @example
  * VC_REGISTER_MEMBER_FUNCTION(vku::cmdbuff_t, begin_rpass, vc::ref_t<vku::framebuffs_t>, uint32_t);
@@ -306,17 +306,18 @@ VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_LUA_FUNCTION);
 /*!
  * @brief Base object type for virt_composer.
  *
- * This type represents the base class for all objects in the virt_composer framework.
- * It is parameterized by @ref virt_traits_t and provides core functionality for object lifecycle
- * and type tracking.
+ * This type represents the base class for all objects in the virt_composer framework - every
+ * `vc::object_t`-derived type (`integer_t`, `float_t`, `string_t`, and any user-defined type) is
+ * ultimately a `virt_object::object_t<object_type_e>` (see `virt_object.h`'s generic
+ * `object_t<Id>`, parameterized here by this file's own `object_type_e` type-id enum).
  */
 using object_t = vo::object_t<object_type_e>;
 
 /*!
  * @brief Return type for object operations.
  *
- * Alias for the return type used by default functions (e.g., `init()`, `uninit()`) in objects
- * derived from @ref object_t. Defined by @ref virt_traits_t::ret_t.
+ * Alias for `virt_object::ret_t` (`int64_t`) - used as the return type of `init()`/`uninit()`-style
+ * functions on objects derived from @ref object_t.
  */
 using ret_t = vo::ret_t;
 
@@ -357,6 +358,15 @@ using ref_t = vo::ref_t<T>;
  * vc.object:open("fname", "READ")              -- Single enum string
  * vc.object:open("fname", 1)                   -- Single enum integer value
  */
+/* TODO: investigate - bm_t<T> only appears to be meaningful in the Lua->C++ (parameter) direction
+(luaw_param_t<bm_t<T>, index>). The C++->Lua (return value) direction doesn't go through bm_t<T> at
+all - luaw_push_cpp_object()'s is_vc_enum<Type> branch pushes the raw enum directly as a number, not
+through bm_t. The "supported types" note attached to VC_REGISTER_MEMBER_OBJECT/_FUNCTION and
+luaw_register_member_function/_object lists bm_t<T> alongside vector/tuple/pair/ref_t<T> as if all
+of those are symmetric, bidirectionally-supported types - confirm whether that's intentional (a
+member/function can only ever *return* an enum's raw int, never bm_t's richer string/int/table
+form) or a real asymmetry worth fixing, then either adjust that note or bm_t's own doc to make the
+one-way nature explicit. */
 template <typename T>
 struct bm_t {
     using type = T;
@@ -625,8 +635,9 @@ inline std::string to_string(const object_t& ref);
 /*!
  * @brief Creates and returns a new shared pointer to a virtual state object.
  *
- * @return std::shared_ptr<virt_state_t>
- *         A shared pointer to the newly created @c virt_state_t object.
+ * @return A shared pointer to the newly created @c virt_state_t object, or `nullptr` if this
+ *         translation unit never included `virt_composer_end.h` (so `VIRT_TYPE_CNT` was never
+ *         finalized), or if the underlying Lua state failed to initialize.
  */
 std::shared_ptr<virt_state_t> create_state();
 
@@ -742,9 +753,8 @@ err_e parse_config(virt_state_t *vs, const char *path);
  * @param builder The callback coroutine function to invoke when a match is found.
  *                Parameters: virtual state, node name, and the YAML node itself
  *
- * @return err_e `VC_ERROR_OK` on success, or an error code on failure.
+ * @return `VC_ERROR_OK` (this function currently has no failure path).
  *
- * @see build_object_cbks 
  * @note Only typed objects (with an `m_type` field) can be nested. Auto-identified-objects cannot.
  */
 err_e add_named_builder_callback(virt_state_t *vs, const std::string& match,
@@ -765,9 +775,8 @@ err_e add_named_builder_callback(virt_state_t *vs, const std::string& match,
  *                 Parameters: virtual state, node name, and the YAML node itself.
  *                 Return: `0` on success, or a negative value on error.
  *
- * @return err_e `VC_ERROR_OK` on success, or an error code on failure.
- * 
- * @see build_psudo_object_cbks
+ * @return `VC_ERROR_OK` (this function currently has no failure path).
+ *
  * @note Only typed objects (with an `m_type` field) can be nested. Auto-identified-objects cannot.
  */
 err_e add_auto_builder_callback(virt_state_t *vs,
@@ -823,14 +832,16 @@ co::task<int64_t> resolve_int(virt_state_t *vs, fkyaml::node& node);
  * Asynchronously resolves a YAML node to a floating-point value, supporting both direct values and
  * references. To be used inside the build_object callback.
  *
- * This coroutine function resolves a YAML node to a `double` value. It handles two cases:
+ * This coroutine function resolves a YAML node to a `double` value. It handles four cases:
  * 1. **Reference nodes** (e.g., `!ref object_name`): Resolves the referenced float object.
  * 2. **String nodes**: Evaluates the string as a mathematical expression (using `texpr`).
- * 3. **Direct float nodes**: Returns the floating-point value directly.
+ * 3. **Integer nodes**: Cast directly to `double`.
+ * 4. **Direct float nodes**: Returns the floating-point value directly.
  *
  * @param vs Pointer to the virtual state (`virt_state_t`), providing parsing context and dependency
  * management.
- * @param node The YAML node to resolve. Can be a reference or a direct float.
+ * @param node The YAML node to resolve. Can be a reference, a string expression, an integer, or a
+ * direct float.
  *
  * @return A coroutine task that yields the resolved `double` value.
  *
@@ -1048,9 +1059,9 @@ inline int luaw_function_wrapper(lua_State *L);
  *
  * @note This is typically used with the @ref VC_REGISTER_MEMBER_FUNCTION macro for convenience.
  * @note Only known object types can be used in those calls, usual data types: string, bool, int,
- *       double (compatible with Lua), vector, tuples, and `vc::bm_t<T>`, `vc::ref_t<T>` objects. In
- *       rest, this library doesn't know how to convert them from Lua to their C++ counterpart and
- *       vice versa.
+ *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>`, `vc::ref_t<T>`
+ *       objects. In rest, this library doesn't know how to convert them from Lua to their C++
+ *       counterpart and vice versa.
  *
  * @see VC_REGISTER_MEMBER_FUNCTION
  *
@@ -1087,9 +1098,9 @@ void luaw_register_member_function(virt_state_t *vs, const char *function_name);
  *
  * @note This is typically used with the @ref VC_REGISTER_MEMBER_OBJECT macro for convenience.
  * @note Only known object types can be used in those calls, usual data types: string, bool, int,
- *       double (compatible with Lua), vector, tuples, and `vc::bm_t<T>`, `vc::ref_t<T>` objects. In
- *       rest, this library doesn't know how to convert them from Lua to their C++ counterpart and
- *       vice versa.
+ *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>`, `vc::ref_t<T>`
+ *       objects. In rest, this library doesn't know how to convert them from Lua to their C++
+ *       counterpart and vice versa.
  * 
  * @see VC_REGISTER_MEMBER_OBJECT
  *
@@ -1282,7 +1293,11 @@ co::task<vc::ref_t<vc::object_t>> build_object(virt_state_t *vs,
  *
  * Pseudo-objects are a simplified way to create objects without boilerplate, supporting:
  * - Integers (creates an `integer_t` object).
+ * - Floats (creates a `float_t` object).
  * - Strings (creates a `string_t` object).
+ * - A node named exactly `"lua_script"`: loaded and executed as a Lua script (same underlying
+ *   mechanism as a `vc::lua_script_t`'s `m_source`/`m_source_path`, just without needing the
+ *   explicit `m_type` tag).
  *
  * For specialized objects (e.g., SPIR-V shaders, GPU resources), callbacks (`build_psudo_object_cbks`)
  * are used instead.
@@ -1299,8 +1314,10 @@ co::task_t build_pseudo_object(virt_state_t *vs, const std::string& name, fkyaml
 
 /*!
  * [INTERNAL] Generates a unique anonymous name for untagged objects.
- * @param vs Virtual state context (unused, reserved for future use).
- * @return Unique name in the format "anonymous_<incremented_id>".
+ *
+ * @param vs Virtual state context - mutates `vs`'s anonymous-name counter each call.
+ * @return A unique name of the form `"__<N>"` (e.g. `"__0"`, `"__1"`, ...), where `N` is a
+ *         per-virt_state_t counter incremented on every call.
  */
 std::string new_anon_name(virt_state_t *vs);
 
@@ -1519,27 +1536,19 @@ struct depend_resolver_internal_t {
 };
 
 /*!
- * [INTERNAL] Coroutine for resolving object dependencies during parsing.
+ * [INTERNAL] Awaitable that suspends the calling coroutine until an object named `required_depend`
+ * has been built, then resolves it to a `ref_t<T>`.
  *
- * This function is used within parser callbacks to asynchronously resolve a field that may depend
- * on another object not yet initialized. It suspends the current coroutine until the target object
- * (specified by the YAML node) is fully constructed and marked as initialized.
+ * The low-level mechanism `resolve_int()`/`resolve_float()`/`resolve_str()`'s `!ref` handling and
+ * `resolve_obj<T>()` all build on: `await_ready()` checks whether the dependency is already
+ * registered (via `depend_resolver_internal_t::internal_check_depend()`); if not, `await_suspend()`
+ * parks the caller on the wait queue for that name (`internal_mark_wait()`) and yields to the next
+ * runnable coroutine, to be resumed later by `mark_dependency_solved()` once an object with that
+ * name is registered; `await_resume()` then looks the object up and casts it to `T` via
+ * `to_related<T>()`, throwing `vc::except_t` if the resolved object isn't actually a `T`.
  *
- * @tparam T The type of the object to resolve (e.g., `my_struct_t`).
- * @param vs Pointer to the virtual state (`vc::virt_state_t`), used to manage parsing context.
- * @param node The YAML node representing the field or object to resolve.
- *
- * @return A coroutine task that yields a `vc::ref_t<T>`, a reference to the resolved object.
- *         The coroutine resumes only when the object is ready.
- *
- * @note This function is designed to work with the dependency resolver system. If the object
- *       referenced by `node` is not yet initialized, the coroutine will suspend and automatically
- *       resume when the object becomes available.
- *
- * @example
- * // Usage in a parser callback:
- * auto resolved_field = co_await resolve_obj<my_struct_t>(vs, yaml_node);
- * // `resolved_field` is now safe to use.
+ * @tparam T  The expected type of the resolved object.
+ * @see resolve_obj, mark_dependency_solved
  */
 template <typename T>
 struct depend_resolver_t : depend_resolver_internal_t {
@@ -1578,7 +1587,7 @@ struct depend_resolver_t : depend_resolver_internal_t {
     std::string required_depend;
 };
 
-/* See above for a description */
+/* See resolve_obj()'s declaration above for its doc comment. */
 template <typename T>
 co::task<vc::ref_t<T>> resolve_obj(virt_state_t *vs, fkyaml::node& node) {
     if (node.has_tag_name() && node.get_tag_name() == "!ref") {

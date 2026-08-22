@@ -108,11 +108,13 @@ running each test binary.
 
 ## Working docs in this directory
 
-`DOCS_TODO.md` tracks an ongoing doc-cleanup pass over `../../virt_composer.h`'s public API surface
-- 20 items (undocumented functions/macros, plus one stale doc comment), worked one at a time with
-the user (opinion + suggested doc -> approval/revision -> next). Check there before assuming
-something in `virt_composer.h` is undocumented; check it off there once its doc comment actually
-lands and is approved.
+`DOCS_TODO.md` tracked a doc-cleanup pass over `../../virt_composer.h`'s public API surface - 20
+items (undocumented functions/macros, plus one stale doc comment), all done. Worked one at a time
+with the user (opinion + suggested doc -> approval/revision -> next) - same process now continuing
+in `DOC_ACCURACY_TODO.md`, a follow-up audit of *existing* doc comments (not missing ones) for
+claims that don't match the actual implementation - misattached comments, wrong return/error
+claims, omitted branches, dead `@ref`s. Check there before assuming a doc comment in
+`virt_composer.h` is accurate; check an item off once its fix actually lands and is approved.
 
 `BUGS.md` logs currently-open bugs found in `../../virt_composer.h`/`.cpp` while writing these
 tests (same "remove the entry once fixed, don't keep a changelog" convention as co-lib's `BUGS.md`).
