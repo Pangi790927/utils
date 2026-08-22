@@ -1,3 +1,7 @@
+#ifdef _MSC_VER
+# define NOMINMAX
+#endif
+
 #define STB_IMAGE_IMPLEMENTATION
 
 #include "vulkan_composer.h"

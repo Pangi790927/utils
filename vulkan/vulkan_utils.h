@@ -2412,54 +2412,18 @@ inline vc::ret_t device_t::init() {
     VkPhysicalDeviceVulkan12Features vk11_features {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext = nullptr,
-        .samplerMirrorClampToEdge                           = true,
-        .drawIndirectCount                                  = true,
-        .storageBuffer8BitAccess                            = true,
-        .uniformAndStorageBuffer8BitAccess                  = true,
-        .storagePushConstant8                               = true,
-        .shaderBufferInt64Atomics                           = true,
-        .shaderSharedInt64Atomics                           = true,
-        .shaderFloat16                                      = true,
-        .shaderInt8                                         = true,
-        .descriptorIndexing                                 = true,
-        .shaderInputAttachmentArrayDynamicIndexing          = true,
-        .shaderUniformTexelBufferArrayDynamicIndexing       = true,
-        .shaderStorageTexelBufferArrayDynamicIndexing       = true,
-        .shaderUniformBufferArrayNonUniformIndexing         = true,
-        .shaderSampledImageArrayNonUniformIndexing          = true,
-        .shaderStorageBufferArrayNonUniformIndexing         = true,
-        .shaderStorageImageArrayNonUniformIndexing          = true,
-        .shaderInputAttachmentArrayNonUniformIndexing       = true,
-        .shaderUniformTexelBufferArrayNonUniformIndexing    = true,
-        .shaderStorageTexelBufferArrayNonUniformIndexing    = true,
-        .descriptorBindingUniformBufferUpdateAfterBind      = true,
-        .descriptorBindingSampledImageUpdateAfterBind       = true,
-        .descriptorBindingStorageImageUpdateAfterBind       = true,
-        .descriptorBindingStorageBufferUpdateAfterBind      = true,
-        .descriptorBindingUniformTexelBufferUpdateAfterBind = true,
-        .descriptorBindingStorageTexelBufferUpdateAfterBind = true,
-        .descriptorBindingUpdateUnusedWhilePending          = true,
-        .descriptorBindingPartiallyBound                    = true,
-        .descriptorBindingVariableDescriptorCount           = true,
-        .runtimeDescriptorArray                             = true,
-        .samplerFilterMinmax                                = true,
-        .scalarBlockLayout                                  = true,
-        .imagelessFramebuffer                               = true,
-        .uniformBufferStandardLayout                        = true,
-        .shaderSubgroupExtendedTypes                        = true,
-        .separateDepthStencilLayouts                        = true,
-        .hostQueryReset                                     = true,
-        .timelineSemaphore                                  = true,
-        .bufferDeviceAddress                                = true,
-        .bufferDeviceAddressCaptureReplay                   = true,
-        .bufferDeviceAddressMultiDevice                     = true,
-        .vulkanMemoryModel                                  = true,
-        .vulkanMemoryModelDeviceScope                       = true,
-        .vulkanMemoryModelAvailabilityVisibilityChains      = true,
-        .shaderOutputViewportIndex                          = true,
-        .shaderOutputLayer                                  = true,
-        .subgroupBroadcastDynamicId                         = true,
     };
+    VkPhysicalDeviceFeatures2 supported_feat2 {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+        .pNext = &vk11_features,
+    };
+    /* Query which Vulkan 1.2 features this GPU/driver actually supports, and request exactly
+    those - requesting an unsupported feature is spec-invalid, and at least one real driver/loader
+    combination (observed: AMD RX 6600 + amdvlk64.dll) crashes vkCreateDevice() instead of cleanly
+    returning VK_ERROR_FEATURE_NOT_PRESENT for it. vkGetPhysicalDeviceFeatures2 writes its result
+    directly into vk11_features via the pNext chain above, so this doubles as both the query and
+    the request struct. */
+    vkGetPhysicalDeviceFeatures2(vk_phy_dev, &supported_feat2);
 
     VkDeviceCreateInfo dev_info {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,

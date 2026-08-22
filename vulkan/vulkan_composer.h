@@ -340,7 +340,7 @@ VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_LUA_VARIABLE);
 VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_VERTEX_INPUT_DESC);
 VIRT_COMPOSER_REGISTER_TYPE(VKC_TYPE_BINDING_DESC);
 
-inline std::string app_path = std::filesystem::canonical("./");
+inline std::string app_path = std::filesystem::canonical("./").string();
 
 /*!
  * 
@@ -499,7 +499,7 @@ inline auto get_from_map(auto &m, const std::string& str) {
 }
 
 inline std::string get_file_string_content(const std::string& file_path_relative) {
-    std::string file_path = std::filesystem::canonical(file_path_relative);
+    std::string file_path = std::filesystem::canonical(file_path_relative).string();
 
     if (!starts_with(file_path, app_path)) {
         DBG("The path is restricted to the application main directory");
@@ -555,7 +555,8 @@ inline co::task_t build_pseudo_object_cbk(vc::virt_state_t *vs, const std::strin
             }
 
             spirv.type = get_from_map(vc::shader_stage_from_string, node["m_shader_type"].as_str());
-            std::string file_path = std::filesystem::canonical(node["m_spirv_path"].as_str());
+            std::string file_path = std::filesystem::canonical(node["m_spirv_path"].as_str())
+                    .string();
 
             if (!starts_with(file_path, app_path)) {
                 DBG("The path is restricted to the application main directory");
@@ -911,7 +912,7 @@ inline int register_meta(vc::virt_state_t *vs) {
                 .binding = (uint32_t)m_binding,
                 .descriptorType = m_desc_type,
                 .descriptorCount = 1,
-                .stageFlags = m_stage,
+                .stageFlags = (VkShaderStageFlags)m_stage,
                 .pImmutableSamplers = nullptr
             });
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
@@ -926,9 +927,9 @@ inline int register_meta(vc::virt_state_t *vs) {
             -> co::task<vc::ref_t<vc::object_t>>
         {
             auto obj = vku::image_subresource_range_t::create(VkImageSubresourceRange {
-                .aspectMask = node["m_aspect_mask"].is_null()
+                .aspectMask = (VkImageAspectFlags)(node["m_aspect_mask"].is_null()
                         ? VK_IMAGE_ASPECT_COLOR_BIT
-                        : vc::get_enum_val<VkImageAspectFlagBits>(node["m_aspect_mask"]),
+                        : vc::get_enum_val<VkImageAspectFlagBits>(node["m_aspect_mask"])),
                 .baseMipLevel = node["m_base_mip_level"].is_null()
                         ? 0
                         : (uint32_t)co_await resolve_int(vs, node["m_base_mip_level"]),
@@ -966,9 +967,9 @@ inline int register_meta(vc::virt_state_t *vs) {
                     VkMemoryBarrier bar {
                         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
                         .pNext = nullptr,
-                        .srcAccessMask = vc::get_enum_val<VkAccessFlagBits>(
+                        .srcAccessMask = (VkAccessFlags)vc::get_enum_val<VkAccessFlagBits>(
                                 subnode["m_src_access_mask"]),
-                        .dstAccessMask = vc::get_enum_val<VkAccessFlagBits>(
+                        .dstAccessMask = (VkAccessFlags)vc::get_enum_val<VkAccessFlagBits>(
                                 subnode["m_dst_access_mask"]),
                     };
                     mem_bars.push_back(bar);
@@ -983,9 +984,9 @@ inline int register_meta(vc::virt_state_t *vs) {
                     VkBufferMemoryBarrier bar {
                         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
                         .pNext = nullptr,
-                        .srcAccessMask = vc::get_enum_val<VkAccessFlagBits>(
+                        .srcAccessMask = (VkAccessFlags)vc::get_enum_val<VkAccessFlagBits>(
                                 subnode["m_src_access_mask"]),
-                        .dstAccessMask = vc::get_enum_val<VkAccessFlagBits>(
+                        .dstAccessMask = (VkAccessFlags)vc::get_enum_val<VkAccessFlagBits>(
                                 subnode["m_dst_access_mask"]),
                         .srcQueueFamilyIndex = subnode["m_src_queue_family_index"].is_null()
                                 ? VK_QUEUE_FAMILY_IGNORED
@@ -1025,9 +1026,9 @@ inline int register_meta(vc::virt_state_t *vs) {
                     VkImageMemoryBarrier bar {
                         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                         .pNext = nullptr,
-                        .srcAccessMask = vc::get_enum_val<VkAccessFlagBits>(
+                        .srcAccessMask = (VkAccessFlags)vc::get_enum_val<VkAccessFlagBits>(
                                 subnode["src_access_mask"]),
-                        .dstAccessMask = vc::get_enum_val<VkAccessFlagBits>(
+                        .dstAccessMask = (VkAccessFlags)vc::get_enum_val<VkAccessFlagBits>(
                                 subnode["dst_access_mask"]),
                         .oldLayout = vc::get_enum_val<VkImageLayout>(subnode["m_old_layout"]),
                         .newLayout = vc::get_enum_val<VkImageLayout>(subnode["m_new_layout"]),
