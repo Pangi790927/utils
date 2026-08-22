@@ -102,9 +102,6 @@ struct virt_state_t {
     > build_psudo_object_cbks; ///< Callbacks for pseudo-objects (structure-based).
     /*! @} */
 
-    /*! Keeps all the objects that are curently alive in Lua */
-    std::set<vc::ref_t<vc::object_t>> obj_keepalive;
-
     /*! This holds an name-index map for some of the objects above. It is used to find the objects by
      * their name.
      */
@@ -117,6 +114,10 @@ struct virt_state_t {
      * where unresolved references and error out.
      */
     std::map<std::string, std::vector<co::state_t *>> wanted_objects;
+
+    /*! Used to track objects from lua, those are needed to reference the constructed lua objects
+     * afferent to vc::object_t */
+    int weak_cache_ref = LUA_NOREF;
 
     /*! Holds a list of constants that can be used inside  */
     std::map<std::string, double> constants = {
@@ -170,6 +171,10 @@ struct virt_state_t {
             L = nullptr;
         }
     }
+};
+
+struct box_t {
+    vc::ref_t<vc::object_t> self_obj;   // the strong ref - Lua's actual claim on the object
 };
 
 /* This is the path the application was run from */
@@ -287,14 +292,12 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
         DBG("Name taken");
         throw vc::except_t{std::format("Tag name already exists: {}", depend_name)};
     }
-    vs->obj_keepalive.insert(depend);
 
     vs->name_to_object[depend_name] = depend.get();
     vs->object_to_name[depend.get()] = depend_name;
 
     lua_rawgeti(vs->L, LUA_REGISTRYINDEX, vs->lua_table_idx);
-    lua_pushlightuserdata(vs->L, depend.get());
-    luaL_setmetatable(vs->L, "__vc_metatable");
+    push_vc_object(vs->L, depend);
     lua_setfield(vs->L, -2, depend_name.c_str());
     lua_pop(vs->L, 1);
 
@@ -350,7 +353,7 @@ co::task<double> resolve_float(vc::virt_state_t *vs, fkyaml::node& node) {
         co_return resolve_string_as_expression(node.as_str(), vs);
     }
     else if (node.is_integer()) {
-        co_return node.as_int();
+        co_return (double)node.as_int();
     }
     else
         co_return node.as_float();
@@ -392,6 +395,10 @@ static bool starts_with(const std::string& a, const std::string& b) {
 static std::string get_file_string_content(const std::string& file_path_relative) {
     std::string file_path = std::filesystem::canonical(file_path_relative).string();
 
+    /* This restriction only makes sense while Lua scripts have no other way to touch the
+    filesystem - once VIRT_COMPOSER_ENABLE_LUA_IO/_OS exposes Lua's io/os standard libraries to
+    scripts directly, a script can already read/write anything the process can, so enforcing it
+    here would just be a false sense of security rather than an actual boundary. */
 #if !(VIRT_COMPOSER_ENABLE_LUA_IO || VIRT_COMPOSER_ENABLE_LUA_OS)
     if (!starts_with(file_path, app_path)) {
         DBG("The path is restricted to the application main directory");
@@ -605,13 +612,21 @@ static int luaopen_vc(lua_State *L) {
     int top = lua_gettop(L);
     auto vs = luaw_get_virt_state(L);
 
+    /* Table used to track objects inside lua */
+    lua_newtable(L);
+    lua_newtable(L);
+    lua_pushstring(L, "v");
+    lua_setfield(L, -2, "__mode");
+    lua_setmetatable(L, -2);
+    vs->weak_cache_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+
     {
         /* This metatable describes a generic vc object inside lua. Practically, it expososes
         member objects and functions to lua. */
         luaL_newmetatable(L, "__vc_metatable");
 
         lua_pushcfunction(L, [](lua_State *L) {
-            auto obj = (vc::object_t *)lua_touserdata(L, -1);
+            auto obj = get_object_from_lua(L, -1);
             lua_pushstring(L, obj->to_string().c_str());
             return 1;
         });
@@ -620,7 +635,7 @@ static int luaopen_vc(lua_State *L) {
         /* params: 1.usrptr, 2.key -> returns: 1.value */
         lua_pushcfunction(L, [](lua_State *L) {
             // DBG("__index: %d", lua_gettop(L));
-            auto obj = (vc::object_t *)lua_touserdata(L, -2);
+            auto obj = get_object_from_lua(L, -2);
             const char *member_name = lua_tostring(L, -1); /* an const char *, ok on unwind */
 
             auto vs = luaw_get_virt_state(L);
@@ -653,7 +668,7 @@ static int luaopen_vc(lua_State *L) {
 
         /* params: 1.usrptr, 2.key, 3.value  */
         lua_pushcfunction(L, [](lua_State *L) {
-            auto obj = (vc::object_t *)lua_touserdata(L, -3);
+            auto obj = get_object_from_lua(L, -3);
             const char *member_name = lua_tostring(L, -2); /* an const char *, ok on unwind */
 
             auto vs = luaw_get_virt_state(L);
@@ -673,7 +688,7 @@ static int luaopen_vc(lua_State *L) {
         /* params: 1.usrptr [... rest of params] */
         lua_pushcfunction(L, [](lua_State *L) {
             // DBG("__call: %d", lua_gettop(L));
-            auto obj = (vc::object_t *)lua_touserdata(L, 1);
+            auto obj = get_object_from_lua(L, 1);
             if (!obj) {
                 luaw_push_error(L, "invalid null object, ie called on nil");
             }
@@ -691,7 +706,13 @@ static int luaopen_vc(lua_State *L) {
         lua_pushcfunction(L, [](lua_State *L) {
             DBG("__gc");
 
-            auto obj = ((vc::object_t *)lua_touserdata(L, -1))->shared_this();
+            auto *box = (box_t *)luaL_testudata(L, -1, "__vc_metatable");
+            if (!box) {
+                DBG("Invalid: garbage colector called on invalid object");
+                return 0;
+            }
+
+            auto &obj = box->self_obj;
             auto vs = luaw_get_virt_state(L);
 
             /* The object is no longer known to lua, as such we also delete it's slot. Obs: It may
@@ -701,8 +722,8 @@ static int luaopen_vc(lua_State *L) {
                 vs->name_to_object.erase(vs->object_to_name[obj.get()]);
                 vs->object_to_name.erase(obj.get());
             }
-            vs->obj_keepalive.erase(obj);
 
+            box->~box_t();
             return 0;
         });
         lua_setfield(L, -2, "__gc");
@@ -854,10 +875,31 @@ void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type
 
 int push_vc_object(lua_State *L, ref_t<object_t> object) {
     auto vs = luaw_get_virt_state(L);
-    vs->obj_keepalive.insert(object);
-    lua_pushlightuserdata(L, object.get());
-    luaL_setmetatable(L, "__vc_metatable");
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, vs->weak_cache_ref);     // get the object cache
+    lua_pushlightuserdata(L, object.get());                    // the object ptr is the key
+    lua_rawget(L, -2);                                         // get the lua object associated
+    if (!lua_isnil(L, -1)) {                                   // if we got it we remove the table
+        lua_remove(L, -2);                                     // and let the object on the stack
+        return 0;
+    }
+    lua_pop(L, 1);                                             // else we remove the cache table
+
+    auto *box = (box_t *)lua_newuserdatauv(L, sizeof(box_t), 0);  // we now create a new object
+                                                                  // on the stack
+    new (box) box_t{ object }; // initiate the object's reference
+    luaL_setmetatable(L, "__vc_metatable"); // set our known metadata
+
+    lua_pushlightuserdata(L, object.get());  // finally, we add it on the stack (first the key)
+    lua_pushvalue(L, -2);                    // ordering, key must be before the value so we push it again
+    lua_rawset(L, -4);                       // we set the key into the table
+    lua_remove(L, -2);                       // we now remove the remaining copy of the box
     return 0;
+}
+
+object_t *get_object_from_lua(lua_State *L, int idx) {
+    auto *box = (box_t *)luaL_testudata(L, idx, "__vc_metatable");
+    return box ? box->self_obj.get() : nullptr;
 }
 
 void luaw_push_error(lua_State *L, const std::string& err_str, const std::source_location sloc) {
@@ -928,13 +970,12 @@ static fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
     else if (lua_istable(L, index)) {
         ; /* we continue bellow */
     }
-    else if (lua_islightuserdata(L, index)) {
+    else if (auto *obj = get_object_from_lua(L, index)) {
         /* TODO: I don't find it ok that an object needs a name to be included in the object
         building mechanism, as such we may need a way to resolve it
         OPTIONS: - make two build_object one that depends on yaml and one that depends on lua
                  - swithc to only-lua */
         auto vs = luaw_get_virt_state(L);
-        auto obj = (vc::object_t *)lua_touserdata(L, index);
         std::string name;
         if (has(vs->object_to_name, obj))
             name = vs->object_to_name[obj];

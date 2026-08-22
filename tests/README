@@ -1,2 +1,10 @@
 Those are the tests for the utilities.
 All the resulting binaries will stay in bin/
+
+TODO: tests are moving to a per-component layout - each component of utils gets its own test
+group under its own ./tests/<group name>/ subdirectory (own makefile, own tests_common.h, own
+numbered test files), the way ./tests/virt_composer/ now does for virt_composer.h/.cpp. The test
+files currently sitting flat in this directory (test_ap_*.cpp, test_avl.cpp, test_bmap.cpp,
+test_co.cpp, test_coro.cpp, test_heap.cpp, test_hmap.cpp, test_kdtree.cpp, test_list.cpp,
+test_vulkan_*.cpp, ...) still need to be sorted into their own such subdirectories (e.g.
+./tests/ap/, ./tests/vulkan/, ...) - this hasn't happened yet, they haven't moved.
