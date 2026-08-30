@@ -1225,6 +1225,7 @@ struct image_t : public object_t {
     VkFormat            m_format;
     VkImageUsageFlags   m_usage;
     VkImageTiling       m_tiling;
+    uint32_t            m_array_layers = 1;
 
     image_t(object_t::Private priv) : object_t(priv) {}
     virtual ~image_t() { uninit(); }
@@ -1239,7 +1240,8 @@ struct image_t : public object_t {
             VkFormat            fmt,
             VkImageUsageFlags   usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT
                                       | VK_IMAGE_USAGE_SAMPLED_BIT,
-            VkImageTiling       tiling = VK_IMAGE_TILING_OPTIMAL);
+            VkImageTiling       tiling = VK_IMAGE_TILING_OPTIMAL,
+            uint32_t            array_layers = 1);
     virtual std::string to_string() const override;
 
     /* if no command buffer is provided, one will be allocated from the command pool */
@@ -3621,7 +3623,8 @@ inline ref_t<image_t> image_t::create(
         uint32_t height,
         VkFormat fmt,
         VkImageUsageFlags usage,
-        VkImageTiling tiling)
+        VkImageTiling tiling,
+        uint32_t array_layers)
 {
     auto ret = std::make_shared<image_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
@@ -3630,6 +3633,7 @@ inline ref_t<image_t> image_t::create(
     ret->m_format = fmt;
     ret->m_usage = usage;
     ret->m_tiling = tiling;
+    ret->m_array_layers = array_layers;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -3649,7 +3653,7 @@ inline vc::ret_t image_t::init() {
             .depth = 1,
         },
         .mipLevels = 1,
-        .arrayLayers = 1,
+        .arrayLayers = m_array_layers,
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = m_tiling,
         .usage = m_usage,
@@ -3786,12 +3790,35 @@ inline void image_t::transition_layout(ref_t<cmdpool_t> cp,
     }
 }
 
+/*
+TODO: 1. figure it out if all data types where accounted for and
+      2. move this such that it is not here, I mean, this is a more generic function, this is not
+         it's place 
+      Ai wrote:
+
+ Bytes per texel for the (small) set of formats this project's set_data() actually needs to
+size a staging buffer for - not a general VkFormat table, just what's been used: the original
+8-bit RGBA (load_image's PNG textures) and 32-bit float RGBA (precomputed per-pixel data, e.g. a
+ray_marching_hyperbolic-style image2DArray lookup table). Extend as new formats are actually used
+- deliberately throws rather than guessing for anything else. */
+inline uint32_t vk_format_texel_size(VkFormat fmt) {
+    switch (fmt) {
+        case VK_FORMAT_R8G8B8A8_SRGB:
+        case VK_FORMAT_R8G8B8A8_UNORM:
+            return 4;
+        case VK_FORMAT_R32G32B32A32_SFLOAT:
+            return 16;
+        default:
+            throw vku::except_t(sformat("vk_format_texel_size: unhandled format %d", (int)fmt));
+    }
+}
+
 inline void image_t::set_data(ref_t<cmdpool_t> cp, void *data, uint32_t sz,
         ref_t<cmdbuff_t> cbuff)
 {
     if (!cp)
         throw except_t("Invalid cp ref");
-    uint32_t img_sz = m_width * m_height * 4;
+    uint32_t img_sz = m_width * m_height * m_array_layers * vk_format_texel_size(m_format);
 
     if (img_sz != sz)
         throw vku::except_t(sformat("data size(%d) does not match with image size(%d)", sz, img_sz));
@@ -3828,14 +3855,14 @@ inline void image_t::set_data(ref_t<cmdpool_t> cp, void *data, uint32_t sz,
             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
             .mipLevel = 0,
             .baseArrayLayer = 0,
-            .layerCount = 1,
+            .layerCount = m_array_layers,
         },
         .imageOffset = { .x = 0, .y = 0, .z = 0 },
         .imageExtent = {
             .width = m_width,
             .height = m_height,
             .depth = 1,
-        } 
+        }
     };
     vkCmdCopyBufferToImage(
             cbuff->vk_buff,
@@ -3871,12 +3898,17 @@ inline ref_t<img_view_t> img_view_t::create(ref_t<image_t> img, VkImageAspectFla
 }
 
 inline vc::ret_t img_view_t::init() {
+    /* array_layers > 1 makes this a 2D_ARRAY view (e.g. sampler2DArray in GLSL, fetched via
+    texelFetch(sampler, ivec3(x,y,layer), 0)) instead of a plain 2D view - inferred from the
+    image itself rather than a separate param, since a view's array-ness only ever matches its
+    image's. */
+    bool is_array = m_image->m_array_layers > 1;
     VkImageViewCreateInfo view_info {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
         .image = m_image->vk_img,
-        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .viewType = is_array ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D,
         .format = m_image->m_format,
         .components = {
             .r = VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -3889,7 +3921,7 @@ inline vc::ret_t img_view_t::init() {
             .baseMipLevel = 0,
             .levelCount = 1,
             .baseArrayLayer = 0,
-            .layerCount = 1,
+            .layerCount = m_image->m_array_layers,
         }
     };
 

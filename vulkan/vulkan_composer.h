@@ -1147,7 +1147,10 @@ inline int register_meta(vc::virt_state_t *vs) {
                 auto tiling = node["m_tiling"].is_null()
                         ? VK_IMAGE_TILING_OPTIMAL
                         : vc::get_enum_val<VkImageTiling>(node["m_tiling"]);
-                auto obj = vku::image_t::create(dev, w, h, fmt, usage, tiling);
+                auto array_layers = node["m_array_layers"].is_null()
+                        ? 1
+                        : co_await resolve_int(vs, node["m_array_layers"]);
+                auto obj = vku::image_t::create(dev, w, h, fmt, usage, tiling, array_layers);
                 mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
                 co_return obj->to_related<vku::object_t>();
             }
