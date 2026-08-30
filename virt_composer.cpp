@@ -2,6 +2,7 @@
 # define NOMINMAX
 #endif
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 
@@ -158,6 +159,11 @@ struct virt_state_t {
     /*! This holds member objects setters */
     std::vector<std::unordered_map<std::string, lua_CFunction>> lua_class_member_setters =
             std::vector<std::unordered_map<std::string, lua_CFunction>> {VIRT_TYPE_CNT};
+
+    /*! This holds, per class id, the registered Lua operator (arithmetic/relational/misc
+     * metamethod) handlers, indexed by `operator_e`. A null entry means no handler is registered. */
+    std::vector<std::array<lua_CFunction, (size_t)vc::VC_OPERATOR_CNT>> lua_class_operators =
+            std::vector<std::array<lua_CFunction, (size_t)vc::VC_OPERATOR_CNT>> {VIRT_TYPE_CNT};
 
     /*! This holds for every base_type all the derived types, including itself, used for setting
      * member functions and object to all the derived also */
@@ -608,6 +614,73 @@ err_e parse_config(vc::virt_state_t *vs, const char *path) {
     return VC_ERROR_OK;
 }
 
+/*! [INTERNAL] Shared `__add`/`__sub`/.../`__le` dispatcher for binary operators.
+ *
+ * Every vc object shares one metatable, so Lua invokes this same function whenever either operand
+ * of the binary op is a vc object, regardless of whether that operand's specific type actually
+ * registered a handler for `Op`. This checks operand 1 first, then operand 2, for a registered
+ * handler; whichever one has it becomes "self" and its slot number (1 or 2) is pushed as a 3rd
+ * stack argument so the handler can tell which side triggered the call (needed for non-commutative
+ * ops). The handler is then called directly and its return value forwarded as-is - see
+ * @ref set_class_operator for the full contract. */
+template <operator_e Op>
+static int luaw_binary_operator_dispatch(lua_State *L) {
+    auto vs = luaw_get_virt_state(L);
+
+    lua_CFunction fn = nullptr;
+    int which = 0;
+
+    for (int idx = 1; idx <= 2 && !fn; idx++) {
+        auto obj = get_object_from_lua(L, idx);
+        if (!obj)
+            continue;
+        vc::object_type_e class_id = obj->type_id();
+        if (class_id < 0 || class_id >= (int)VIRT_TYPE_CNT) {
+            luaw_push_error(L, std::format("invalid class id: {}", vc::to_string(class_id)));
+            return 0;
+        }
+        if (auto candidate = vs->lua_class_operators[class_id][(size_t)Op]; candidate) {
+            fn = candidate;
+            which = idx;
+        }
+    }
+
+    if (!fn) {
+        luaw_push_error(L, "attempt to perform operation on incompatible vc objects");
+        return 0;
+    }
+
+    lua_pushinteger(L, which);
+    return fn(L);
+}
+
+/*! [INTERNAL] Shared `__unm`/`__bnot`/`__len` dispatcher for unary operators. Only one operand
+ * exists, so there's no ambiguity and no "which" argument is pushed. */
+template <operator_e Op>
+static int luaw_unary_operator_dispatch(lua_State *L) {
+    auto obj = get_object_from_lua(L, 1);
+    if (!obj) {
+        luaw_push_error(L, "internal_error: Nil user object can't perform unary operation!");
+        return 0;
+    }
+
+    auto vs = luaw_get_virt_state(L);
+    vc::object_type_e class_id = obj->type_id();
+    if (class_id < 0 || class_id >= (int)VIRT_TYPE_CNT) {
+        luaw_push_error(L, std::format("invalid class id: {}", vc::to_string(class_id)));
+        return 0;
+    }
+
+    auto fn = vs->lua_class_operators[class_id][(size_t)Op];
+    if (!fn) {
+        luaw_push_error(L, std::format("class id {} has no operator registered",
+                vc::to_string(class_id)));
+        return 0;
+    }
+
+    return fn(L);
+}
+
 static int luaopen_vc(lua_State *L) {
     int top = lua_gettop(L);
     auto vs = luaw_get_virt_state(L);
@@ -727,6 +800,63 @@ static int luaopen_vc(lua_State *L) {
             return 0;
         });
         lua_setfield(L, -2, "__gc");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_ADD>);
+        lua_setfield(L, -2, "__add");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_SUB>);
+        lua_setfield(L, -2, "__sub");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_MUL>);
+        lua_setfield(L, -2, "__mul");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_DIV>);
+        lua_setfield(L, -2, "__div");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_MOD>);
+        lua_setfield(L, -2, "__mod");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_POW>);
+        lua_setfield(L, -2, "__pow");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_IDIV>);
+        lua_setfield(L, -2, "__idiv");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_BAND>);
+        lua_setfield(L, -2, "__band");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_BOR>);
+        lua_setfield(L, -2, "__bor");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_BXOR>);
+        lua_setfield(L, -2, "__bxor");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_SHL>);
+        lua_setfield(L, -2, "__shl");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_SHR>);
+        lua_setfield(L, -2, "__shr");
+
+        lua_pushcfunction(L, &luaw_unary_operator_dispatch<VC_OPERATOR_UNM>);
+        lua_setfield(L, -2, "__unm");
+
+        lua_pushcfunction(L, &luaw_unary_operator_dispatch<VC_OPERATOR_BNOT>);
+        lua_setfield(L, -2, "__bnot");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_CONCAT>);
+        lua_setfield(L, -2, "__concat");
+
+        lua_pushcfunction(L, &luaw_unary_operator_dispatch<VC_OPERATOR_LEN>);
+        lua_setfield(L, -2, "__len");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_EQ>);
+        lua_setfield(L, -2, "__eq");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_LT>);
+        lua_setfield(L, -2, "__lt");
+
+        lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_LE>);
+        lua_setfield(L, -2, "__le");
 
         lua_pushstring(L, "locked");
         lua_setfield(L, -2, "__metatable");
@@ -864,6 +994,15 @@ void set_class_member_setter(virt_state_t *vs, object_type_e type, const char *m
     vs->inheritance_table[type].insert(type);
     for (auto &d : vs->inheritance_table[type])
         vs->lua_class_member_setters[d][member_name] = fn;
+}
+
+void set_class_operator(virt_state_t *vs, object_type_e type, operator_e op, lua_CFunction fn) {
+    DBG("set_class_operator: type: %s[%d] op[%d] vs[%p] fn[%p]",
+            type.name(), type.value(), (int)op, vs, fn);
+    /* So here is what must happen: all the derived objects must also get this operator */
+    vs->inheritance_table[type].insert(type);
+    for (auto &d : vs->inheritance_table[type])
+        vs->lua_class_operators[d][(size_t)op] = fn;
 }
 
 void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type_e derived) {

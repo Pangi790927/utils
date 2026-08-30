@@ -105,6 +105,7 @@ running each test binary.
 | 013 | Expression Resolution | `013-001` | `resolve_int`/`resolve_float` via tinyexpr, `constants` table, rounding, invalid expr |
 | 014 | Error Handling | `014-001` | missing file, malformed YAML, unterminated-flow-is-not-an-error, duplicate name, null object |
 | 018 | Reproduced Bugs | `018-001` | permanent regression checks for fixed bugs that used to be `BUGS.md` entries (see co-lib's Category 18 for the convention this follows) |
+| 019 | Operators | `019-001` | `vc::set_class_operator()`/`operator_e`, all binary ops (ADD/SUB/MUL/EQ/LT/LE/CONCAT) + unary (UNM/LEN), the `which` (1 vs 2) argument's role for non-commutative ops, and the "neither operand has a handler" error path |
 
 ## Working docs in this directory
 

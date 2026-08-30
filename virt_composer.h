@@ -243,6 +243,37 @@ enum err_e : int32_t {
 };
 
 /*!
+ * Identifies a Lua arithmetic/relational/misc metamethod slot (`__add`, `__eq`, `__unm`, ...).
+ *
+ * One `lua_CFunction` can be registered per `object_type_e` per entry here via
+ * @ref set_class_operator. Every virt_composer object shares a single Lua metatable, so these
+ * slots are the only per-type customization point for operators - see @ref set_class_operator
+ * for the exact dispatch rules.
+ */
+enum operator_e : int32_t {
+    VC_OPERATOR_ADD,
+    VC_OPERATOR_SUB,
+    VC_OPERATOR_MUL,
+    VC_OPERATOR_DIV,
+    VC_OPERATOR_MOD,
+    VC_OPERATOR_POW,
+    VC_OPERATOR_IDIV,
+    VC_OPERATOR_BAND,
+    VC_OPERATOR_BOR,
+    VC_OPERATOR_BXOR,
+    VC_OPERATOR_SHL,
+    VC_OPERATOR_SHR,
+    VC_OPERATOR_UNM,
+    VC_OPERATOR_BNOT,
+    VC_OPERATOR_CONCAT,
+    VC_OPERATOR_LEN,
+    VC_OPERATOR_EQ,
+    VC_OPERATOR_LT,
+    VC_OPERATOR_LE,
+    VC_OPERATOR_CNT,
+};
+
+/*!
  * @brief The exception type virt_composer itself throws for framework-level errors.
  *
  * Thrown throughout the parser/Lua bridge for conditions specific to virt_composer's own model -
@@ -1179,6 +1210,48 @@ void luaw_register_member_object(virt_state_t *vs, const char *member_name);
 template <typename T, typename U>
 requires std::is_base_of_v<vc::object_t, T> && std::is_base_of_v<vc::object_t, U>
 void register_inheritance(virt_state_t *vs);
+
+/*!
+ * Registers `fn` as the handler for Lua operator `op` (e.g. `VC_OPERATOR_ADD` for `a + b`) on
+ * objects of `type`.
+ *
+ * `fn` is a plain `lua_CFunction` - it is NOT wrapped/generated the way `VC_REGISTER_MEMBER_FUNCTION`
+ * wraps a C++ member function pointer. This is intentional: the two operands of a Lua operator can
+ * be any mix of vc objects and plain Lua values (e.g. `vc_obj + 5`, or two different vc types), so
+ * there's no single fixed C++ signature to template over - `fn` gets the raw Lua stack and decides
+ * for itself what to do with each operand (via `get_object_from_lua`, `lua_tonumber`, etc.).
+ *
+ * @par Dispatch (binary operators: ADD, SUB, MUL, DIV, MOD, POW, IDIV, BAND, BOR, BXOR, SHL, SHR,
+ * CONCAT, EQ, LT, LE)
+ * Every virt_composer object shares one Lua metatable, so Lua always invokes the same internal
+ * dispatcher for e.g. `__add` whenever either operand is a vc object - it has no idea whether that
+ * operand's *specific* type actually registered an ADD handler. The dispatcher therefore checks
+ * operand 1 first (`get_object_from_lua` + `type_id()`), then operand 2, for whichever one has an
+ * operator registered for this `op`, then:
+ *  - Pushes one extra argument: an integer, 3rd stack slot, `1` if operand 1 was the one with the
+ *    registered handler, `2` if operand 2 was. This tells `fn` which side triggered the call, since
+ *    Lua itself passes both operands in original left-to-right order either way (needed to get
+ *    non-commutative operators like SUB right regardless of which side dispatched).
+ *  - Calls `fn(L)` directly (a plain call through the function pointer, same as `__index`/
+ *    `__newindex` already do for ordinary members) - stack is `[operand1, operand2, which]`.
+ *  - Returns whatever `fn` returns, unmodified. `fn` follows the normal `lua_CFunction` return
+ *    contract (push results, return their count); Lua's own postcall stack adjustment discards
+ *    `operand1`/`operand2`/`which` automatically, no manual cleanup needed.
+ *  - If neither operand has a handler for `op`, raises a Lua error.
+ *
+ * @par Dispatch (unary operators: UNM, BNOT, LEN)
+ * Only one operand exists, so there's no ambiguity and no `which` argument is pushed - the
+ * dispatcher looks up operand 1's handler and calls `fn(L)` with stack `[operand1]`.
+ *
+ * @param vs   Virtual state context.
+ * @param type The enumerated type of the C++ class (must be registered with
+ *             @ref VIRT_COMPOSER_REGISTER_TYPE).
+ * @param op   Which operator slot to bind (see @ref operator_e).
+ * @param fn   Raw Lua C function implementing the operator for this type.
+ *
+ * @see operator_e
+ */
+void set_class_operator(virt_state_t *vs, object_type_e type, operator_e op, lua_CFunction fn);
 
 /* TODO: add the functions to add the exception callbacks */
 
