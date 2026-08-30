@@ -56,10 +56,10 @@ height: 600
 # Those are examples of user provided functions, the name must match the one inside the plugin and
 # the calling convention is that of lua (i.e. read the manual and prototype is int fn(lua_State *))
 fill_buffer_with_quad_vertices:
-  m_type: vc::lua_function_t
+  m_type: vc::c_function_t
   m_source: "[INTERNAL]"
 fill_buffer_with_quad_indexes:
-  m_type: vc::lua_function_t
+  m_type: vc::c_function_t
   m_source: "[INTERNAL]"
 
 staging_buffer:

@@ -305,7 +305,7 @@ struct except_t : public std::exception {
  *
  * @note Two `virt_state_t` instances are fully independent - separate Lua states, separate name
  *       tables, separate object pools; nothing built in one is visible from the other. The one
- *       exception: `lua_function_t::internal_funcs` (what `add_internal_func()` registers into)
+ *       exception: `c_function_t::internal_funcs` (what `add_internal_func()` registers into)
  *       is a process-wide `static`, not per-instance - registering an internal function once
  *       makes it visible to every `virt_state_t` in the process, not just the one you had in mind.
  *
@@ -332,7 +332,8 @@ VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_STRING);
 VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_FLOAT);
 VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_INTEGER);
 VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_LUA_SCRIPT);
-VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_LUA_FUNCTION);
+VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_C_FUNCTION);
+VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_LUA_OBJECT);
 
 /*!
  * @brief Base object type for virt_composer.
@@ -556,11 +557,11 @@ struct lua_script_t : public vc::object_t {
 
 /* Does this really have any irl usage? ANSW: YES! It holds (should hold) C lua callbacks */
 /*!
- * 
- * vkc::lua_function_t
+ *
+ * vkc::c_function_t
  * -------------------
  *
- * Description: Represents a C++ function exposed to Lua. Can be called from Lua scripts 
+ * Description: Represents a C++ function exposed to Lua. Can be called from Lua scripts
  * using a Lua state, allowing integration of native C++ callbacks into Lua code.
  *
  * Members:
@@ -574,43 +575,29 @@ struct lua_script_t : public vc::object_t {
  *   - Parameters:
  *     - name: Name of the function in Lua.
  *     - source: Source or context of the function.
- * 
+ *
  */
-struct lua_function_t : public vc::object_t {
+struct c_function_t : public vc::object_t {
     std::string m_name;
     std::string m_source;
 
-    lua_function_t(vc::object_t::Private priv) : vc::object_t(priv) {}
-    virtual ~lua_function_t() { uninit(); }
+    c_function_t(vc::object_t::Private priv) : vc::object_t(priv) {}
+    virtual ~c_function_t() { uninit(); }
 
-    static vc::ref_t<lua_function_t> create(std::string name, std::string source) {
-        auto ret = std::make_shared<lua_function_t>(vc::object_t::Private{type_id_static()});
-        ret->m_name = name;
-        ret->m_source = source;
-        if (ret->init() < 0)
-            throw vc::except_t("Failed lua_function_t init");
-        DBG("Created Lua Function: name: %s src: %s", name.c_str(), source.c_str());
-        return ret;
-    }
+    static vc::ref_t<c_function_t> create(std::string name, std::string source);
 
-    virtual vc::object_type_e type_id() const override { return VC_TYPE_LUA_FUNCTION; }
-    static vc::object_type_e type_id_static() { return VC_TYPE_LUA_FUNCTION; }
+    virtual vc::object_type_e type_id() const override { return VC_TYPE_C_FUNCTION; }
+    static vc::object_type_e type_id_static() { return VC_TYPE_C_FUNCTION; }
 
-    int call(lua_State *L) {
-        if (!_fn) {
-            DBG("No function to call");
-            return -1;
-        }
-        return _fn(L);
-    }
+    int call(lua_State *L);
 
     inline std::string to_string() const override {
-        return std::format("vc::lua_function[{}]: m_name={} m_source={}",
+        return std::format("vc::c_function[{}]: m_name={} m_source={}",
                 (void*)this, m_name, m_source);
     }
 
     static void add_internal_func(std::string name, std::function<int(lua_State *L)> fn) {
-        lua_function_t::internal_funcs[name] = fn;
+        c_function_t::internal_funcs[name] = fn;
     }
 
 private:
@@ -621,22 +608,91 @@ private:
     static std::map<std::string, void *> dll_handles;
     static std::map<std::string, std::function<int(lua_State *L)>> dll_funcs;
 
-    vc::ret_t init() {
-        if (m_source == "[INTERNAL]" && has(internal_funcs, m_name)) {
-            _fn = internal_funcs[m_name];
-            return VC_ERROR_OK;
-        }
-        /* TODO: DLL/SO source */
-        else {
-            return VC_ERROR_GENERIC;
-        }
-    }
+    vc::ret_t init();
     vc::ret_t uninit() { return VC_ERROR_OK; }
 };
 
-inline std::map<std::string, std::function<int(lua_State *L)>>  lua_function_t::internal_funcs;
-inline std::map<std::string, std::function<int(lua_State *L)>>  lua_function_t::dll_funcs;
-inline std::map<std::string, void *>                            lua_function_t::dll_handles;
+inline std::map<std::string, std::function<int(lua_State *L)>>  c_function_t::internal_funcs;
+inline std::map<std::string, std::function<int(lua_State *L)>>  c_function_t::dll_funcs;
+inline std::map<std::string, void *>                            c_function_t::dll_handles;
+
+/*!
+ * vc::lua_object_t
+ * ----------------
+ * Holds a strong reference to an arbitrary Lua value (function, table, string, number, thread -
+ * anything captured via capture()) so C++ can keep it alive past the call that handed
+ * it over, and invoke/push it again later. The opposite direction of c_function_t (a C++
+ * callback exposed to Lua) - this is a Lua value held by C++.
+ *
+ * As a member-function *parameter*, `vc::ref_t<lua_object_t>` captures whatever Lua value is
+ * passed - that's the whole point of declaring the parameter that type (see
+ * `luaw_param_t<vc::ref_t<T>, index>`'s special case). As a *return value*, though, it's boxed
+ * the same way any other `vc::ref_t<T>` is - a normal `"__vc_metatable"` userdata Lua can hold
+ * and pass around like any other vc object, not the raw underlying value unwrapped from its
+ * shell. `push()`/`call()` are the lower-level primitives that work directly against the
+ * captured value's own registry slot - used internally by `call<R>()` and by anything that needs
+ * to actually invoke the captured value, not by the generic push-a-return-value machinery.
+ *
+ * Three separate, single-purpose operations, each doing exactly one thing:
+ * - `create()` - the normal factory, same as any other vc object. Makes an empty shell with
+ *   nothing captured yet.
+ * - `capture(L)` - an instance method. Replaces *this* instance's held value with whatever is on
+ *   top of `L`'s stack, releasing whatever it previously held first.
+ * - `capture_lua_object(L, ref, idx)` - a static convenience that duplicates the value at stack
+ *   index `idx` onto the top and calls `ref->capture(L)`. It does not create anything - `ref`
+ *   must already exist (via `create()`).
+ */
+struct lua_object_t : public vc::object_t {
+    lua_State *L = nullptr;
+    int table_ref = LUA_NOREF; /* which dedicated sub-table (one per virt_state_t) */
+    int ref = LUA_NOREF;       /* this value's slot within that sub-table */
+
+    lua_object_t(vc::object_t::Private priv) : vc::object_t(priv) {}
+    virtual ~lua_object_t();
+
+    static vc::ref_t<lua_object_t> create() {
+        return std::make_shared<lua_object_t>(vc::object_t::Private{type_id_static()});
+    }
+
+    /*! Replaces this instance's captured value with whatever is on top of `L`'s stack - releasing
+     * whatever it previously held first (see `release()`). */
+    void capture(lua_State *L);
+
+    /*! Duplicates the value at stack index `idx` onto the top, then delegates to
+     * `ref->capture(L)`. Does not create anything - `ref` must already exist. */
+    static void capture_lua_object(lua_State *L, vc::ref_t<lua_object_t> ref, int idx) {
+        lua_pushvalue(L, idx);
+        ref->capture(L);
+    }
+
+    virtual vc::object_type_e type_id() const override { return VC_TYPE_LUA_OBJECT; }
+    static vc::object_type_e type_id_static() { return VC_TYPE_LUA_OBJECT; }
+
+    inline std::string to_string() const override {
+        return std::format("vc::lua_object_t[{}]: table_ref={} ref={}",
+                (void*)this, table_ref, ref);
+    }
+
+    /*! Pushes the captured value back onto L - "give it back to Lua." */
+    void push(lua_State *L);
+
+    /*! Raw primitive: caller has already pushed exactly `nargs` argument values onto L (nothing
+     * else in between) - pushes the captured callee below them and pcalls with LUA_MULTRET,
+     * matching the plain lua_CFunction "push results, return count" contract. Errors are
+     * re-raised via luaw_push_error rather than encoded in the return value, same as every other
+     * handler in this file. */
+    int call(lua_State *L, int nargs);
+
+    /*! call_lua<R>()-shaped convenience: typed C++ args in, typed C++ result out. Mirrors
+     * call_lua()'s body - only "how the callee gets onto the stack" differs (push(L) here
+     * vs. lua_getglobal(L, name) there). */
+    template <typename R, typename ...Args>
+    std::pair<std::conditional_t<!std::is_void_v<R>, R, int>, err_e> call(Args&& ...args);
+
+    /* Unrefs whatever this instance currently holds, if anything - shared by ~lua_object_t() and
+    capture(L) (which releases the old value before capturing a new one). */
+    void release();
+};
 
 /*!
  * @brief Human-readable description of an `object_type_e` value - just its registered name
@@ -1759,10 +1815,19 @@ struct luaw_param_t<vc::ref_t<T>, index> {
         // DBG("Ref at index: %zd", index);
         if (lua_isnil(L, index))
             return vc::ref_t<T>{}; /* if the user intended to pass a nill, we give it as a nullptr */
-        auto obj = get_object_from_lua(L, index);
-        if (!obj)
-            luaw_push_error(L, std::format("Expected userdata at index {}", index));
-        return obj->to_related<T>();
+        if constexpr (std::is_same_v<T, lua_object_t>) {
+            if (auto obj = get_object_from_lua(L, index);
+                    obj && obj->type_id() == lua_object_t::type_id_static())
+                return obj->to_related<lua_object_t>();
+            auto obj = lua_object_t::create();
+            lua_object_t::capture_lua_object(L, obj, index);
+            return obj;
+        } else {
+            auto obj = get_object_from_lua(L, index);
+            if (!obj)
+                luaw_push_error(L, std::format("Expected userdata at index {}", index));
+            return obj->to_related<T>();
+        }
     }
 };
 
@@ -2385,13 +2450,24 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
         return 0;
     }
     else if constexpr (is_vc_ref_t<Type>::value) {
-        auto obj = get_object_from_lua(L, index);
-        if (!obj) {
-            DBG("Invalid user object");
-            return -1;
+        if constexpr (std::is_same_v<typename Type::element_type, lua_object_t>) {
+            if (auto obj = get_object_from_lua(L, index);
+                    obj && obj->type_id() == lua_object_t::type_id_static()) {
+                object = obj->to_related<lua_object_t>();
+                return 0;
+            }
+            object = lua_object_t::create();
+            lua_object_t::capture_lua_object(L, object, index);
+            return 0;
+        } else {
+            auto obj = get_object_from_lua(L, index);
+            if (!obj) {
+                DBG("Invalid user object");
+                return -1;
+            }
+            object = obj->to_related<Type::element_type>();
+            return 0;
         }
-        object = obj->to_related<Type::element_type>();
-        return 0;
     }
     else {
         demangle_static_assert<false, decltype(object)>(" - Is not a valid object type");
@@ -2459,15 +2535,19 @@ void register_inheritance(virt_state_t *vs) {
 }
 
 
+/* Shared tail for call_lua()/lua_object_t::call<R>(): assumes the callee is already on top of
+vs's Lua stack (pushed by the caller - lua_getglobal() for call_lua(), push(L) for
+lua_object_t::call<R>()) - pushes each of `args`, pcalls, and converts the single result. Not a
+public entry point on its own; it's the "push args, pcall, convert result" logic both of those
+share, minus how the callee itself gets onto the stack. */
 template <typename R, typename ...Args>
 std::pair<std::conditional_t<!std::is_void_v<R>, R, int>, err_e>
-call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
+call_on_stack(virt_state_t *vs, Args&& ...args)
 {
     using RetT = std::conditional_t<!std::is_void_v<R>, R, int>;
 
     auto L = luaw_get_lua_state(vs);
-    lua_getglobal(L, function_name);
-    int pushcnt = 1;
+    int pushcnt = 1; /* the callee, already on the stack before this call */
     try {
         ([&](auto &obj){
             if (luaw_push_cpp_object(L, obj) < 0){
@@ -2484,7 +2564,7 @@ call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
     int argc = std::tuple_size_v<std::tuple<Args...>>;
     if constexpr (std::is_void_v<R>) {
         if (lua_pcall(L, argc, 0, 0) != LUA_OK) {
-            DBG("LUA call_lua[%s([%d])] Failed: \n%s", function_name, argc, lua_tostring(L, -1));
+            DBG("LUA call_on_stack([%d]) Failed: \n%s", argc, lua_tostring(L, -1));
             lua_pop(L, 1);
             return {0, VC_ERROR_FAILED_CALL};
         }
@@ -2493,13 +2573,21 @@ call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
     else {
         R result = {};
         if (lua_pcall(L, argc, 1, 0) != LUA_OK) {
-            DBG("LUA call_lua[%s([%d])] Failed: \n%s", function_name, argc, lua_tostring(L, -1));
+            DBG("LUA call_on_stack([%d]) Failed: \n%s", argc, lua_tostring(L, -1));
             lua_pop(L, 1);
             return {result, VC_ERROR_FAILED_CALL};
         }
         luaw_lua_to_cpp_object(L, -1, result);
         return {result, VC_ERROR_OK};
     }
+}
+
+template <typename R, typename ...Args>
+std::pair<std::conditional_t<!std::is_void_v<R>, R, int>, err_e>
+call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
+{
+    lua_getglobal(luaw_get_lua_state(vs), function_name);
+    return call_on_stack<R>(vs, std::forward<Args>(args)...);
 }
 
 template <typename T>
@@ -2537,6 +2625,93 @@ inline std::string to_string(ref_t<T> ref) {
 
 inline std::string to_string(const object_t& ref) {
     return ref.to_string();
+}
+
+/* lua_object_t --------------------------------------------------------------------------------- */
+
+inline void lua_object_t::release() {
+    if (ref == LUA_NOREF || !L)
+        return;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, table_ref);
+    luaL_unref(L, -1, ref);
+    lua_pop(L, 1);
+    ref = LUA_NOREF;
+    L = nullptr;
+}
+
+inline lua_object_t::~lua_object_t() {
+    release();
+}
+
+inline void lua_object_t::push(lua_State *L) {
+    if (ref == LUA_NOREF || !this->L) {
+        lua_pushnil(L);
+        return;
+    }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, table_ref);
+    lua_rawgeti(L, -1, ref);
+    lua_remove(L, -2);
+}
+
+inline int lua_object_t::call(lua_State *L, int nargs) {
+    if (ref == LUA_NOREF || !this->L) {
+        luaw_push_error(L, "internal_error: lua_object_t has nothing captured (released, or never "
+                "captured)");
+        return 0;
+    }
+    int base = lua_gettop(L) - nargs;
+    push(L);
+    lua_insert(L, base + 1);
+    if (lua_pcall(L, nargs, LUA_MULTRET, 0) != LUA_OK) {
+        std::string err = lua_tostring(L, -1);
+        lua_pop(L, 1);
+        luaw_push_error(L, err);
+        return 0;
+    }
+    return lua_gettop(L) - base;
+}
+
+/* Needs call_on_stack() above, which its body calls. */
+template <typename R, typename ...Args>
+std::pair<std::conditional_t<!std::is_void_v<R>, R, int>, err_e>
+lua_object_t::call(Args&& ...args)
+{
+    using RetT = std::conditional_t<!std::is_void_v<R>, R, int>;
+    if (ref == LUA_NOREF || !L)
+        return {RetT{}, VC_ERROR_FAILED_CALL};
+    push(L);
+    return call_on_stack<R>(luaw_get_virt_state(L), std::forward<Args>(args)...);
+}
+
+/* c_function_t --------------------------------------------------------------------------------- */
+
+inline vc::ref_t<c_function_t> c_function_t::create(std::string name, std::string source) {
+    auto ret = std::make_shared<c_function_t>(vc::object_t::Private{type_id_static()});
+    ret->m_name = name;
+    ret->m_source = source;
+    if (ret->init() < 0)
+        throw vc::except_t("Failed c_function_t init");
+    DBG("Created Lua Function: name: %s src: %s", name.c_str(), source.c_str());
+    return ret;
+}
+
+inline int c_function_t::call(lua_State *L) {
+    if (!_fn) {
+        DBG("No function to call");
+        return -1;
+    }
+    return _fn(L);
+}
+
+inline vc::ret_t c_function_t::init() {
+    if (m_source == "[INTERNAL]" && has(internal_funcs, m_name)) {
+        _fn = internal_funcs[m_name];
+        return VC_ERROR_OK;
+    }
+    /* TODO: DLL/SO source */
+    else {
+        return VC_ERROR_GENERIC;
+    }
 }
 
 }; /* namespace virt_composer */

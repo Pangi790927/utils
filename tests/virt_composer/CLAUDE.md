@@ -106,6 +106,7 @@ running each test binary.
 | 014 | Error Handling | `014-001` | missing file, malformed YAML, unterminated-flow-is-not-an-error, duplicate name, null object |
 | 018 | Reproduced Bugs | `018-001` | permanent regression checks for fixed bugs that used to be `BUGS.md` entries (see co-lib's Category 18 for the convention this follows) |
 | 019 | Operators | `019-001` | `vc::set_class_operator()`/`operator_e`, all binary ops (ADD/SUB/MUL/EQ/LT/LE/CONCAT) + unary (UNM/LEN), the `which` (1 vs 2) argument's role for non-commutative ops, and the "neither operand has a handler" error path |
+| 020 | Lua Objects | `020-001` | `vc::lua_object_t`/`capture_lua_object()` - capturing a Lua callback into C++ (`vc::ref_t<lua_object_t>` as a member-function param), `call<R>(...)` (typed convenience) vs `call(L, nargs)` (raw primitive, incl. `LUA_MULTRET`), and pushing a captured value back to Lua as the original callable (not a re-boxed userdata) |
 
 ## Working docs in this directory
 

@@ -120,6 +120,14 @@ struct virt_state_t {
      * afferent to vc::object_t */
     int weak_cache_ref = LUA_NOREF;
 
+    /*! Registry ref to the dedicated (non-weak) table lua_object_t captures live in. Kept
+     * separate from weak_cache_ref/the main registry so per-capture churn never touches the same
+     * table luaw_get_virt_state()'s hot "virt_state" string lookup runs against on every single
+     * dispatcher call. Unlike weak_cache_ref, this table is deliberately NOT weak-mode - the whole
+     * point of capturing is to keep the value alive even after Lua itself drops every reference
+     * to it. */
+    int lua_object_ref_table = LUA_NOREF;
+
     /*! Holds a list of constants that can be used inside  */
     std::map<std::string, double> constants = {
         {"SIZEOF_INT16", (double)sizeof(int16_t)},
@@ -216,6 +224,38 @@ std::shared_ptr<virt_state_t> create_state() {
     VC_REGISTER_MEMBER_OBJECT(vs.get(), integer_t, value);
     VC_REGISTER_MEMBER_OBJECT(vs.get(), float_t, value);
     VC_REGISTER_MEMBER_OBJECT(vs.get(), string_t, value);
+
+    /* lua_object_t::push() mirrored as a Lua-visible member function - the explicit way to get
+    the raw captured value back out of its boxed vc reference (see lua_object_t's own doc
+    comment). Registered directly against the raw lua_CFunction shape (not via
+    VC_REGISTER_MEMBER_FUNCTION) since push() operates on the stack directly rather than
+    returning a typed value luaw_returner_t could convert. */
+    set_lua_class_member(vs.get(), lua_object_t::type_id_static(), "push",
+            [](lua_State *L) -> int {
+                auto obj = get_object_from_lua(L, 1);
+                if (!obj)
+                    luaw_push_error(L, "internal_error: Nil user object can't push!");
+                obj->to_related<lua_object_t>()->push(L);
+                return 1;
+            }, LUAW_MEMBER_FUNCTION);
+
+    /* lua_object_t::capture(L) mirrored as a Lua-visible member function - `self:capture(x)`
+    pushes exactly [self, x], so x is already on top of the stack when capture(L) runs, matching
+    its "operate on whatever's on top" contract with no repositioning needed.
+
+    - I (the human) aprove of this comment */
+    set_lua_class_member(vs.get(), lua_object_t::type_id_static(), "capture",
+            [](lua_State *L) -> int {
+                auto obj = get_object_from_lua(L, 1);
+                if (!obj)
+                    luaw_push_error(L, "internal_error: Nil user object can't capture!");
+                obj->to_related<lua_object_t>()->capture(L);
+                return 0;
+            }, LUAW_MEMBER_FUNCTION);
+
+    /* lua_object_t::release() mirrored as a Lua-visible member function - takes no args and
+    returns void, so the normal member-function macro handles it directly. */
+    VC_REGISTER_MEMBER_FUNCTION(vs.get(), lua_object_t, release);
 
     return vs;
 }
@@ -479,10 +519,10 @@ co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
         co_return nullptr;
     }
 
-    if (node["m_type"] == "vc::lua_function_t") {
+    if (node["m_type"] == "vc::c_function_t") {
         /* lua_function has the same tag_name as the function name */
         auto src = co_await resolve_str(vs, node["m_source"]);
-        auto obj = vc::lua_function_t::create(name, src);
+        auto obj = vc::c_function_t::create(name, src);
         mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
         co_return obj->to_related<vc::object_t>();
     }
@@ -693,6 +733,11 @@ static int luaopen_vc(lua_State *L) {
     lua_setmetatable(L, -2);
     vs->weak_cache_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
+    /* Table lua_object_t captures live in - plain (no __mode weak table), since here we
+    deliberately want a strong hold on whatever gets captured. */
+    lua_newtable(L);
+    vs->lua_object_ref_table = luaL_ref(L, LUA_REGISTRYINDEX);
+
     {
         /* This metatable describes a generic vc object inside lua. Practically, it expososes
         member objects and functions to lua. */
@@ -766,12 +811,12 @@ static int luaopen_vc(lua_State *L) {
                 luaw_push_error(L, "invalid null object, ie called on nil");
             }
             vc::object_type_e class_id = obj->type_id(); /* an int, still ok on unwind */
-            if (class_id != VC_TYPE_LUA_FUNCTION) {
-                luaw_push_error(L, std::format("invalid class id: {} is not VC_TYPE_LUA_FUNCTION",
+            if (class_id != VC_TYPE_C_FUNCTION) {
+                luaw_push_error(L, std::format("invalid class id: {} is not VC_TYPE_C_FUNCTION",
                         vc::to_string(class_id)));
             }
             lua_remove(L, 1); /* We don't want the function itself as an parameter */
-            return obj->to_related<lua_function_t>()->call(L);
+            return obj->to_related<c_function_t>()->call(L);
         });
         lua_setfield(L, -2, "__call");
 
@@ -1039,6 +1084,30 @@ int push_vc_object(lua_State *L, ref_t<object_t> object) {
 object_t *get_object_from_lua(lua_State *L, int idx) {
     auto *box = (box_t *)luaL_testudata(L, idx, "__vc_metatable");
     return box ? box->self_obj.get() : nullptr;
+}
+
+void lua_object_t::capture(lua_State *L) {
+    /* Release whatever this instance previously held, if anything - capture() replaces it. */
+    release();
+
+    /* Capturing nil is just releasing - without this, luaL_ref would hand back LUA_REFNIL (a
+    valid-looking ref distinct from LUA_NOREF), leaving this instance in a state push()/call()'s
+    "nothing captured" guards (ref == LUA_NOREF) wouldn't recognize. */
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+
+    auto vs = luaw_get_virt_state(L);
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_object_ref_table);     // push the sub-table
+    lua_insert(L, -2);                                              // [sub-table, value]
+    int new_ref = luaL_ref(L, -2);                                  // pops value, refs into sub-table
+    lua_pop(L, 1);                                                  // pop sub-table
+
+    this->L = L;
+    table_ref = vs->lua_object_ref_table;
+    ref = new_ref;
 }
 
 void luaw_push_error(lua_State *L, const std::string& err_str, const std::source_location sloc) {
