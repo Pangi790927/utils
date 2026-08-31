@@ -321,6 +321,12 @@ struct except_t : public std::exception {
  *
  * @see create_state, get_ref, parse_config, call_lua
  */
+/* TODO: nothing currently enforces the @warning above - a ref_t<T> (especially ref_t<lua_object_t>,
+which holds a raw lua_State* directly) that outlives its virt_state_t is a live use-after-free, not
+a caught error. Worth investigating a real fix: a weak_ptr<virt_state_t> stashed alongside the raw
+lua_State* so a stale reference can be detected and turned into a thrown exception instead of UB,
+or some cheaper "generation counter"/invalidation scheme checked at each entry point
+(release()/capture()/push()/call() for lua_object_t; to_related<T>()/get_ref<T>() more generally). */
 struct virt_state_t;
 struct virt_tag_t { static constexpr int off = VIRT_COMPOSER_UID_START_OFFSET; };
 
