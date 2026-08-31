@@ -24,24 +24,28 @@ namespace virt_composer
 namespace vo = virt_object;
 namespace vc = virt_composer;
 
-/* Max number of named references objects */
+/* Intended as the max number of named reference objects - currently unused, nothing in this file
+or elsewhere in the repo references it. */
 static constexpr const int MAX_NUMBER_OF_OBJECTS = 16384;
 
-/*! Holds information of a member, either a member funtion or a member object */
+/*! Holds information of a member, either a member function or a member object */
 struct luaw_member_t {
     lua_CFunction fn;
     luaw_member_e member_type;
 };
 
 /*! Holds a function that will copy from that respective member, also holds the type_index of the
- * member to check at runtime that the copy doesn't come from  */
+ * member to check at runtime that the copy doesn't come from a mismatched-type source */
 struct trivial_copy_member_t {
     std::type_index tid{typeid(void)};
     std::function<void(vc::object_t *, void *, size_t)> copy_fn;
 };
 
-/*! This holds the state of the  */
+/*! Holds one independent virt_composer instance's entire state - see virt_state_t's own doc
+comment in virt_composer.h for the user-facing summary; this is the actual definition. */
 struct virt_state_t {
+    /* Coroutine pool build_object()/build_pseudo_object()/build_schema() get scheduled onto - see
+    parse_config()/internal_create_object() for where it's actually run(). */
     co::pool_p pool;
 
     /*! The Lua state associated with this virt state */
@@ -178,6 +182,8 @@ struct virt_state_t {
     std::vector<std::unordered_set<int>> inheritance_table =
             std::vector<std::unordered_set<int>>{VIRT_TYPE_CNT};
 
+    /* Closes the Lua state - see virt_state_t's own doc comment in virt_composer.h for why nothing
+    obtained from this virt_state_t is safe to keep alive past this point. */
     ~virt_state_t() {
         DBG_SCOPE();
         if (L) {
@@ -187,6 +193,9 @@ struct virt_state_t {
     }
 };
 
+/* [INTERNAL] The full userdata every vc object is boxed into on the Lua side - see
+push_vc_object()/get_object_from_lua() for how it gets created/unboxed, and the __gc metamethod in
+luaopen_vc() for how it gets torn down. */
 struct box_t {
     vc::ref_t<vc::object_t> self_obj;   // the strong ref - Lua's actual claim on the object
 };
@@ -199,6 +208,7 @@ static lua_State *luaw_init(vc::virt_state_t *vs);
 static int internal_create_object(lua_State *L);
 static int luaopen_vc(lua_State *L);
  
+/* See except_t's declaration in virt_composer.h for its doc comment. */
 except_t::except_t(const std::string& str) {
     err_str = std::format(
             "\n------BACKTRACE------\n"
@@ -245,6 +255,7 @@ std::shared_ptr<virt_state_t> create_state() {
     return vs;
 }
 
+/* See get_ref_base()'s declaration in virt_composer.h for its doc comment. */
 ref_t<vc::object_t> get_ref_base(virt_state_t *vs, const std::string& name) {
     if (!has(vs->name_to_object, name))
         return nullptr;
@@ -274,6 +285,7 @@ std::string depend_resolver_internal_t::internal_get_obj_type_name(const std::st
 }
 
 
+/* See add_named_builder_callback()'s declaration in virt_composer.h for its doc comment. */
 err_e add_named_builder_callback(vc::virt_state_t *vs, const std::string& match,
         std::function<co::task<vc::ref_t<vc::object_t>>(
                 vc::virt_state_t *, const std::string&, fkyaml::node&)> builder)
@@ -282,6 +294,7 @@ err_e add_named_builder_callback(vc::virt_state_t *vs, const std::string& match,
     return VC_ERROR_OK;
 }
 
+/* See add_auto_builder_callback()'s declaration in virt_composer.h for its doc comment. */
 err_e add_auto_builder_callback(vc::virt_state_t *vs,
         std::function<bool(const std::string&, fkyaml::node& node)> analyser,
         std::function<co::task_t(vc::virt_state_t *, const std::string&, fkyaml::node&)> builder)
@@ -290,6 +303,7 @@ err_e add_auto_builder_callback(vc::virt_state_t *vs,
     return VC_ERROR_OK;
 }
 
+/* See add_lua_tab_funcs()'s declaration in virt_composer.h for its doc comment. */
 err_e add_lua_tab_funcs(virt_state_t *vs, const std::vector<luaL_Reg>& vc_tab_funcs) {
     vs->tab_funcs.pop_back();
     vs->tab_funcs.insert(vs->tab_funcs.end(), vc_tab_funcs.begin(), vc_tab_funcs.end());
@@ -301,6 +315,7 @@ err_e add_lua_tab_funcs(virt_state_t *vs, const std::vector<luaL_Reg>& vc_tab_fu
     return VC_ERROR_OK;
 }
 
+/* See add_lua_flag_mapping()'s declaration in virt_composer.h for its doc comment. */
 err_e add_lua_flag_mapping(virt_state_t *vs,
         const std::vector<std::pair<lua_Integer, std::string>> &mapping)
 {
@@ -314,6 +329,7 @@ err_e add_lua_flag_mapping(virt_state_t *vs,
     return VC_ERROR_OK;
 }
 
+/* See mark_dependency_solved()'s declaration in virt_composer.h for its doc comment. */
 void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t<vc::object_t> depend) {
     /* First remember the dependency: */
     if (!depend) {
@@ -341,6 +357,10 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
     }
 }
 
+/* [INTERNAL] Shared tinyexpr evaluation behind resolve_int()/resolve_float()'s string-node case -
+compiles `expr_str` as a math expression, with vs->constants exposed as variables (so e.g.
+"SIZEOF_INT32 * 2" resolves), and evaluates it to a double (resolve_int() then rounds it). Throws
+if the expression itself fails to compile. */
 static double resolve_string_as_expression(std::string expr_str,
         vc::virt_state_t *vs)
 {
@@ -420,6 +440,8 @@ co::task_t resolve_memb_data(virt_state_t *vs, const std::string &obj_name,
     co_return 0;
 }
 
+/* [INTERNAL] True if `a` begins with `b` - used by get_file_string_content()'s sandbox check
+below. */
 static bool starts_with(const std::string& a, const std::string& b) {
     return a.size() >= b.size() && a.compare(0, b.size(), b) == 0;
 }
@@ -449,6 +471,12 @@ static std::string get_file_string_content(const std::string& file_path_relative
                        (std::istreambuf_iterator<char>()));
 }
 
+/* [INTERNAL] Builds and runs a `vc::lua_script_t` node for build_object() - the "m_type:
+vc::lua_script_t" case. Exactly one of `m_source` (inline) / `m_source_path` (file, via
+get_file_string_content()) must be present; either combination violation just co_returns nullptr
+rather than throwing (build_object() itself doesn't treat that as fatal). The script's source is
+executed via exec_lua_src() immediately, and only marked as solved (mark_dependency_solved()) if
+that execution actually succeeds. */
 static co::task<vc::ref_t<vc::object_t>> init_lua_script(vc::virt_state_t *vs,
         const std::string& name, fkyaml::node& node)
 {
@@ -463,6 +491,8 @@ static co::task<vc::ref_t<vc::object_t>> init_lua_script(vc::virt_state_t *vs,
         co_return nullptr;
     }
 
+    /* Runs `str` as a Lua chunk via luaL_dostring(); VC_ERROR_FAILED_CALL on failure, popping the
+    error message it leaves on the stack. */
     auto exec_lua_src = [](auto vs, const std::string& str){
         if (luaL_dostring(vs->L, str.c_str()) != LUA_OK) {
             DBG("LUA exec string Failed: \n%s", lua_tostring(vs->L, -1));
@@ -495,6 +525,7 @@ static co::task<vc::ref_t<vc::object_t>> init_lua_script(vc::virt_state_t *vs,
     co_return nullptr;
 }
 
+/* See build_object()'s declaration in virt_composer.h for its doc comment. */
 co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
         const std::string& name, fkyaml::node& node)
 {
@@ -547,6 +578,7 @@ co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
     throw vc::except_t{std::format("Invalid object type: {}", node["m_type"].as_str())};
 }
 
+/* See build_pseudo_object()'s declaration in virt_composer.h for its doc comment. */
 co::task_t build_pseudo_object(vc::virt_state_t *vs, const std::string& name, fkyaml::node& node) {
     DBG("PseBuilding: %s", name.c_str());
 
@@ -590,10 +622,15 @@ co::task_t build_pseudo_object(vc::virt_state_t *vs, const std::string& name, fk
     co_return -1;
 }
 
+/* See new_anon_name()'s declaration in virt_composer.h for its doc comment. */
 std::string new_anon_name(virt_state_t *vs) {
     return "__" + std::to_string(vs->anonymous_increment++);
 }
 
+/* [INTERNAL] Builds every top-level entry of a parsed YAML document (`root` must be a mapping) -
+dispatches each one to build_object() (has `m_type`) or build_pseudo_object() (doesn't), scheduling
+both as coroutines via co::sched() so they can suspend/resume on each other's dependencies rather
+than requiring declaration order to matter. Used only by parse_config(). */
 static co::task_t build_schema(vc::virt_state_t *vs, fkyaml::node& root) {
     ASSERT_COFN(CHK_BOOL(root.is_mapping()));
 
@@ -609,6 +646,7 @@ static co::task_t build_schema(vc::virt_state_t *vs, fkyaml::node& root) {
     co_return 0;
 }
 
+/* See parse_config()'s declaration in virt_composer.h for its doc comment. */
 err_e parse_config(vc::virt_state_t *vs, const char *path) {
     DBG_SCOPE();
     std::ifstream file(path);
@@ -707,6 +745,15 @@ static int luaw_unary_operator_dispatch(lua_State *L) {
     return fn(L);
 }
 
+/* [INTERNAL] Opens the "virt_composer" Lua module (registered via luaL_requiref() in luaw_init()) -
+sets up everything a fresh virt_state_t's Lua side needs once: the weak object cache
+(weak_cache_ref, used by push_vc_object()), the strong lua_object_t capture table
+(lua_object_ref_table), the single shared "__vc_metatable" every vc object uses (with all its
+metamethods - __tostring/__index/__newindex/__call/__gc, plus every arithmetic/relational/unary
+operator dispatched through luaw_binary_operator_dispatch<Op>/luaw_unary_operator_dispatch<Op>),
+and the `vc` module table itself (vs->lua_table_idx) - created here from whatever's already in
+vs->tab_funcs (usually still empty at this point), with functions/constants actually added later
+via add_lua_tab_funcs()/add_lua_flag_mapping(). */
 static int luaopen_vc(lua_State *L) {
     int top = lua_gettop(L);
     auto vs = luaw_get_virt_state(L);
@@ -729,6 +776,7 @@ static int luaopen_vc(lua_State *L) {
         member objects and functions to lua. */
         luaL_newmetatable(L, "__vc_metatable");
 
+        /* params: 1.usrptr -> returns: 1.string */
         lua_pushcfunction(L, [](lua_State *L) {
             auto obj = get_object_from_lua(L, -1);
             lua_pushstring(L, obj->to_string().c_str());
@@ -832,6 +880,9 @@ static int luaopen_vc(lua_State *L) {
         });
         lua_setfield(L, -2, "__gc");
 
+        /* One metamethod slot per operator_e value, each bound to the shared dispatcher template
+        instantiated for that specific operator - see luaw_binary_operator_dispatch<Op>()/
+        luaw_unary_operator_dispatch<Op>()'s own comments for what actually happens on a call. */
         lua_pushcfunction(L, &luaw_binary_operator_dispatch<VC_OPERATOR_ADD>);
         lua_setfield(L, -2, "__add");
 
@@ -915,6 +966,11 @@ static int luaopen_vc(lua_State *L) {
     return 1;
 }
 
+/* [INTERNAL] Creates and configures the Lua state for one virt_state_t: stashes `vs` itself in the
+registry (under the string key "virt_state", read back by luaw_get_virt_state()) so any Lua
+C-function can recover it, opens the "virt_composer" module (luaopen_vc) plus a fixed allowlist of
+Lua stdlib pieces, and conditionally opens io/os per VIRT_COMPOSER_ENABLE_LUA_IO/_OS. Returns
+nullptr if luaL_newstate() itself fails - create_state() treats that as a hard failure. */
 static lua_State *luaw_init(vc::virt_state_t *vs) {
     lua_State *L = luaL_newstate();
     if (L == NULL) {
@@ -978,6 +1034,7 @@ int luaw_catch_exception(lua_State *L) {
     return 0;
 }
 
+/* See luaw_get_virt_state()'s declaration in virt_composer.h for its doc comment. */
 vc::virt_state_t *luaw_get_virt_state(lua_State *L) {
     lua_pushstring(L, "virt_state");
     lua_gettable(L, LUA_REGISTRYINDEX);
@@ -986,10 +1043,12 @@ vc::virt_state_t *luaw_get_virt_state(lua_State *L) {
     return ptr;
 }
 
+/* See luaw_get_lua_state()'s declaration in virt_composer.h for its doc comment. */
 lua_State *luaw_get_lua_state(vc::virt_state_t *vs) {
     return vs->L;
 }
 
+/* See set_trivial_copy_member()'s declaration in virt_composer.h for its doc comment. */
 void set_trivial_copy_member(virt_state_t *vs, object_type_e type, const char *member_name,
         std::type_index tid, std::function<void(vc::object_t *, void *, size_t)> copy_fn)
 {
@@ -1036,6 +1095,7 @@ void set_class_operator(virt_state_t *vs, object_type_e type, operator_e op, lua
         vs->lua_class_operators[d][(size_t)op] = fn;
 }
 
+/* See set_base_derived_relation()'s declaration in virt_composer.h for its doc comment. */
 void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type_e derived) {
     DBG("set_base_derived_relation set %s as base of %s", base.name(), derived.name());
     vs->inheritance_table[base].insert(base);
@@ -1067,6 +1127,7 @@ int push_vc_object(lua_State *L, ref_t<object_t> object) {
     return 0;
 }
 
+/* See get_object_from_lua()'s declaration in virt_composer.h for its doc comment. */
 object_t *get_object_from_lua(lua_State *L, int idx) {
     auto *box = (box_t *)luaL_testudata(L, idx, "__vc_metatable");
     return box ? box->self_obj.get() : nullptr;
@@ -1099,12 +1160,15 @@ void lua_object_t::capture_ref(lua_State *L) {
     ref = new_ref;
 }
 
+/* See luaw_push_error()'s declaration in virt_composer.h for its doc comment. */
 void luaw_push_error(lua_State *L, const std::string& err_str, const std::source_location sloc) {
     DBG("Throwing error: %s SRC_LOC[%s:%d %s]",
             err_str.c_str(), sloc.file_name(), sloc.line(), sloc.function_name());
     lua_Debug ar;
     std::string context;
     int i = 2;
+    /* Pulls line N out of a Lua source string dumped by lua_getinfo(), "<unknown>" if src is null
+    or N is out of range. */
     auto line_source = [](const char *src, int N) -> std::string {
         if (!src)
             return "<unknown>";
@@ -1263,6 +1327,14 @@ static fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
     return fkyaml::node{};
 }
 
+/* [INTERNAL] Implements the Lua-visible vc.create_object(name, description) - registered under
+that name via add_lua_tab_funcs() in create_state(). `name` defaults to an anonymous name if the
+Lua caller omits/passes nil for it; `description` (a Lua table) is converted to a YAML node via
+create_yaml_from_lua_object() and then built the same way parse_config() builds a YAML document's
+entries - m_type-tagged goes through build_object(), everything else through build_pseudo_object().
+Runs the object's own build coroutine to completion (pool->run()) before returning, then fetches
+the newly-built object back off the `vc` module table by name (mark_dependency_solved() put it
+there) to hand back to the caller. */
 static int internal_create_object(lua_State *L) {
     auto vs = luaw_get_virt_state(L);
     const char *cname = lua_tostring(L, 1);
@@ -1307,7 +1379,7 @@ static int internal_create_object(lua_State *L) {
     /* Get back the virt_composer table */
     lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_table_idx);
     lua_getfield(L, -1, name.c_str()); /* get the object with the respective name */
-    lua_remove(L, -2); /* pops vulkan_utils table */
+    lua_remove(L, -2); /* pops the `vc` module table */
 
     return 1;
 }

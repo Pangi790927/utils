@@ -1376,6 +1376,11 @@ call_lua(virt_state_t *vs, const char *function_name,
  * 
  * */
 
+/* [INTERNAL] Both set by virt_composer_end.h, once every VIRT_COMPOSER_REGISTER_TYPE in this
+translation unit has run: VIRT_TYPE_CNT becomes the total distinct type count (so every per-type
+array in virt_state_t can be sized/indexed safely) and VIRT_TYPES_INITIALIZED flips to true.
+create_state() checks VIRT_TYPES_INITIALIZED first and refuses to run if virt_composer_end.h was
+never included. */
 inline bool VIRT_TYPES_INITIALIZED;
 inline size_t VIRT_TYPE_CNT;
 
@@ -1602,6 +1607,7 @@ void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type
  */
 ref_t<vc::object_t> get_ref_base(virt_state_t *vs, const std::string& name);
 
+/* See get_ref()'s declaration above for its doc comment. */
 template <typename T>
 ref_t<T> get_ref(virt_state_t *vs, const std::string& name) {
     auto base = get_ref_base(vs, name);
@@ -1691,6 +1697,9 @@ struct depend_resolver_t : depend_resolver_internal_t {
         return co::external_wait_next_task(state->pool);
     }
 
+    /* The `if (!ret)` throw below only ever fires when `obj` itself is null (the dependency was
+    never registered) - a genuine cast failure inside to_related<T>() throws std::runtime_error
+    directly and never reaches here, despite the message's "maybe cast doesn't work?" phrasing. */
     vc::ref_t<T> await_resume() {
         auto obj = internal_get_dep_object(required_depend);
         auto ret = obj ? obj->to_related<T>() : nullptr;
@@ -1735,6 +1744,7 @@ co::task<vc::ref_t<T>> resolve_obj(virt_state_t *vs, fkyaml::node& node) {
             fkyaml::node::serialize(node))};
 }
 
+/* See resolve_memb()'s declaration above for its doc comment. */
 template <typename T>
 co::task<T> resolve_memb(virt_state_t *vs, fkyaml::node& node) {
     T ret;
@@ -1753,6 +1763,7 @@ inline consteval void luaw_static_assert(const char *description) {
         throw description; /* This throw forces the termination of compilation */
 }
 
+/* See add_lua_flag_mapping()'s declaration above for its doc comment. */
 template <typename T>
 err_e add_lua_flag_mapping(virt_state_t *vs, const std::unordered_map<std::string, T>& mapping) {
     std::vector<std::pair<lua_Integer, std::string>> aux;
@@ -1967,6 +1978,11 @@ struct de_bitmaptizize<std::vector<T>> {
     using Type = std::vector<typename de_bitmaptizize<T>::Type>;
 };
 
+/* Nil at `index` produces a default-constructed (empty) tuple rather than failing. Otherwise
+expects a table of exactly `sizeof...(Args)` elements: pushes them in reverse (len down to 1), so
+after the loop the stack top is element 0, next is element 1, etc. - that's why the pack expansion
+below reads each one via a negative index (-I-1), letting the whole tuple be constructed in one
+expression instead of building it element by element. */
 template <typename ...Args, ssize_t index>
 struct luaw_param_t<std::tuple<Args...>, index> {
     template <size_t ...I>
@@ -1994,6 +2010,9 @@ struct luaw_param_t<std::tuple<Args...>, index> {
     }
 };
 
+/* Delegates to the tuple specialization above (reads the same 2-element table as
+std::tuple<Arg1,Arg2>) and unpacks the result into a pair, rather than duplicating its stack
+handling. */
 template <typename Arg1, typename Arg2, ssize_t index>
 struct luaw_param_t<std::pair<Arg1, Arg2>, index> {
     auto luaw_single_param(lua_State *L) {
@@ -2005,6 +2024,10 @@ struct luaw_param_t<std::pair<Arg1, Arg2>, index> {
     }
 };
 
+/* Nil at `index` produces an empty vector rather than failing. Otherwise expects a table, and
+(unlike the tuple specialization above) converts one element at a time - push, convert, pop - since
+the element count isn't known at compile time so there's no single pack-expansion construction to
+build. */
 template <typename T, ssize_t index>
 struct luaw_param_t<std::vector<T>, index> {
     auto luaw_single_param(lua_State *L) {
@@ -2086,6 +2109,9 @@ struct luaw_returner_t<void *> {
     }
 };
 
+/* A null ref_t<T> pushes nil rather than erroring. push_vc_object() currently always returns
+VC_ERROR_OK (see its own comment), so the except_t throw below can't actually trigger today - it's
+defensive against push_vc_object() ever growing a real failure path. */
 template <typename T>
 struct luaw_returner_t<vc::ref_t<T>> {
     void luaw_ret_push(lua_State *L, vc::ref_t<T> ref) {
@@ -2098,6 +2124,12 @@ struct luaw_returner_t<vc::ref_t<T>> {
     }
 };
 
+/* Builds a Lua table, one element per tuple slot, each pushed via its own luaw_returner_t<Type>
+(so heterogeneous tuple elements each get the right conversion) - luaw_returner_t<std::vector<T>>
+below does the same thing for a single, uniform element type. Note this duplicates
+luaw_push_cpp_object()'s own tuple/vector handling elsewhere in this file - two independent
+C++->Lua conversion paths exist side by side (this one used by call_lua()/luaw_function_wrapper's
+return-value pushing, that one used for member-getter/return conversion elsewhere). */
 template <typename ...Args>
 struct luaw_returner_t<std::tuple<Args...>> {
     void luaw_ret_push(lua_State *L, const std::tuple<Args...>& t) {
@@ -2126,6 +2158,10 @@ struct luaw_returner_t<std::vector<T>> {
     }
 };
 
+/* [INTERNAL] Shared body behind luaw_function_wrapper<function,Params...>() - converts each Lua
+argument via luaw_param_t<Params,I+1> (Params start at Lua stack index 1), calls `function`, and
+(if it returns non-void) pushes the result via luaw_returner_t. Returns the count of Lua return
+values (0 or 1), matching the lua_CFunction contract. */
 template <auto function, typename ...Params, size_t ...I>
 inline int luaw_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     using RetType = decltype(function(
@@ -2147,6 +2183,8 @@ inline int luaw_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     }
 }
 
+/* [INTERNAL] Same as luaw_function_wrapper_impl() above but for a member function - Lua stack
+index 1 is `self` (unboxed via get_object_from_lua), so Params start at I+2 instead of I+1. */
 template <typename T, auto member_ptr, typename ...Params, size_t ...I>
 int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     auto o = get_object_from_lua(L, 1);
@@ -2168,6 +2206,7 @@ int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     }    
 }
 
+/* See luaw_function_wrapper()'s declaration above for its doc comment. */
 template <auto Function, typename ...Params>
 inline int luaw_function_wrapper(lua_State *L) {
     try {
@@ -2191,13 +2230,8 @@ inline int luaw_function_wrapper(lua_State *L) {
  * @param L     The Lua state.
  * @return int  The number of values returned to Lua (0 for void, 1 otherwise).
  *
- * @details
- * This wrapper catches all exceptions and forwards them to `luaw_catch_exception`.
- * The actual parameter conversion and member function invocation is delegated to
- * `luaw_member_function_wrapper_impl`, which uses `luaw_param_t` to convert Lua values
- * to C++ types and `luaw_returner_t` to push C++ return values back to Lua.
- *
- * @see luaw_member_function_wrapper_impl, luaw_param_t, luaw_returner_t
+ * @note Exceptions thrown by the wrapped member function are caught and turned into a Lua error -
+ *       see luaw_member_function_wrapper_impl() for the actual parameter/return conversion.
  */
 template <typename T, auto member_ptr, typename ...Params>
 inline int luaw_member_function_wrapper(lua_State *L) {
@@ -2218,6 +2252,7 @@ struct is_vc_ref_t<vc::ref_t<T>> : std::true_type {};
 template <typename T>
 constexpr bool is_vc_ref = is_vc_ref_t<T>::value;
 
+// helper to detect if a type is std::tuple<...>
 template <typename T>
 struct is_tupple_t : std::false_type {};
 
@@ -2227,6 +2262,7 @@ struct is_tupple_t<std::tuple<Args...>> : std::true_type {};
 template <typename T>
 constexpr bool is_tupple = is_tupple_t<T>::value;
 
+// helper to detect if a type is std::pair<...>
 template <typename T>
 struct is_pair_t : std::false_type {};
 
@@ -2236,6 +2272,7 @@ struct is_pair_t<std::pair<A, B>> : std::true_type {};
 template <typename T>
 constexpr bool is_pair = is_pair_t<T>::value;
 
+// helper to detect if a type is std::vector<...>
 template <typename T>
 struct is_vector_t : std::false_type {};
 
@@ -2245,19 +2282,28 @@ struct is_vector_t<std::vector<T, Alloc>> : std::true_type {};
 template <typename T>
 constexpr bool is_vector = is_vector_t<T>::value;
 
-// helper to detect if a type is an known enum
+// helper to detect if a type is a known enum
 template <typename T>
 concept is_vc_enum = requires(fkyaml::node n) {
     get_enum_val<T>(n);
 };
 
+/* consteval + throw forces a compile-time-only error when `test` is false, same trick as
+luaw_static_assert() above. Unlike that one, the message parameter here is unnamed/unused in the
+body - `ToDisplay` isn't read either, it just makes each instantiation distinct per type so the
+compiler's error output points at the actual offending type. */
 template <bool test, typename ToDisplay>
 inline consteval void demangle_static_assert(const char *) {
     if constexpr (!test)
         throw;
 }
 
-/* object at index 'index' and object 'object' of type T */
+/* [INTERNAL] The C++->Lua counterpart to luaw_lua_to_cpp_object() - pushes `object` onto `L`,
+dispatching on T's (decayed) category: string, bool, integral/floating-point, vector/tuple/pair
+(recursively, per element, as a Lua table), enum (as a plain number - see the comment on that
+branch for why not a string), and `vc::ref_t<T>` (nil for a null ref, otherwise via
+push_vc_object()). Always returns 0; unsupported types fail at compile time instead (see the
+final `else` below). */
 template <typename T>
 int luaw_push_cpp_object(lua_State *L, const T &object) {
     using Type = std::decay_t<T>;
@@ -2328,7 +2374,9 @@ int luaw_push_cpp_object(lua_State *L, const T &object) {
     }
 }
 
-/* getter */
+/* [INTERNAL] Lua-callable getter for a registered member object - invoked via __index (see the
+__index lambda in virt_composer.cpp), stack layout [obj, key] so obj sits at -2. Pushes `member`
+back to Lua via luaw_push_cpp_object() and returns it as the single result. */
 template <typename T, auto member_ptr>
 int luaw_member_object_wrapper(lua_State *L) {
     try {
@@ -2348,6 +2396,13 @@ int luaw_member_object_wrapper(lua_State *L) {
     catch (...) { return luaw_catch_exception(L); }
 }
 
+/* [INTERNAL] The Lua->C++ counterpart to luaw_push_cpp_object() - converts the Lua value at
+`index` into `object`, dispatching on T's (decayed) category: string, bool, integral/floating-
+point, vector/tuple/pair (recursively, per element), enum (via the `bm_t<T>` single-value parsing
+path), and `vc::ref_t<T>` (a nil `lua_object_t` resets to an empty instance instead of failing,
+unlike every other `ref_t<T>` here, which fails on nil). Returns 0 on success, -1 on a shape
+mismatch (e.g. a table-shaped type given a non-table value). Used for member setters, call_lua()'s
+return conversion, and vector/tuple/pair element conversion. */
 template <typename T>
 int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
     using Type = std::decay_t<T>;
@@ -2465,6 +2520,9 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
     }
 }
 
+/* [INTERNAL] Lua-callable setter for a registered member object - invoked via __newindex (see the
+__newindex lambda in virt_composer.cpp), stack layout [obj, key, value] so obj sits at -3. Converts
+the value on top of the stack into `member` via luaw_lua_to_cpp_object() and assigns it in place. */
 template <typename T, auto member_ptr>
 int luaw_member_setter_object_wrapper(lua_State *L) {
     auto o = get_object_from_lua(L, -3);
@@ -2480,12 +2538,20 @@ int luaw_member_setter_object_wrapper(lua_State *L) {
     return 0;
 }
 
+/* Backs VC_REGISTER_MEMBER_FUNCTION - see that macro's doc for the user-facing contract. Just
+wraps luaw_member_function_wrapper<T,member_ptr,Params...> as the Lua-callable and hands it to
+set_lua_class_member() (which is what actually propagates it across registered base/derived
+types). */
 template <typename T, auto member_ptr, typename ...Params>
 void luaw_register_member_function(virt_state_t *vs, const char *function_name) {
     set_lua_class_member(vs, T::type_id_static(), function_name,
             &luaw_member_function_wrapper<T, member_ptr, Params...>, LUAW_MEMBER_FUNCTION);
 }
 
+/* Backs VC_REGISTER_MEMBER_OBJECT - see that macro's doc for the user-facing contract. Registers
+both directions: luaw_member_object_wrapper as the getter (via set_lua_class_member) and
+luaw_member_setter_object_wrapper as the setter (via set_class_member_setter) - a member object is
+always both readable and writable from Lua, there's no read-only variant. */
 template <typename T, auto member_ptr>
 void luaw_register_member_object(virt_state_t *vs, const char *member_name) {
     set_lua_class_member(vs, T::type_id_static(), member_name,
@@ -2494,6 +2560,10 @@ void luaw_register_member_object(virt_state_t *vs, const char *member_name) {
             &luaw_member_setter_object_wrapper<T, member_ptr>);
 }
 
+/* Backs VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER - see that macro's doc for the user-facing contract.
+Records `member_ptr`'s type via typeid (so resolve_memb_data() can later reject a mismatched `T`)
+and registers a small lambda that memcpy's straight out of the member, keyed on T's own type_id()
+so the lookup happens by the source object's runtime type, not by the caller's `T`. */
 template <typename T, auto member_ptr>
 void register_trivially_copyable_member(virt_state_t *vs, const char *member_name) {
     using member_type = std::decay_t<decltype(((T *)NULL)->*member_ptr)>;
@@ -2509,6 +2579,10 @@ void register_trivially_copyable_member(virt_state_t *vs, const char *member_nam
     );
 }
 
+/* Detects which of T/U is the real base at compile time (is_base_of_v either way) and forwards to
+set_base_derived_relation() with the base first - see register_inheritance()'s declaration above
+for the full user-facing contract. The demangle_static_assert() below triggers a compile error if
+neither is actually related to the other. */
 template <typename T, typename U>
 requires std::is_base_of_v<vc::object_t, T> && std::is_base_of_v<vc::object_t, U>
 void register_inheritance(virt_state_t *vs) {
@@ -2572,6 +2646,7 @@ call_on_stack(virt_state_t *vs, Args&& ...args)
     }
 }
 
+/* See call_lua()'s declaration above for its doc comment. */
 template <typename R, typename ...Args>
 std::pair<std::conditional_t<!std::is_void_v<R>, R, int>, err_e>
 call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
@@ -2580,6 +2655,7 @@ call_lua(virt_state_t *vs, const char *function_name, Args&& ...args)
     return call_on_stack<R>(vs, std::forward<Args>(args)...);
 }
 
+/* See get_enum_val(node, enum_vals)'s declaration above for its doc comment. */
 template <typename T>
 inline T get_enum_val(fkyaml::node &node, const std::unordered_map<std::string, T>& enum_vals) {
     if (node.is_string()) {
@@ -2601,9 +2677,11 @@ inline T get_enum_val(fkyaml::node &node, const std::unordered_map<std::string, 
             fkyaml::node::serialize(node), demangle<T>())};
 }
 
+/* See get_enum_val(node)'s declaration above for its doc comment. */
 template <typename T>
 inline T get_enum_val(fkyaml::node &n) = delete;
 
+/* Definitions - see the three to_string() overloads' declarations above for their doc comments. */
 inline std::string to_string(object_type_e type) {
     return type.name();
 }
@@ -2619,6 +2697,10 @@ inline std::string to_string(const object_t& ref) {
 
 /* lua_object_t --------------------------------------------------------------------------------- */
 
+/* Pushes a duplicate of the value at `idx`, then hands it to `capture_ref()` to actually capture
+it (including nil-as-reset handling - see that function's own comment). `ref` must already exist
+(via `create()`); the null check is defensive rather than expected to trigger at any current call
+site. */
 inline void lua_object_t::capture_lua_object(lua_State *L, vc::ref_t<lua_object_t> ref, int idx) {
     if (!ref)
         luaw_push_error(L, "internal_error: capture_lua_object() called with a null lua_object_t ref");
@@ -2636,6 +2718,9 @@ inline void lua_object_t::capture(vc::ref_t<lua_object_t> oth) {
     capture_ref(oth->L);
 }
 
+/* Unrefs the held value from its registry sub-table, if anything was ever captured (no-op
+otherwise). Leaves the object in the same "nothing captured" state as a fresh create(), so it's
+safe to capture() into again afterward. */
 inline void lua_object_t::release() {
     if (ref == LUA_NOREF || !L)
         return;
@@ -2646,6 +2731,7 @@ inline void lua_object_t::release() {
     L = nullptr;
 }
 
+/* Just releases whatever's held - see release(). */
 inline lua_object_t::~lua_object_t() {
     release();
 }
@@ -2705,6 +2791,9 @@ lua_object_t::call(Args&& ...args)
 
 /* c_function_t --------------------------------------------------------------------------------- */
 
+/* Builds a `c_function_t`, then calls `init()` immediately - see that function's doc for what
+`source` needs to be for this to actually succeed. Throws if `init()` fails, so a `c_function_t`
+never exists without a working `_fn` already bound. */
 inline vc::ref_t<c_function_t> c_function_t::create(std::string name, std::string source) {
     auto ret = std::make_shared<c_function_t>(vc::object_t::Private{type_id_static()});
     ret->m_name = name;
@@ -2715,6 +2804,10 @@ inline vc::ref_t<c_function_t> c_function_t::create(std::string name, std::strin
     return ret;
 }
 
+/* Invokes whatever `init()` bound to `_fn`. Returns `-1` without calling anything if `_fn` was
+never set - normally unreachable since `create()` throws on a failed `init()`, but guarded here
+anyway since nothing stops a caller from holding onto a `c_function_t` whose `init()` failed some
+other way. */
 inline int c_function_t::call(lua_State *L) {
     if (!_fn) {
         DBG("No function to call");
@@ -2723,6 +2816,10 @@ inline int c_function_t::call(lua_State *L) {
     return _fn(L);
 }
 
+/* Resolves `_fn` from `m_source`/`m_name`. Only one source kind works today:
+`m_source == "[INTERNAL]"` looks `m_name` up in `internal_funcs` (populated by
+`add_internal_func()`). Any other `m_source` falls into the `else` and fails - DLL/shared-object
+loading is planned (see the TODO below) but not implemented yet. */
 inline vc::ret_t c_function_t::init() {
     if (m_source == "[INTERNAL]" && has(internal_funcs, m_name)) {
         _fn = internal_funcs[m_name];
