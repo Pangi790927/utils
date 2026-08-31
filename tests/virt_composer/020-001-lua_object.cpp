@@ -409,7 +409,7 @@ int test20_cross_state_guard() {
     lua_pushlightuserdata(L2, h->cb.get());
     lua_pushcclosure(L2, [](lua_State *L) -> int {
         auto *obj = (vc::lua_object_t *)lua_touserdata(L, lua_upvalueindex(1));
-        obj->push_ref(L); /* L here is vs2's - mismatched against obj's own (vs1's) captured L */
+        obj->push(L); /* L here is vs2's - mismatched against obj's own (vs1's) captured L */
         return 1;
     }, 1);
     bool failed = lua_pcall(L2, 0, 1, 0) != LUA_OK;
