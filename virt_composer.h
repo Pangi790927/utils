@@ -141,9 +141,9 @@ at compile time, for whichever of the two is already enabled via these macros. *
  *
  * @see luaw_register_member_object
  * @note Only known object types can be used in those calls, usual data types: string, bool, int,
- *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>`, `vc::ref_t<T>`
- *       objects. In rest, this library doesn't know how to convert them from Lua to their C++
- *       counterpart and vice versa.
+ *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>` (see its own doc -
+ *       one-way, Lua->C++ only), `vc::ref_t<T>` objects. In rest, this library doesn't know how to
+ *       convert them from Lua to their C++ counterpart and vice versa.
  * 
  * @example
  * VC_REGISTER_MEMBER_OBJECT(cmdbuff_t, m_cmdpool)
@@ -202,9 +202,9 @@ virt_composer::register_trivially_copyable_member<                  \
  *
  * @see luaw_register_member_function 
  * @note Only known object types can be used in those calls, usual data types: string, bool, int,
- *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>`, `vc::ref_t<T>`
- *       objects. In rest, this library doesn't know how to convert them from Lua to their C++
- *       counterpart and vice versa.
+ *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>` (see its own doc -
+ *       one-way, Lua->C++ only), `vc::ref_t<T>` objects. In rest, this library doesn't know how to
+ *       convert them from Lua to their C++ counterpart and vice versa.
  *
  * @example
  * VC_REGISTER_MEMBER_FUNCTION(vku::cmdbuff_t, begin_rpass, vc::ref_t<vku::framebuffs_t>, uint32_t);
@@ -370,7 +370,7 @@ template <typename T>
 using ref_t = vo::ref_t<T>;
 
 /*!
- * @brief Template struct for handling bitmask/enum parameters from Lua.
+ * @brief Template struct for handling bitmask/enum parameters from Lua ("bm" = bitmap/bitmask).
  *
  * This struct enables Lua scripts to pass bitmask or enum values in multiple formats:
  * - As a **string** (e.g., `"vc.READ"`), which is converted to the corresponding enum value.
@@ -394,16 +394,12 @@ using ref_t = vo::ref_t<T>;
  * vc.object:open("fname", {vc.READ, vc.WRITE}) -- Table of enum strings or integers
  * vc.object:open("fname", "READ")              -- Single enum string
  * vc.object:open("fname", 1)                   -- Single enum integer value
+ *
+ * @note `bm_t<T>` only describes how an incoming Lua value gets parsed into a `T` - it has no
+ * distinct existence beyond that (it's stripped back down to plain `T` right after parsing). A
+ * `T`-typed member or return value is pushed back to Lua as a plain enum value, never re-wrapped
+ * through `bm_t<T>`'s string/table forms - this is a one-way (Lua->C++) conversion helper.
  */
-/* TODO: investigate - bm_t<T> only appears to be meaningful in the Lua->C++ (parameter) direction
-(luaw_param_t<bm_t<T>, index>). The C++->Lua (return value) direction doesn't go through bm_t<T> at
-all - luaw_push_cpp_object()'s is_vc_enum<Type> branch pushes the raw enum directly as a number, not
-through bm_t. The "supported types" note attached to VC_REGISTER_MEMBER_OBJECT/_FUNCTION and
-luaw_register_member_function/_object lists bm_t<T> alongside vector/tuple/pair/ref_t<T> as if all
-of those are symmetric, bidirectionally-supported types - confirm whether that's intentional (a
-member/function can only ever *return* an enum's raw int, never bm_t's richer string/int/table
-form) or a real asymmetry worth fixing, then either adjust that note or bm_t's own doc to make the
-one-way nature explicit. */
 template <typename T>
 struct bm_t {
     using type = T;
@@ -1148,9 +1144,9 @@ inline int luaw_function_wrapper(lua_State *L);
  *
  * @note This is typically used with the @ref VC_REGISTER_MEMBER_FUNCTION macro for convenience.
  * @note Only known object types can be used in those calls, usual data types: string, bool, int,
- *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>`, `vc::ref_t<T>`
- *       objects. In rest, this library doesn't know how to convert them from Lua to their C++
- *       counterpart and vice versa.
+ *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>` (see its own doc -
+ *       one-way, Lua->C++ only), `vc::ref_t<T>` objects. In rest, this library doesn't know how to
+ *       convert them from Lua to their C++ counterpart and vice versa.
  *
  * @see VC_REGISTER_MEMBER_FUNCTION
  *
@@ -1187,9 +1183,9 @@ void luaw_register_member_function(virt_state_t *vs, const char *function_name);
  *
  * @note This is typically used with the @ref VC_REGISTER_MEMBER_OBJECT macro for convenience.
  * @note Only known object types can be used in those calls, usual data types: string, bool, int,
- *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>`, `vc::ref_t<T>`
- *       objects. In rest, this library doesn't know how to convert them from Lua to their C++
- *       counterpart and vice versa.
+ *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>` (see its own doc -
+ *       one-way, Lua->C++ only), `vc::ref_t<T>` objects. In rest, this library doesn't know how to
+ *       convert them from Lua to their C++ counterpart and vice versa.
  * 
  * @see VC_REGISTER_MEMBER_OBJECT
  *
@@ -1764,7 +1760,6 @@ inline consteval void luaw_static_assert(const char *description) {
         throw description; /* This throw forces the termination of compilation */
 }
 
-/* [INTERNAL] TODO:desc */
 template <typename T>
 err_e add_lua_flag_mapping(virt_state_t *vs, const std::unordered_map<std::string, T>& mapping) {
     std::vector<std::pair<lua_Integer, std::string>> aux;
