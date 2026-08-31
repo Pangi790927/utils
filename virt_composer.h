@@ -309,6 +309,11 @@ struct except_t : public std::exception {
  *       is a process-wide `static`, not per-instance - registering an internal function once
  *       makes it visible to every `virt_state_t` in the process, not just the one you had in mind.
  *
+ * @warning Every `vc::object_t` obtained from a `virt_state_t` (via `get_ref`, `call_lua`, a member
+ *       getter, ...) is only valid as long as that `virt_state_t` is alive - none of them are safe
+ *       to keep around past its destruction (which closes the underlying Lua state).
+ *       The caller is responsible for not letting that occur; nothing here enforces it.
+ *
  * @see create_state, get_ref, parse_config, call_lua
  */
 struct virt_state_t;
@@ -1810,8 +1815,6 @@ template <typename T, ssize_t index>
 struct luaw_param_t<vc::ref_t<T>, index> {
     vc::ref_t<T> luaw_single_param(lua_State *L) {
         // DBG("Ref at index: %zd", index);
-        if (lua_isnil(L, index))
-            return vc::ref_t<T>{}; /* if the user intended to pass a nill, we give it as a nullptr */
         if constexpr (std::is_same_v<T, lua_object_t>) {
             if (auto obj = get_object_from_lua(L, index);
                     obj && obj->type_id() == lua_object_t::type_id_static())
@@ -1820,6 +1823,8 @@ struct luaw_param_t<vc::ref_t<T>, index> {
             lua_object_t::capture_lua_object(L, obj, index);
             return obj;
         } else {
+            if (lua_isnil(L, index))
+                return vc::ref_t<T>{}; /* if the user intended to pass a nill, we give it as a nullptr */
             auto obj = get_object_from_lua(L, index);
             if (!obj)
                 luaw_push_error(L, std::format("Expected userdata at index {}", index));
@@ -2448,12 +2453,6 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
     }
     else if constexpr (is_vc_ref_t<Type>::value) {
         if constexpr (std::is_same_v<typename Type::element_type, lua_object_t>) {
-            /* A nil Lua value converts to a null ref, same as every other ref_t<T> below (leaves
-            `object` untouched) - without this, nil would still get "captured" (capture() treats
-            nil as a release, leaving a non-null but empty lua_object_t) instead of coming back as
-            nullptr like it does for every other type. */
-            if (lua_isnil(L, index))
-                return -1;
             if (auto obj = get_object_from_lua(L, index);
                     obj && obj->type_id() == lua_object_t::type_id_static()) {
                 object = obj->to_related<lua_object_t>();

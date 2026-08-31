@@ -354,10 +354,11 @@ int test20_capture_no_argument_is_a_release() {
     return 0;
 }
 
-int test20_call_lua_return_nil_is_null_ref() {
-    /* call_lua<vc::ref_t<lua_object_t>>() must treat a Lua function returning nil as a null ref,
-    the same as any other vc::ref_t<T> return type - not as a "captured nil" (an empty-but-valid
-    lua_object_t instance, since capture() treats nil as a release). */
+int test20_call_lua_return_nil_is_empty_ref() {
+    /* call_lua<vc::ref_t<lua_object_t>>() treats a Lua function returning nil as an empty (but
+    non-null) lua_object_t - unlike every other vc::ref_t<T> return type, where nil comes back as
+    a null ref. lua_object_t's own capture_ref() already treats nil as a release, so there's
+    nothing held; asserting non-null-but-empty here, not null, is intentional. */
     auto vs = vc::create_state();
     ASSERT_FN(CHK_PTR(vs.get()));
 
@@ -370,7 +371,8 @@ int test20_call_lua_return_nil_is_null_ref() {
 
     auto [ref, err] = vc::call_lua<vc::ref_t<vc::lua_object_t>>(vs.get(), "returns_nil");
     ASSERT_FN(CHK_BOOL(err == vc::VC_ERROR_OK));
-    ASSERT_FN(CHK_BOOL(ref.get() == nullptr));
+    ASSERT_FN(CHK_PTR(ref.get()));
+    ASSERT_FN(CHK_BOOL(ref->ref == LUA_NOREF));
 
     return 0;
 }
@@ -513,7 +515,7 @@ int test20_lua_object() {
     ASSERT_FN(test20_capture_nil_is_a_release());
     ASSERT_FN(test20_capture_empty_stack_is_safe());
     ASSERT_FN(test20_capture_no_argument_is_a_release());
-    ASSERT_FN(test20_call_lua_return_nil_is_null_ref());
+    ASSERT_FN(test20_call_lua_return_nil_is_empty_ref());
     ASSERT_FN(test20_cross_state_guard());
     ASSERT_FN(test20_push_from_coroutine_is_allowed());
     ASSERT_FN(test20_raw_call_multiple_results());

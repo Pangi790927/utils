@@ -295,12 +295,9 @@ err_e add_lua_tab_funcs(virt_state_t *vs, const std::vector<luaL_Reg>& vc_tab_fu
     vs->tab_funcs.insert(vs->tab_funcs.end(), vc_tab_funcs.begin(), vc_tab_funcs.end());
     vs->tab_funcs.push_back({NULL, NULL});
 
-    /* TODO: this lua_rawgeti() pushes the "virt_composer" module table but nothing ever pops it -
-    unlike add_lua_flag_mapping() right below, which does the equivalent job and correctly ends
-    with lua_pop(L, 1). Every create_state() call currently leaks one value onto L's main stack
-    permanently as a result - add the matching lua_pop(vs->L, 1) here. */
     lua_rawgeti(vs->L, LUA_REGISTRYINDEX, vs->lua_table_idx);
     luaL_setfuncs(vs->L, vs->tab_funcs.data(), 0);
+    lua_pop(vs->L, 1);
     return VC_ERROR_OK;
 }
 
@@ -1092,7 +1089,7 @@ void lua_object_t::capture_ref(lua_State *L) {
 
     auto vs = luaw_get_virt_state(L);
 
-    lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_object_ref_table);     // push the sub-table
+    lua_rawgeti(L, LUA_REGISTRYINDEX, vs->lua_object_ref_table);    // push the sub-table
     lua_insert(L, -2);                                              // [sub-table, value]
     int new_ref = luaL_ref(L, -2);                                  // pops value, refs into sub-table
     lua_pop(L, 1);                                                  // pop sub-table
