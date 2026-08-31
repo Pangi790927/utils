@@ -11,10 +11,12 @@ push()/call() it again later, possibly long after the Lua call that handed it ov
 Three single-purpose operations:
 - create() - the normal factory (same as any other vc object), makes an empty shell with nothing
   captured yet.
-- capture(L) - an instance method: replaces *this* instance's held value with whatever is on top
-  of L's stack, releasing whatever it previously held first.
+- capture_ref(L) - an instance method: replaces *this* instance's held value with whatever is on
+  top of L's stack, releasing whatever it previously held first.
 - capture_lua_object(L, ref, idx) - a static convenience that duplicates the value at stack index
-  idx onto the top and calls ref->capture(L). It does not create anything - ref must already exist.
+  idx onto the top and calls ref->capture_ref(L). Does not create anything - ref must already exist.
+- capture(oth) - the Lua-visible "capture" - takes a vc::ref_t<lua_object_t> instead of reading
+  the stack directly, so it can be registered via the normal member-function macro.
 
 Two distinct paths through the type, on purpose:
 - As a member-function *parameter* (vc::ref_t<lua_object_t>), passing a Lua value captures it
@@ -289,12 +291,12 @@ int test20_capture_nil_is_a_release() {
 }
 
 int test20_capture_empty_stack_is_safe() {
-    /* capture(L) called directly with nothing pushed at all (not even nil) must not misbehave -
-    lua_isnil() alone can't distinguish an empty stack from nil on top (both read as "not nil" /
-    "nil", the empty case via the invalid-but-acceptable LUA_TNONE index), so capture() needs its
-    own explicit lua_gettop() check before doing the ref/insert dance. Only reachable by calling
-    capture(L) directly, bypassing the Lua-facing wrapper's own argument-count guard and
-    capture_lua_object()'s lua_pushvalue() - exactly what this test does. */
+    /* capture_ref(L) called directly with nothing pushed at all (not even nil) must not misbehave
+    - lua_isnil() alone can't distinguish an empty stack from nil on top (both read as "not nil" /
+    "nil", the empty case via the invalid-but-acceptable LUA_TNONE index), so capture_ref() needs
+    its own explicit lua_gettop() check before doing the ref/insert dance. Only reachable by
+    calling capture_ref(L) directly, bypassing capture_lua_object()'s lua_pushvalue() (which always
+    guarantees something is on top) - exactly what this test does. */
     auto vs = make_state_with_holder_registered();
     ASSERT_FN(CHK_PTR(vs.get()));
 
@@ -310,7 +312,7 @@ int test20_capture_empty_stack_is_safe() {
     auto obj = vc::lua_object_t::create();
     int top_before = lua_gettop(L);
 
-    obj->capture(L);
+    obj->capture_ref(L);
 
     ASSERT_FN(CHK_BOOL(lua_gettop(L) == top_before));
     ASSERT_FN(CHK_BOOL(obj->ref == LUA_NOREF));
@@ -318,11 +320,12 @@ int test20_capture_empty_stack_is_safe() {
     return 0;
 }
 
-int test20_capture_requires_an_argument() {
-    /* ref:capture() with no argument must error, not silently capture self - without the arg-count
-    check, Lua's method-call sugar still passes exactly one argument (self), and capture(L)'s
-    "read whatever's on top" contract would have treated self's own userdata box as the value to
-    capture. h's original binding must be left untouched by the failed call. */
+int test20_capture_no_argument_is_a_release() {
+    /* ref:capture() with no argument goes through the same typed-parameter machinery as any other
+    registered member function, where a missing argument becomes nil - so this must behave exactly
+    like ref:capture(nil) (see test20_capture_nil_is_a_release): a clean release, not an error.
+    get_callback() hands back h's own live lua_object_t (not a copy), so releasing through ref also
+    empties h's binding. */
     auto vs = make_state_with_holder_registered();
     ASSERT_FN(CHK_PTR(vs.get()));
 
@@ -345,8 +348,8 @@ int test20_capture_requires_an_argument() {
 
     auto [nret, nerr] = vc::call_lua<void>(vs.get(), "capture_no_arg_via_lua", h);
     (void)nret;
-    ASSERT_FN(CHK_BOOL(nerr == vc::VC_ERROR_FAILED_CALL));
-    ASSERT_FN(CHK_BOOL(h->invoke(10) == 20)); /* still doubler - untouched by the failed call */
+    ASSERT_FN(CHK_BOOL(nerr == vc::VC_ERROR_OK));
+    ASSERT_FN(CHK_BOOL(h->invoke(10) == -1)); /* released, same as an explicit capture(nil) */
 
     return 0;
 }
@@ -406,7 +409,7 @@ int test20_cross_state_guard() {
     lua_pushlightuserdata(L2, h->cb.get());
     lua_pushcclosure(L2, [](lua_State *L) -> int {
         auto *obj = (vc::lua_object_t *)lua_touserdata(L, lua_upvalueindex(1));
-        obj->push(L); /* L here is vs2's - mismatched against obj's own (vs1's) captured L */
+        obj->push_ref(L); /* L here is vs2's - mismatched against obj's own (vs1's) captured L */
         return 1;
     }, 1);
     bool failed = lua_pcall(L2, 0, 1, 0) != LUA_OK;
@@ -509,7 +512,7 @@ int test20_lua_object() {
     ASSERT_FN(test20_capture_and_release_from_lua());
     ASSERT_FN(test20_capture_nil_is_a_release());
     ASSERT_FN(test20_capture_empty_stack_is_safe());
-    ASSERT_FN(test20_capture_requires_an_argument());
+    ASSERT_FN(test20_capture_no_argument_is_a_release());
     ASSERT_FN(test20_call_lua_return_nil_is_null_ref());
     ASSERT_FN(test20_cross_state_guard());
     ASSERT_FN(test20_push_from_coroutine_is_allowed());

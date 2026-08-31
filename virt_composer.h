@@ -629,21 +629,35 @@ inline std::map<std::string, void *>                            c_function_t::dl
  * `luaw_param_t<vc::ref_t<T>, index>`'s special case). As a *return value*, though, it's boxed
  * the same way any other `vc::ref_t<T>` is - a normal `"__vc_metatable"` userdata Lua can hold
  * and pass around like any other vc object, not the raw underlying value unwrapped from its
- * shell. `push()`/`call()` are the lower-level primitives that work directly against the
+ * shell. `push_ref(L)`/`call()` are the lower-level primitives that work directly against the
  * captured value's own registry slot - used internally by `call<R>()` and by anything that needs
  * to actually invoke the captured value, not by the generic push-a-return-value machinery.
  *
- * Three separate, single-purpose operations, each doing exactly one thing:
+ * Four separate, single-purpose operations, each doing exactly one thing:
  * - `create()` - the normal factory, same as any other vc object. Makes an empty shell with
  *   nothing captured yet.
- * - `capture(L)` - an instance method. Replaces *this* instance's held value with whatever is on
- *   top of `L`'s stack, releasing whatever it previously held first.
+ * - `capture(oth)` - an instance method, and the one registered as the Lua-visible "capture" (see
+ *   create_state()) - `self:capture(x)` calls this via the normal typed-parameter machinery.
+ *   Releases whatever *this* previously held, then gives itself its own independent registry
+ *   entry pointing at the same underlying Lua value `oth` holds (see its own doc comment for why
+ *   it doesn't just alias `oth`'s slot directly).
+ * - `capture_ref(L)` - the lower-level instance method `capture(oth)` and `capture_lua_object()`
+ *   both build on: replaces *this* instance's held value with whatever is on top of `L`'s stack,
+ *   releasing whatever it previously held first.
  * - `capture_lua_object(L, ref, idx)` - a static convenience that duplicates the value at stack
- *   index `idx` onto the top and calls `ref->capture(L)`. It does not create anything - `ref`
+ *   index `idx` onto the top and calls `ref->capture_ref(L)`. It does not create anything - `ref`
  *   must already exist (via `create()`).
  *
- * @warning `capture(L)`, `push(L)`, and `call(L, nargs)` all report their failure paths (nothing
- * captured, a mismatched `L`, a failed pcall) by raising a genuine Lua error via
+ * `push_ref(L)` - always given the correct ambient `L` explicitly, so it stays correct even from a
+ * different thread (e.g. a coroutine) than the one this instance was captured on - is also the one
+ * registered directly (as a raw `lua_CFunction`, not through the normal member-function macro) as
+ * the Lua-visible "push" (see create_state()): the whole point of "push" is handing back an
+ * arbitrary Lua value using the *caller's own* ambient `L`, which the macro's generated wrapper has
+ * no way to supply (it only ever passes fixed, converted argument values) - so unlike every other
+ * Lua-visible member here, this one is a deliberate exception to the usual macro registration.
+ *
+ * @warning `capture_ref(L)`, `push_ref(L)`, and `call(L, nargs)` all report their failure paths
+ * (nothing captured, a mismatched `L`, a failed pcall) by raising a genuine Lua error via
  * `luaw_push_error()`/`lua_error()`. That's only safe to unwind through when a protected call
  * (`lua_pcall`) is already active somewhere up the C call stack - which holds when these are
  * reached the way they're meant to be (as a registered `lua_CFunction`, or from inside
@@ -652,7 +666,7 @@ inline std::map<std::string, void *>                            c_function_t::dl
  * instead of returning - wrap such a call in your own `lua_pcall` first (see
  * `test20_cross_state_guard` in `020-001-lua_object.cpp` for exactly that pattern). `call<R>()`
  * does not have this problem: its own guard reports failure through `err_e` without ever calling
- * `luaw_push_error`, and it only ever calls `push()` with its own already-matching `L`.
+ * `luaw_push_error`, and it only ever calls `push_ref(L)` with its own already-matching `L`.
  */
 struct lua_object_t : public vc::object_t {
     lua_State *L = nullptr;
@@ -667,11 +681,25 @@ struct lua_object_t : public vc::object_t {
     }
 
     /*! Replaces this instance's captured value with whatever is on top of `L`'s stack - releasing
-     * whatever it previously held first (see `release()`). */
-    void capture(lua_State *L);
+     * whatever it previously held first (see `release()`). The lower-level primitive `capture()`
+     * and `capture_lua_object()` both build on. */
+    void capture_ref(lua_State *L);
+
+    /*! The Lua-visible "capture" (see create_state()) - `self:capture(x)` reaches this via the
+     * normal typed-parameter machinery, so a missing argument becomes nil (a release) the same
+     * way any other Lua function call with a missing argument would, and exceptions are caught
+     * automatically the same as any other registered member function.
+     *
+     * Does NOT alias/steal `oth`'s registry slot - `oth` may be a widely-shared existing
+     * reference (`luaw_param_t`'s reuse-check can hand back the exact same instance someone else
+     * still holds), so mutating its `table_ref`/`ref` out from under it would silently corrupt
+     * that other holder. Instead this pushes a copy of `oth`'s value and captures *that* fresh via
+     * `capture_ref()`, giving `this` its own independent registry entry pointing at the same
+     * underlying Lua value - releasing one later has no effect on the other. */
+    void capture(vc::ref_t<lua_object_t> oth);
 
     /*! Duplicates the value at stack index `idx` onto the top, then delegates to
-     * `ref->capture(L)`. Does not create anything - `ref` must already exist. */
+     * `ref->capture_ref(L)`. Does not create anything - `ref` must already exist. */
     static void capture_lua_object(lua_State *L, vc::ref_t<lua_object_t> ref, int idx);
 
     virtual vc::object_type_e type_id() const override { return VC_TYPE_LUA_OBJECT; }
@@ -682,8 +710,15 @@ struct lua_object_t : public vc::object_t {
                 (void*)this, table_ref, ref);
     }
 
-    /*! Pushes the captured value back onto L - "give it back to Lua." */
-    void push(lua_State *L);
+    /*! Pushes the captured value back onto L - "give it back to Lua." The primitive `call<R>()`/
+     * `call(L, nargs)` build on internally, and the one the Lua-visible "push" (see create_state())
+     * is registered directly against as a raw lua_CFunction - always given the correct ambient `L`
+     * explicitly, so it stays correct even when called from a different thread (e.g. a coroutine)
+     * than the one this instance was captured on. Not registered via the normal member-function
+     * macro: unlike every other member here, its whole point is to hand back whatever the *caller's*
+     * own ambient `L` is, which the macro's generated wrapper has no way to supply - it only ever
+     * passes fixed, converted argument values. */
+    void push_ref(lua_State *L);
 
     /*! Raw primitive: caller has already pushed exactly `nargs` argument values onto L (nothing
      * else in between) - pushes the captured callee below them and pcalls with LUA_MULTRET,
@@ -693,7 +728,7 @@ struct lua_object_t : public vc::object_t {
     int call(lua_State *L, int nargs);
 
     /*! call_lua<R>()-shaped convenience: typed C++ args in, typed C++ result out. Mirrors
-     * call_lua()'s body - only "how the callee gets onto the stack" differs (push(L) here
+     * call_lua()'s body - only "how the callee gets onto the stack" differs (push_ref(L) here
      * vs. lua_getglobal(L, name) there). */
     template <typename R, typename ...Args>
     std::pair<std::conditional_t<!std::is_void_v<R>, R, int>, err_e> call(Args&& ...args);
@@ -2648,7 +2683,18 @@ inline void lua_object_t::capture_lua_object(lua_State *L, vc::ref_t<lua_object_
     if (!ref)
         luaw_push_error(L, "internal_error: capture_lua_object() called with a null lua_object_t ref");
     lua_pushvalue(L, idx);
-    ref->capture(L);
+    ref->capture_ref(L);
+}
+
+inline void lua_object_t::capture(vc::ref_t<lua_object_t> oth) {
+    release();
+    /* oth may be non-null but hold nothing itself (e.g. luaw_param_t<> hands back a freshly
+    created, never-captured instance when the Lua caller omitted the argument entirely) - treat
+    that the same as oth being null, since there's no value of oth's own to push. */
+    if (!oth || oth->ref == LUA_NOREF || !oth->L)
+        return;
+    oth->push_ref(oth->L);
+    capture_ref(oth->L);
 }
 
 inline void lua_object_t::release() {
@@ -2665,7 +2711,7 @@ inline lua_object_t::~lua_object_t() {
     release();
 }
 
-inline void lua_object_t::push(lua_State *L) {
+inline void lua_object_t::push_ref(lua_State *L) {
     if (ref == LUA_NOREF || !this->L) {
         lua_pushnil(L);
         return;
@@ -2690,14 +2736,14 @@ inline int lua_object_t::call(lua_State *L, int nargs) {
                 "captured)");
         return 0;
     }
-    /* See push()'s matching check for why this compares Lua universes, not raw thread pointers. */
+    /* See push_ref()'s matching check for why this compares Lua universes, not raw thread pointers. */
     if (luaw_get_virt_state(L) != luaw_get_virt_state(this->L)) {
         luaw_push_error(L, "internal_error: lua_object_t used with a different lua_State than "
                 "the one it was captured on");
         return 0;
     }
     int base = lua_gettop(L) - nargs;
-    push(L);
+    push_ref(L);
     lua_insert(L, base + 1);
     if (lua_pcall(L, nargs, LUA_MULTRET, 0) != LUA_OK) {
         std::string err = lua_tostring(L, -1);
@@ -2716,7 +2762,7 @@ lua_object_t::call(Args&& ...args)
     using RetT = std::conditional_t<!std::is_void_v<R>, R, int>;
     if (ref == LUA_NOREF || !L)
         return {RetT{}, VC_ERROR_FAILED_CALL};
-    push(L);
+    push_ref(L);
     return call_on_stack<R>(luaw_get_virt_state(L), std::forward<Args>(args)...);
 }
 

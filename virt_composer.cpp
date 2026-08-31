@@ -225,45 +225,30 @@ std::shared_ptr<virt_state_t> create_state() {
     VC_REGISTER_MEMBER_OBJECT(vs.get(), float_t, value);
     VC_REGISTER_MEMBER_OBJECT(vs.get(), string_t, value);
 
-    /* lua_object_t::push() mirrored as a Lua-visible member function - the explicit way to get
-    the raw captured value back out of its boxed vc reference (see lua_object_t's own doc
-    comment). Registered directly against the raw lua_CFunction shape (not via
-    VC_REGISTER_MEMBER_FUNCTION) since push() operates on the stack directly rather than
-    returning a typed value luaw_returner_t could convert. */
+    /* lua_object_t's Lua-visible "push" - the explicit way to get the raw captured value back out
+    of its boxed vc reference (see lua_object_t's own doc comment). Deliberately NOT registered via
+    VC_REGISTER_MEMBER_FUNCTION like every other member here: the whole point of "push" is handing
+    back an arbitrary Lua value using the *caller's own* ambient L (push_ref(L)'s coroutine-safety
+    depends on that), and the macro's generated wrapper has no way to supply that - it only ever
+    passes fixed, converted argument values. Registered directly as a raw lua_CFunction instead. */
     set_lua_class_member(vs.get(), lua_object_t::type_id_static(), "push",
             [](lua_State *L) -> int {
                 try {
                     auto obj = get_object_from_lua(L, 1);
                     if (!obj)
-                        luaw_push_error(L, "internal_error: Nil user object can't push!");
-                    obj->to_related<lua_object_t>()->push(L);
+                        luaw_push_error(L, "internal_error: Nil user object can't call member function!");
+                    obj->to_related<lua_object_t>()->push_ref(L);
                     return 1;
                 }
                 catch (...) { return luaw_catch_exception(L); }
             }, LUAW_MEMBER_FUNCTION);
 
-    /* lua_object_t::capture(L) mirrored as a Lua-visible member function - `self:capture(x)`
-    pushes exactly [self, x], so x is already on top of the stack when capture(L) runs, matching
-    its "operate on whatever's on top" contract with no repositioning needed.
-
-    - I (the human) aprove of this comment */
-    set_lua_class_member(vs.get(), lua_object_t::type_id_static(), "capture",
-            [](lua_State *L) -> int {
-                try {
-                    /* capture(L) reads whatever's on top of the stack - without this check,
-                    ref:capture() called with no argument at all would still pass exactly one
-                    argument (self, via Lua's method-call sugar), and self would be silently
-                    captured as if it were the value to hold. */
-                    if (lua_gettop(L) < 2)
-                        luaw_push_error(L, "capture() expects one argument: the value to capture");
-                    auto obj = get_object_from_lua(L, 1);
-                    if (!obj)
-                        luaw_push_error(L, "internal_error: Nil user object can't capture!");
-                    obj->to_related<lua_object_t>()->capture(L);
-                    return 0;
-                }
-                catch (...) { return luaw_catch_exception(L); }
-            }, LUAW_MEMBER_FUNCTION);
+    /* lua_object_t::capture() mirrored as a Lua-visible member function - takes a
+    vc::ref_t<lua_object_t> (see its own doc comment for why it copies rather than aliases), so
+    the normal member-function macro handles it directly too: a missing argument to
+    self:capture() correctly becomes a nil argument (i.e. a release), the same way any other Lua
+    function call with a missing argument would. */
+    VC_REGISTER_MEMBER_FUNCTION(vs.get(), lua_object_t, capture, vc::ref_t<lua_object_t>);
 
     /* lua_object_t::release() mirrored as a Lua-visible member function - takes no args and
     returns void, so the normal member-function macro handles it directly. */
@@ -1102,8 +1087,8 @@ object_t *get_object_from_lua(lua_State *L, int idx) {
     return box ? box->self_obj.get() : nullptr;
 }
 
-void lua_object_t::capture(lua_State *L) {
-    /* Release whatever this instance previously held, if anything - capture() replaces it. */
+void lua_object_t::capture_ref(lua_State *L) {
+    /* Release whatever this instance previously held, if anything - capture_ref() replaces it. */
     release();
 
     /* A genuinely empty stack (nothing pushed at all) is not the same as nil on top: lua_isnil()
