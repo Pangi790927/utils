@@ -641,6 +641,18 @@ inline std::map<std::string, void *>                            c_function_t::dl
  * - `capture_lua_object(L, ref, idx)` - a static convenience that duplicates the value at stack
  *   index `idx` onto the top and calls `ref->capture(L)`. It does not create anything - `ref`
  *   must already exist (via `create()`).
+ *
+ * @warning `capture(L)`, `push(L)`, and `call(L, nargs)` all report their failure paths (nothing
+ * captured, a mismatched `L`, a failed pcall) by raising a genuine Lua error via
+ * `luaw_push_error()`/`lua_error()`. That's only safe to unwind through when a protected call
+ * (`lua_pcall`) is already active somewhere up the C call stack - which holds when these are
+ * reached the way they're meant to be (as a registered `lua_CFunction`, or from inside
+ * `call_lua()`'s own `lua_pcall`). Calling any of them directly from arbitrary top-level C++ with
+ * no enclosing `lua_pcall`, when the failure path actually triggers, hits Lua's panic handler
+ * instead of returning - wrap such a call in your own `lua_pcall` first (see
+ * `test20_cross_state_guard` in `020-001-lua_object.cpp` for exactly that pattern). `call<R>()`
+ * does not have this problem: its own guard reports failure through `err_e` without ever calling
+ * `luaw_push_error`, and it only ever calls `push()` with its own already-matching `L`.
  */
 struct lua_object_t : public vc::object_t {
     lua_State *L = nullptr;
@@ -660,10 +672,7 @@ struct lua_object_t : public vc::object_t {
 
     /*! Duplicates the value at stack index `idx` onto the top, then delegates to
      * `ref->capture(L)`. Does not create anything - `ref` must already exist. */
-    static void capture_lua_object(lua_State *L, vc::ref_t<lua_object_t> ref, int idx) {
-        lua_pushvalue(L, idx);
-        ref->capture(L);
-    }
+    static void capture_lua_object(lua_State *L, vc::ref_t<lua_object_t> ref, int idx);
 
     virtual vc::object_type_e type_id() const override { return VC_TYPE_LUA_OBJECT; }
     static vc::object_type_e type_id_static() { return VC_TYPE_LUA_OBJECT; }
@@ -2451,6 +2460,12 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
     }
     else if constexpr (is_vc_ref_t<Type>::value) {
         if constexpr (std::is_same_v<typename Type::element_type, lua_object_t>) {
+            /* A nil Lua value converts to a null ref, same as every other ref_t<T> below (leaves
+            `object` untouched) - without this, nil would still get "captured" (capture() treats
+            nil as a release, leaving a non-null but empty lua_object_t) instead of coming back as
+            nullptr like it does for every other type. */
+            if (lua_isnil(L, index))
+                return -1;
             if (auto obj = get_object_from_lua(L, index);
                     obj && obj->type_id() == lua_object_t::type_id_static()) {
                 object = obj->to_related<lua_object_t>();
@@ -2629,6 +2644,13 @@ inline std::string to_string(const object_t& ref) {
 
 /* lua_object_t --------------------------------------------------------------------------------- */
 
+inline void lua_object_t::capture_lua_object(lua_State *L, vc::ref_t<lua_object_t> ref, int idx) {
+    if (!ref)
+        luaw_push_error(L, "internal_error: capture_lua_object() called with a null lua_object_t ref");
+    lua_pushvalue(L, idx);
+    ref->capture(L);
+}
+
 inline void lua_object_t::release() {
     if (ref == LUA_NOREF || !L)
         return;
@@ -2648,6 +2670,15 @@ inline void lua_object_t::push(lua_State *L) {
         lua_pushnil(L);
         return;
     }
+    /* Compares the Lua *universe* (via the shared registry's "virt_state" entry), not the raw
+    thread pointer - L and this->L legitimately differ (same universe, different thread) when a
+    value captured on the main thread is pushed/called from inside a coroutine, which this
+    framework's own coroutine library support makes an ordinary thing to happen. */
+    if (luaw_get_virt_state(L) != luaw_get_virt_state(this->L)) {
+        luaw_push_error(L, "internal_error: lua_object_t used with a different lua_State than "
+                "the one it was captured on");
+        return;
+    }
     lua_rawgeti(L, LUA_REGISTRYINDEX, table_ref);
     lua_rawgeti(L, -1, ref);
     lua_remove(L, -2);
@@ -2657,6 +2688,12 @@ inline int lua_object_t::call(lua_State *L, int nargs) {
     if (ref == LUA_NOREF || !this->L) {
         luaw_push_error(L, "internal_error: lua_object_t has nothing captured (released, or never "
                 "captured)");
+        return 0;
+    }
+    /* See push()'s matching check for why this compares Lua universes, not raw thread pointers. */
+    if (luaw_get_virt_state(L) != luaw_get_virt_state(this->L)) {
+        luaw_push_error(L, "internal_error: lua_object_t used with a different lua_State than "
+                "the one it was captured on");
         return 0;
     }
     int base = lua_gettop(L) - nargs;

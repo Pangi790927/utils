@@ -232,11 +232,14 @@ std::shared_ptr<virt_state_t> create_state() {
     returning a typed value luaw_returner_t could convert. */
     set_lua_class_member(vs.get(), lua_object_t::type_id_static(), "push",
             [](lua_State *L) -> int {
-                auto obj = get_object_from_lua(L, 1);
-                if (!obj)
-                    luaw_push_error(L, "internal_error: Nil user object can't push!");
-                obj->to_related<lua_object_t>()->push(L);
-                return 1;
+                try {
+                    auto obj = get_object_from_lua(L, 1);
+                    if (!obj)
+                        luaw_push_error(L, "internal_error: Nil user object can't push!");
+                    obj->to_related<lua_object_t>()->push(L);
+                    return 1;
+                }
+                catch (...) { return luaw_catch_exception(L); }
             }, LUAW_MEMBER_FUNCTION);
 
     /* lua_object_t::capture(L) mirrored as a Lua-visible member function - `self:capture(x)`
@@ -246,11 +249,20 @@ std::shared_ptr<virt_state_t> create_state() {
     - I (the human) aprove of this comment */
     set_lua_class_member(vs.get(), lua_object_t::type_id_static(), "capture",
             [](lua_State *L) -> int {
-                auto obj = get_object_from_lua(L, 1);
-                if (!obj)
-                    luaw_push_error(L, "internal_error: Nil user object can't capture!");
-                obj->to_related<lua_object_t>()->capture(L);
-                return 0;
+                try {
+                    /* capture(L) reads whatever's on top of the stack - without this check,
+                    ref:capture() called with no argument at all would still pass exactly one
+                    argument (self, via Lua's method-call sugar), and self would be silently
+                    captured as if it were the value to hold. */
+                    if (lua_gettop(L) < 2)
+                        luaw_push_error(L, "capture() expects one argument: the value to capture");
+                    auto obj = get_object_from_lua(L, 1);
+                    if (!obj)
+                        luaw_push_error(L, "internal_error: Nil user object can't capture!");
+                    obj->to_related<lua_object_t>()->capture(L);
+                    return 0;
+                }
+                catch (...) { return luaw_catch_exception(L); }
             }, LUAW_MEMBER_FUNCTION);
 
     /* lua_object_t::release() mirrored as a Lua-visible member function - takes no args and
@@ -310,6 +322,10 @@ err_e add_lua_tab_funcs(virt_state_t *vs, const std::vector<luaL_Reg>& vc_tab_fu
     vs->tab_funcs.insert(vs->tab_funcs.end(), vc_tab_funcs.begin(), vc_tab_funcs.end());
     vs->tab_funcs.push_back({NULL, NULL});
 
+    /* TODO: this lua_rawgeti() pushes the "virt_composer" module table but nothing ever pops it -
+    unlike add_lua_flag_mapping() right below, which does the equivalent job and correctly ends
+    with lua_pop(L, 1). Every create_state() call currently leaks one value onto L's main stack
+    permanently as a result - add the matching lua_pop(vs->L, 1) here. */
     lua_rawgeti(vs->L, LUA_REGISTRYINDEX, vs->lua_table_idx);
     luaL_setfuncs(vs->L, vs->tab_funcs.data(), 0);
     return VC_ERROR_OK;
@@ -1090,6 +1106,13 @@ void lua_object_t::capture(lua_State *L) {
     /* Release whatever this instance previously held, if anything - capture() replaces it. */
     release();
 
+    /* A genuinely empty stack (nothing pushed at all) is not the same as nil on top: lua_isnil()
+    on an empty stack reads an invalid-but-acceptable index (LUA_TNONE) and returns false, so
+    without this separate check an empty-stack call would fall through into the ref/insert dance
+    below with nothing real there to operate on. Nothing to capture and nothing to pop either. */
+    if (lua_gettop(L) < 1)
+        return;
+
     /* Capturing nil is just releasing - without this, luaL_ref would hand back LUA_REFNIL (a
     valid-looking ref distinct from LUA_NOREF), leaving this instance in a state push()/call()'s
     "nothing captured" guards (ref == LUA_NOREF) wouldn't recognize. */
@@ -1297,15 +1320,12 @@ static int internal_create_object(lua_State *L) {
     }
     catch (fkyaml::exception &e) {
         luaw_push_error(L, sformat("fkyaml::exception: %s", e.what()));
-        lua_error(L);
     }
     catch (std::exception &e) {
         luaw_push_error(L, sformat("Exception: %s", e.what()));
-        lua_error(L);
     }
     if (ret != co::RUN_OK) {
         luaw_push_error(L, "CO_OJECT_CREATOR: Failed to create the object");
-        lua_error(L);
     }
 
     if (vs->wanted_objects.size()) {
@@ -1316,7 +1336,6 @@ static int internal_create_object(lua_State *L) {
 
     if (!has(vs->name_to_object, name)) {
         luaw_push_error(L, "internal_error: Object is not found after creation");
-        lua_error(L);
     }
 
     /* Get back the virt_composer table */

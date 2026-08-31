@@ -288,6 +288,180 @@ int test20_capture_nil_is_a_release() {
     return 0;
 }
 
+int test20_capture_empty_stack_is_safe() {
+    /* capture(L) called directly with nothing pushed at all (not even nil) must not misbehave -
+    lua_isnil() alone can't distinguish an empty stack from nil on top (both read as "not nil" /
+    "nil", the empty case via the invalid-but-acceptable LUA_TNONE index), so capture() needs its
+    own explicit lua_gettop() check before doing the ref/insert dance. Only reachable by calling
+    capture(L) directly, bypassing the Lua-facing wrapper's own argument-count guard and
+    capture_lua_object()'s lua_pushvalue() - exactly what this test does. */
+    auto vs = make_state_with_holder_registered();
+    ASSERT_FN(CHK_PTR(vs.get()));
+
+    auto L = vc::luaw_get_lua_state(vs.get());
+    ASSERT_FN(CHK_PTR(L));
+
+    /* create_state() itself leaves the "virt_composer" module table sitting on L's main stack
+    (a separate, pre-existing leak in add_lua_tab_funcs() - it lua_rawgeti()s that table but never
+    pops it) - force a genuinely empty stack here rather than assuming one, so this test actually
+    exercises the empty case instead of quietly capturing that leftover table. */
+    lua_settop(L, 0);
+
+    auto obj = vc::lua_object_t::create();
+    int top_before = lua_gettop(L);
+
+    obj->capture(L);
+
+    ASSERT_FN(CHK_BOOL(lua_gettop(L) == top_before));
+    ASSERT_FN(CHK_BOOL(obj->ref == LUA_NOREF));
+
+    return 0;
+}
+
+int test20_capture_requires_an_argument() {
+    /* ref:capture() with no argument must error, not silently capture self - without the arg-count
+    check, Lua's method-call sugar still passes exactly one argument (self), and capture(L)'s
+    "read whatever's on top" contract would have treated self's own userdata box as the value to
+    capture. h's original binding must be left untouched by the failed call. */
+    auto vs = make_state_with_holder_registered();
+    ASSERT_FN(CHK_PTR(vs.get()));
+
+    auto path = write_temp_yaml("020-001-capturenoarg",
+        "script:\n"
+        "  m_type: vc::lua_script_t\n"
+        "  m_source: |\n"
+        "    function doubler(x) return x * 2 end\n"
+        "    function bind(h) h:set_callback(doubler) end\n"
+        "    function capture_no_arg_via_lua(h)\n"
+        "      local ref = h:get_callback()\n"
+        "      ref:capture()\n"
+        "    end\n");
+    ASSERT_FN(CHK_BOOL(vc::parse_config(vs.get(), path.c_str()) == vc::VC_ERROR_OK));
+
+    auto h = holder_t::create();
+    auto [bret, berr] = vc::call_lua<void>(vs.get(), "bind", h);
+    (void)bret;
+    ASSERT_FN(CHK_BOOL(berr == vc::VC_ERROR_OK));
+
+    auto [nret, nerr] = vc::call_lua<void>(vs.get(), "capture_no_arg_via_lua", h);
+    (void)nret;
+    ASSERT_FN(CHK_BOOL(nerr == vc::VC_ERROR_FAILED_CALL));
+    ASSERT_FN(CHK_BOOL(h->invoke(10) == 20)); /* still doubler - untouched by the failed call */
+
+    return 0;
+}
+
+int test20_call_lua_return_nil_is_null_ref() {
+    /* call_lua<vc::ref_t<lua_object_t>>() must treat a Lua function returning nil as a null ref,
+    the same as any other vc::ref_t<T> return type - not as a "captured nil" (an empty-but-valid
+    lua_object_t instance, since capture() treats nil as a release). */
+    auto vs = vc::create_state();
+    ASSERT_FN(CHK_PTR(vs.get()));
+
+    auto path = write_temp_yaml("020-001-retnil",
+        "script:\n"
+        "  m_type: vc::lua_script_t\n"
+        "  m_source: |\n"
+        "    function returns_nil() return nil end\n");
+    ASSERT_FN(CHK_BOOL(vc::parse_config(vs.get(), path.c_str()) == vc::VC_ERROR_OK));
+
+    auto [ref, err] = vc::call_lua<vc::ref_t<vc::lua_object_t>>(vs.get(), "returns_nil");
+    ASSERT_FN(CHK_BOOL(err == vc::VC_ERROR_OK));
+    ASSERT_FN(CHK_BOOL(ref.get() == nullptr));
+
+    return 0;
+}
+
+int test20_cross_state_guard() {
+    /* h->cb was captured on vs1's Lua state. push()/call() must refuse to operate when handed a
+    different lua_State's L, rather than silently reading/pcall-ing against the wrong state's
+    registry (two independent virt_state_t's are two independent Lua states - a registry slot
+    number valid in one means nothing, or something else entirely, in the other).
+
+    The mismatched push() is deliberately made through a real lua_pcall (not called bare from this
+    test): push()'s guard raises a genuine Lua error, which needs a protected call already on the
+    stack to land safely - calling it with no pcall active at all would hit Lua's panic handler
+    instead of returning cleanly. */
+    auto vs1 = make_state_with_holder_registered();
+    auto vs2 = make_state_with_holder_registered();
+    ASSERT_FN(CHK_PTR(vs1.get()));
+    ASSERT_FN(CHK_PTR(vs2.get()));
+
+    auto path = write_temp_yaml("020-001-crossstate",
+        "script:\n"
+        "  m_type: vc::lua_script_t\n"
+        "  m_source: |\n"
+        "    function doubler(x) return x * 2 end\n"
+        "    function bind(h) h:set_callback(doubler) end\n");
+    ASSERT_FN(CHK_BOOL(vc::parse_config(vs1.get(), path.c_str()) == vc::VC_ERROR_OK));
+
+    auto h = holder_t::create();
+    auto [bret, berr] = vc::call_lua<void>(vs1.get(), "bind", h);
+    (void)bret;
+    ASSERT_FN(CHK_BOOL(berr == vc::VC_ERROR_OK));
+
+    auto L2 = vc::luaw_get_lua_state(vs2.get());
+    ASSERT_FN(CHK_PTR(L2));
+
+    lua_pushlightuserdata(L2, h->cb.get());
+    lua_pushcclosure(L2, [](lua_State *L) -> int {
+        auto *obj = (vc::lua_object_t *)lua_touserdata(L, lua_upvalueindex(1));
+        obj->push(L); /* L here is vs2's - mismatched against obj's own (vs1's) captured L */
+        return 1;
+    }, 1);
+    bool failed = lua_pcall(L2, 0, 1, 0) != LUA_OK;
+    ASSERT_FN(CHK_BOOL(failed));
+    lua_pop(L2, 1); /* pop the error message */
+
+    /* invoke() (holder_t's own wrapper) routes through call<R>(), which always uses the object's
+    own stored L internally, never an external one - so it's unaffected by cross-state misuse and
+    still works correctly here, on vs1. */
+    ASSERT_FN(CHK_BOOL(h->invoke(10) == 20));
+
+    return 0;
+}
+
+int test20_push_from_coroutine_is_allowed() {
+    /* This framework loads Lua's own coroutine library (see create_state()/luaw_init()), so a
+    captured value legitimately gets pushed/called from a lua_State* that differs from the one it
+    was captured on whenever that happens from inside a coroutine (a coroutine's C functions run
+    with the coroutine's own thread pointer, even though it shares the same registry/globals as
+    the main thread). The cross-state guard must recognize this as the SAME Lua universe (via
+    luaw_get_virt_state(), which reads the shared registry) rather than rejecting it just because
+    the raw lua_State* pointers differ. */
+    auto vs = make_state_with_holder_registered();
+    ASSERT_FN(CHK_PTR(vs.get()));
+
+    auto path = write_temp_yaml("020-001-coroutine",
+        "script:\n"
+        "  m_type: vc::lua_script_t\n"
+        "  m_source: |\n"
+        "    function doubler(x) return x * 2 end\n"
+        "    function bind(h) h:set_callback(doubler) end\n"
+        "    function push_from_coroutine(h, x)\n"
+        "      local co = coroutine.create(function()\n"
+        "        local ref = h:get_callback()\n"
+        "        local raw = ref:push()\n"
+        "        return raw(x)\n"
+        "      end)\n"
+        "      local ok, result = coroutine.resume(co)\n"
+        "      if not ok then error(result) end\n"
+        "      return result\n"
+        "    end\n");
+    ASSERT_FN(CHK_BOOL(vc::parse_config(vs.get(), path.c_str()) == vc::VC_ERROR_OK));
+
+    auto h = holder_t::create();
+    auto [bret, berr] = vc::call_lua<void>(vs.get(), "bind", h);
+    (void)bret;
+    ASSERT_FN(CHK_BOOL(berr == vc::VC_ERROR_OK));
+
+    auto [ret, err] = vc::call_lua<int64_t>(vs.get(), "push_from_coroutine", h, 10);
+    ASSERT_FN(CHK_BOOL(err == vc::VC_ERROR_OK));
+    ASSERT_FN(CHK_BOOL(ret == 20));
+
+    return 0;
+}
+
 int test20_raw_call_multiple_results() {
     /* Exercises lua_object_t::call(L, nargs) directly - the raw primitive, not the typed
     convenience - registered as a plain internal c_function_t so it's reachable as
@@ -334,6 +508,11 @@ int test20_lua_object() {
     ASSERT_FN(test20_capture_replaces_previous_value());
     ASSERT_FN(test20_capture_and_release_from_lua());
     ASSERT_FN(test20_capture_nil_is_a_release());
+    ASSERT_FN(test20_capture_empty_stack_is_safe());
+    ASSERT_FN(test20_capture_requires_an_argument());
+    ASSERT_FN(test20_call_lua_return_nil_is_null_ref());
+    ASSERT_FN(test20_cross_state_guard());
+    ASSERT_FN(test20_push_from_coroutine_is_allowed());
     ASSERT_FN(test20_raw_call_multiple_results());
     return 0;
 }
