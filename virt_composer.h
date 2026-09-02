@@ -1956,6 +1956,28 @@ struct luaw_param_t<const char *, index> {
     }
 };
 
+/* Nil at `index` produces an empty string rather than failing (matches the nil-as-default
+convention used by vector/tuple above); any other value Lua can't convert to a string
+(lua_tostring returns nullptr - tables, booleans, userdata, etc.) hard-fails via
+luaw_push_error()/lua_error(), unlike the old inline std::string branch this replaces, which
+silently degraded any such value to "". A number at `index` still converts via lua_tostring's own
+number-to-string coercion, same as it always has. */
+template <ssize_t index>
+struct luaw_param_t<std::string, index> {
+    std::string luaw_single_param(lua_State *L) {
+        if (lua_isnil(L, index))
+            return {};
+        const char *ret = lua_tostring(L, index);
+        if (!ret) {
+            luaw_push_error(L,
+                    std::format("Invalid parameter at index {}, failed conversion to string from "
+                    "[{}]",
+                    index, lua_typename(L, lua_type(L, index))));
+        }
+        return ret;
+    }
+};
+
 /*!
  * [INTERNAL] Helper template to remove `bm_t` wrappers from types.
  *
@@ -1984,16 +2006,20 @@ struct de_bitmaptizize<std::vector<T>> {
     using Type = std::vector<typename de_bitmaptizize<T>::Type>;
 };
 
-/* Nil at `index` produces a default-constructed (empty) tuple rather than failing. Otherwise
-expects a table of exactly `sizeof...(Args)` elements: pushes them in reverse (len down to 1), so
-after the loop the stack top is element 0, next is element 1, etc. - that's why the pack expansion
-below reads each one via a negative index (-I-1), letting the whole tuple be constructed in one
-expression instead of building it element by element. */
+/* Nil at `index` produces a default-constructed tuple rather than failing; any non-table, non-nil
+value hard-fails via luaw_push_error() (lua_error()). A table doesn't have to match
+sizeof...(Args) exactly - only min(len, sizeof...(Args)) elements are read, filling tuple slots
+0..count-1 in order (element 0 first, matching Lua's own "extra values discarded, missing values
+default" unpack convention); any slots beyond that stay default-constructed (a short table), and
+any extra table elements past sizeof...(Args) are simply never read (a long table). Pushed in
+reverse (count down to 1) so the stack top ends up holding element 0, matching the per-slot
+negative-index reads below. */
 template <typename ...Args, ssize_t index>
 struct luaw_param_t<std::tuple<Args...>, index> {
     template <size_t ...I>
     auto _luaw_single_param_impl(lua_State *L, std::index_sequence<I...>) {
-        typename de_bitmaptizize<std::tuple<Args...>>::Type ret;
+        using Ret = typename de_bitmaptizize<std::tuple<Args...>>::Type;
+        Ret ret;
         if (lua_isnil(L, index))
             return ret;
         if (!lua_istable(L, index)) {
@@ -2002,11 +2028,14 @@ struct luaw_param_t<std::tuple<Args...>, index> {
         }
         int abs_idx = lua_absindex(L, index);
         int len = lua_rawlen(L, index);
-        for (int i = len; i >= 1; i--)
+        size_t count = (size_t)len < sizeof...(Args) ? (size_t)len : sizeof...(Args);
+        for (int i = (int)count; i >= 1; i--)
             lua_rawgeti(L, abs_idx, i);
-        ret = typename de_bitmaptizize<std::tuple<Args...>>::Type{
-                luaw_param_t<Args, -ssize_t(I)-1>{}.luaw_single_param(L)...};
-        lua_pop(L, len);
+        ([&] {
+            if (I < count)
+                std::get<I>(ret) = luaw_param_t<Args, -ssize_t(I)-1>{}.luaw_single_param(L);
+        }(), ...);
+        lua_pop(L, (int)count);
         return ret;
     }
 
@@ -2195,8 +2224,17 @@ struct luaw_returner_t<std::tuple<Args...>> {
             lua_rawseti(L, -2, i++);
         };
         std::apply([&](auto&& ...args){
-            (fn(args), ...);  
+            (fn(args), ...);
         }, t);
+    }
+};
+
+/* A pair is just a fixed 2-slot tuple - delegates to luaw_returner_t<std::tuple<Arg1,Arg2>>
+rather than duplicating its table-building logic. */
+template <typename Arg1, typename Arg2>
+struct luaw_returner_t<std::pair<Arg1, Arg2>> {
+    void luaw_ret_push(lua_State *L, const std::pair<Arg1, Arg2>& p) {
+        luaw_returner_t<std::tuple<Arg1, Arg2>>{}.luaw_ret_push(L, std::tuple<Arg1, Arg2>(p.first, p.second));
     }
 };
 
@@ -2211,6 +2249,10 @@ struct luaw_returner_t<std::vector<T>> {
     }
 };
 
+/* It would be better for the user to push a string or an array of strings, it makes more sense to
+see the things, but sadly I don't know if that is possible, because the thing is that we can't
+really get the signification of the bits. Once here we don't really know if Enum is a type of a
+bitmap or we simply where told in it there is a bitmap. */
 template <is_vc_enum Enum>
 struct luaw_returner_t<Enum> {
     void luaw_ret_push(lua_State *L, Enum x) {
@@ -2312,80 +2354,16 @@ inline consteval void demangle_static_assert(const char *) {
         throw;
 }
 
-/* [INTERNAL] The C++->Lua counterpart to luaw_lua_to_cpp_object() - pushes `object` onto `L`,
-dispatching on T's (decayed) category: string, bool, integral/floating-point, vector/tuple/pair
-(recursively, per element, as a Lua table), enum (as a plain number - see the comment on that
-branch for why not a string), and `vc::ref_t<T>` (nil for a null ref, otherwise via
-push_vc_object()). Always returns 0; unsupported types fail at compile time instead (see the
-final `else` below). */
+/* [INTERNAL] The C++->Lua counterpart to luaw_lua_to_cpp_object() - pushes `object` onto `L` via
+luaw_returner_t<Type>, which supplies the actual per-category push logic (string, bool, integral/
+floating-point, vector/tuple/pair, enum, vc::ref_t<T> - each specialization documents its own
+behavior at its own definition, above). Always returns 0; an unsupported type fails to compile via
+luaw_returner_t<T>'s own primary-template static_assert rather than a check here. */
 template <typename T>
 int luaw_push_cpp_object(lua_State *L, const T &object) {
     using Type = std::decay_t<T>;
-
-    if constexpr (std::is_same_v<Type, std::string>) {
-        lua_pushstring(L, object.c_str());
-        return 0;
-    }
-    else if constexpr(std::is_same_v<Type, bool>) {
-        lua_pushboolean(L, object);
-        return 0;
-    }
-    else if constexpr (std::is_integral_v<Type>) {
-        lua_pushinteger(L, object);
-        return 0;
-    }
-    else if constexpr (std::is_floating_point_v<Type>) {
-        lua_pushnumber(L, object);
-        return 0;
-    }
-    else if constexpr (is_vector<Type>) {
-        /* pushes a table */
-        lua_createtable(L, object.size(), 0);
-        for (size_t i = 0; i < object.size(); i++) {
-            luaw_push_cpp_object(L, object[i]);
-            lua_rawseti(L, -2, i+1);
-        }
-        return 0;
-    }
-    else if constexpr (is_tupple<Type>) {
-        lua_createtable(L, std::tuple_size_v<Type>, 0);
-        [&]<size_t... I>(std::index_sequence<I...>) {
-            ([&](auto &item, size_t i) {
-                luaw_push_cpp_object(L, item);
-                lua_rawseti(L, -2, i+1);
-            }(std::get<I>(object), I), ...);
-        }(std::make_index_sequence<std::tuple_size_v<Type>>{});
-        return 0;
-    }
-    else if constexpr (is_pair<Type>) {
-        lua_createtable(L, 2, 0);
-        luaw_push_cpp_object(L, object.first);
-        lua_rawseti(L, -2, 1);
-        luaw_push_cpp_object(L, object.second);
-        lua_rawseti(L, -2, 2);
-        return 0;
-    }
-    else if constexpr (is_vc_enum<Type>) {
-        /* It would be better for the user to push a string or an array of strings,
-        it makes more sense to see the things, but sadly I don't know if that is possible, because
-        the thing is that we can't really get the signification of the bits. Once here we don't
-        really know if Type is a type of a bitmap or we simply where told in it there is a bitmap.
-        */
-        lua_pushnumber(L, (int)object);
-        return 0;
-    }
-    else if constexpr (is_vc_ref<Type>) {
-        if (!object) {
-            lua_pushnil(L);
-            return 0;
-        }
-        ASSERT_FN(push_vc_object(L, object));
-        return 0;
-    }
-    else {
-        demangle_static_assert<false, decltype(object)>(" - Is not a valid member type");
-        return -1;
-    }
+    luaw_returner_t<Type>{}.luaw_ret_push(L, object);
+    return 0;
 }
 
 /* [INTERNAL] Lua-callable getter for a registered member object - invoked via __index (see the
@@ -2412,24 +2390,37 @@ int luaw_member_object_wrapper(lua_State *L) {
 
 /* Types excluded from luaw_lua_to_cpp_object()'s dispatch - conversions that are fine for
 call-scoped use (an ordinary function parameter, via luaw_param_t directly) but not safe to store
-long-term in a C++ object member. */
+long-term in a C++ object member. Recurses into vector/tuple/pair element types so e.g.
+std::vector<const char*> or std::tuple<int, const char*> are caught too, not just a blacklisted
+type used bare. */
 template <typename T>
 struct luaw_setter_blacklist_t : std::false_type {};
 
 template <>
 struct luaw_setter_blacklist_t<const char *> : std::true_type {};
 
-/* [INTERNAL] The Lua->C++ counterpart to luaw_push_cpp_object() - converts the Lua value at
-`index` into `object`, dispatching on T's (decayed) category: string, bool, integral/floating-
-point, vector/tuple/pair (recursively, per element), enum (via the `bm_t<T>` single-value parsing
-path), and `vc::ref_t<T>` (a nil `lua_object_t` resets to an empty instance instead of failing,
-unlike every other `ref_t<T>` here, which fails on nil). Returns 0 on success, -1 on a shape
-mismatch (e.g. a table-shaped type given a non-table value). Used for member setters, call_lua()'s
-return conversion, and vector/tuple/pair element conversion.
+template <typename T, typename Alloc>
+struct luaw_setter_blacklist_t<std::vector<T, Alloc>> : luaw_setter_blacklist_t<T> {};
 
-Checks luaw_setter_blacklist_t first, before any other category - a blacklisted type must never
-reach a later branch (explicit today, or a generic luaw_param_t fallback added later), since either
-could otherwise convert it just fine. */
+template <typename ...Args>
+struct luaw_setter_blacklist_t<std::tuple<Args...>>
+        : std::bool_constant<(luaw_setter_blacklist_t<Args>::value || ...)> {};
+
+template <typename A, typename B>
+struct luaw_setter_blacklist_t<std::pair<A, B>>
+        : std::bool_constant<luaw_setter_blacklist_t<A>::value || luaw_setter_blacklist_t<B>::value> {};
+
+/* [INTERNAL] The Lua->C++ counterpart to luaw_push_cpp_object() - converts the Lua value at
+`index` into `object`. Checks luaw_setter_blacklist_t first - a blacklisted type must never reach
+the generic fallback below, since that would otherwise convert it just fine. Enum is the one
+remaining special case (goes through `bm_t<T>`'s single-value parsing path rather than a direct
+luaw_param_t<Enum,...> specialization - a bare enum was never meant to be Lua-parseable without
+that wrapper). Everything else - string, bool, integral/floating-point, vector/tuple/pair,
+vc::ref_t<T> - falls back to luaw_param_t<Type,-1>, each specialization documenting its own nil/
+error/shape-mismatch behavior at its own definition, above. Returns 0 on success, -1 on a shape
+mismatch or a blacklist hit; an unsupported type fails to compile via luaw_param_t<T,index>'s own
+primary-template static_assert. Used for member setters, call_lua()'s return conversion, and
+vector/tuple/pair element conversion. */
 template <typename T>
 int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
     using Type = std::decay_t<T>;
@@ -2438,70 +2429,6 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
         demangle_static_assert<false, decltype(object)>(
                 " - Is blacklisted from member-object setters (see luaw_setter_blacklist_t)");
         return -1;
-    }
-    else if constexpr (std::is_same_v<Type, std::string>) {
-        const char *str = lua_tostring(L, index);
-        object = str ? str : "";
-        return 0;
-    }
-    else if constexpr (std::is_same_v<Type, bool>) {
-        object = lua_toboolean(L, index);
-        return 0;
-    }
-    else if constexpr (std::is_integral_v<Type>) {
-        uint64_t val = lua_tointeger(L, index);
-        object = (Type)val;
-        return 0;
-    }
-    else if constexpr (std::is_floating_point_v<Type>) {
-        double val = lua_tonumber(L, index);
-        object = (Type)val;
-        return 0;
-    }
-    else if constexpr (is_vector<Type>) {
-        /* Delegates to luaw_param_t<Type,-1> - nil -> empty, non-table/non-nil -> lua_error via
-        luaw_push_error, element failures propagate the same way at any nesting depth. index is
-        hardcoded -1 because every current caller of luaw_lua_to_cpp_object already passes -1 (see
-        luaw_setter_blacklist_t's doc comment for the same assumption elsewhere in this function). */
-        object = luaw_param_t<Type, -1>{}.luaw_single_param(L);
-        return 0;
-    }
-    else if constexpr (is_tupple<Type>) {
-        if (!lua_istable(L, index)) {
-            DBG("Expected table here");
-            return -1;
-        }
-        int len = lua_rawlen(L, index);
-        if (len != std::tuple_size_v<Type>) {
-            DBG("Tuple and table sizes mismatch");
-            return -1;
-        }
-        [&]<size_t... I>(std::index_sequence<I...>) {
-            ([&](auto &item, size_t i) {
-                lua_rawgeti(L, index, i+1);
-                luaw_lua_to_cpp_object(L, -1, item);
-                lua_pop(L, 1);
-            }(std::get<I>(object), I), ...);
-        }(std::make_index_sequence<std::tuple_size_v<Type>>{});
-        return 0;
-    }
-    else if constexpr (is_pair<Type>) {
-        if (!lua_istable(L, index)) {
-            DBG("Expected table here");
-            return -1;
-        }
-        int len = lua_rawlen(L, index);
-        if (len != 2) {
-            DBG("Tuple and table sizes mismatch");
-            return -1;
-        }
-        lua_rawgeti(L, index, 1);
-        luaw_lua_to_cpp_object(L, -1, object.first);
-        lua_pop(L, 1);
-        lua_rawgeti(L, index, 2);
-        luaw_lua_to_cpp_object(L, -1, object.second);
-        lua_pop(L, 1);
-        return 0;
     }
     else if constexpr (is_vc_enum<Type>) {
         try {
@@ -2519,28 +2446,10 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
         }
         return 0;
     }
-    else if constexpr (is_vc_ref_t<Type>::value) {
-        if constexpr (std::is_same_v<typename Type::element_type, lua_object_t>) {
-            if (auto obj = get_object_from_lua(L, index);
-                    obj && obj->type_id() == lua_object_t::type_id_static()) {
-                object = obj->to_related<lua_object_t>();
-                return 0;
-            }
-            object = lua_object_t::create();
-            lua_object_t::capture_lua_object(L, object, index);
-            return 0;
-        } else {
-            auto obj = get_object_from_lua(L, index);
-            if (!obj) {
-                DBG("Invalid user object");
-                return -1;
-            }
-            object = obj->to_related<Type::element_type>();
-            return 0;
-        }
-    }
     else {
-        demangle_static_assert<false, decltype(object)>(" - Is not a valid object type");
+        /* index hardcoded -1 because every current caller of luaw_lua_to_cpp_object already
+        passes -1 (see luaw_setter_blacklist_t's doc comment for the same assumption). */
+        object = luaw_param_t<Type, -1>{}.luaw_single_param(L);
         return 0;
     }
 }
