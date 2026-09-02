@@ -7,6 +7,7 @@
 #include "implot.h"
 #include "debug.h"
 #include <stdio.h>
+#include <stdlib.h>
 #if defined(IMGUI_IMPL_OPENGL_ES2)
 #include <GLES2/gl2.h>
 #endif
@@ -151,6 +152,16 @@ inline int imgui_init() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 #endif
+
+    /* DEBUG-ONLY, opt-in: if VC_WINDOW_START_HIDDEN is set (to anything), the window is created
+    hidden instead of appearing wherever the OS/window manager would normally first place it - so
+    a caller that wants to move it (e.g. onto a specific monitor, for automated driving/testing)
+    can position it BEFORE ever showing it, instead of it flashing at the default position first.
+    The caller is responsible for glfwSetWindowPos(...) + glfwShowWindow(imgui_window) afterward.
+    Inert - default window creation is completely unchanged - for anyone who doesn't set it. */
+    if (getenv("VC_WINDOW_START_HIDDEN")) {
+        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    }
 
     // Create window with graphics context
     imgui_window = glfwCreateWindow(1280, 720, "Dear ImGui GLFW+OpenGL3 example", NULL, NULL);

@@ -811,8 +811,6 @@ static int luaopen_vc(lua_State *L) {
 
         /* params: 1.usrptr */
         lua_pushcfunction(L, [](lua_State *L) {
-            DBG("__gc");
-
             auto *box = (box_t *)luaL_testudata(L, -1, "__vc_metatable");
             if (!box) {
                 DBG("Invalid: garbage colector called on invalid object");
