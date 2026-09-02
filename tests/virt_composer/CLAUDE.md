@@ -98,7 +98,7 @@ running each test binary.
 | 006 | Lua Scripts | `006-001` | `m_source` inline, `m_source_path` file, both/neither field is invalid |
 | 007 | Lua Functions | `007-001` | `add_internal_func()` + `"[INTERNAL]"` binding, calling via `vc.<name>(...)`, unknown name fails init |
 | 008 | `call_lua()` types | `008-001` | scalar/void/`ref_t`/vector/tuple round trips (both as arguments and as the return type `R`), unknown function -> `VC_ERROR_FAILED_CALL` |
-| 009 | Custom Objects & Members | `009-001` | user `vc::object_t` type registration, `VC_REGISTER_MEMBER_OBJECT`/`_FUNCTION`, get/set/call from Lua |
+| 009 | Custom Objects & Members | `009-001` | user `vc::object_t` type registration, `VC_REGISTER_MEMBER_OBJECT`/`_FUNCTION`, get/set/call from Lua, a member function returning a `get_enum_val`-registered enum (`luaw_returner_t`'s `is_vc_enum` specialization, pushed as a plain number) |
 | 010 | Trivial Copy Members | `010-001` | `VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER` + `!copy`/`resolve_memb<T>()`, unregistered member fails |
 | 011 | Inheritance | `011-001` | `register_inheritance<T,U>()` member propagation, registration-order sensitivity, 3-level hierarchies need every pair registered (not just adjacent links) |
 | 012 | Builder Callbacks | `012-001` | `add_named_builder_callback` (m_type match) vs `add_auto_builder_callback` (structural match) |
@@ -110,13 +110,13 @@ running each test binary.
 
 ## Working docs in this directory
 
-`DOCS_TODO.md` tracked a doc-cleanup pass over `../../virt_composer.h`'s public API surface - 20
-items (undocumented functions/macros, plus one stale doc comment), all done. Worked one at a time
-with the user (opinion + suggested doc -> approval/revision -> next) - same process now continuing
-in `DOC_ACCURACY_TODO.md`, a follow-up audit of *existing* doc comments (not missing ones) for
-claims that don't match the actual implementation - misattached comments, wrong return/error
-claims, omitted branches, dead `@ref`s. Check there before assuming a doc comment in
-`virt_composer.h` is accurate; check an item off once its fix actually lands and is approved.
+`DOCS_TODO.md` (a doc-cleanup pass over `../../virt_composer.h`'s public API surface - undocumented
+functions/macros, plus one stale doc comment) and `DOC_ACCURACY_TODO.md` (its follow-up audit of
+*existing* doc comments for claims that don't match the actual implementation) both finished -
+every item done and approved - and were removed rather than kept as a changelog, same convention as
+`BUGS.md` below. That work continues in `DOC_SWEEP_TODO.md`, an exhaustive line-by-line checklist
+over every documented entry in `../../virt_composer.h`'s public part; same one-item-at-a-time,
+opinion-then-approval process.
 
 `BUGS.md` logs currently-open bugs found in `../../virt_composer.h`/`.cpp` while writing these
 tests (same "remove the entry once fixed, don't keep a changelog" convention as co-lib's `BUGS.md`).

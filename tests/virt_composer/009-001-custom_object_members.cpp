@@ -14,6 +14,35 @@ exact Private-constructor/create()/type_id()/type_id_static()/to_string() shape 
 
 VIRT_COMPOSER_REGISTER_TYPE(TC_TYPE_POINT);
 
+/* Exercises luaw_returner_t<Enum> (the is_vc_enum-constrained specialization living alongside
+Integer/Floating in virt_composer.h) via quadrant() below. Making an enum usable there at all needs
+the same get_enum_val<T> specialization every enum in vulkan_composer.h goes through (see
+virt_composer.h's get_enum_val() doc comment): a string-name table, forwarded to the two-argument
+overload. Declared before point_t since it's used as a member function's return type there. */
+enum class point_quadrant_e {
+    ORIGIN,
+    I,
+    II,
+    III,
+    IV,
+};
+
+namespace virt_composer {
+
+inline std::unordered_map<std::string, point_quadrant_e> point_quadrant_from_str = {
+    {"ORIGIN", point_quadrant_e::ORIGIN},
+    {"I", point_quadrant_e::I},
+    {"II", point_quadrant_e::II},
+    {"III", point_quadrant_e::III},
+    {"IV", point_quadrant_e::IV},
+};
+
+template <> inline point_quadrant_e get_enum_val<point_quadrant_e>(fkyaml::node &n) {
+    return get_enum_val(n, point_quadrant_from_str);
+}
+
+} /* virt_composer */
+
 struct point_t : public vc::object_t {
     int64_t x = 0;
     int64_t y = 0;
@@ -33,6 +62,14 @@ struct point_t : public vc::object_t {
 
     int64_t manhattan_len() const { return (x < 0 ? -x : x) + (y < 0 ? -y : y); }
 
+    point_quadrant_e quadrant() const {
+        if (x == 0 && y == 0) return point_quadrant_e::ORIGIN;
+        if (x > 0 && y > 0)   return point_quadrant_e::I;
+        if (x < 0 && y > 0)   return point_quadrant_e::II;
+        if (x < 0 && y < 0)   return point_quadrant_e::III;
+        return point_quadrant_e::IV;
+    }
+
     inline std::string to_string() const override {
         return std::format("point_t[{}]: x={} y={}", (void*)this, x, y);
     }
@@ -47,6 +84,7 @@ static vc::ref_t<vc::virt_state_t> make_state_with_point_registered() {
     VC_REGISTER_MEMBER_OBJECT(vs.get(), point_t, x);
     VC_REGISTER_MEMBER_OBJECT(vs.get(), point_t, y);
     VC_REGISTER_MEMBER_FUNCTION(vs.get(), point_t, manhattan_len);
+    VC_REGISTER_MEMBER_FUNCTION(vs.get(), point_t, quadrant);
     return vs;
 }
 
@@ -103,9 +141,32 @@ int test9_member_function_call_from_lua() {
     return 0;
 }
 
+int test9_member_function_enum_return_from_lua() {
+    auto vs = make_state_with_point_registered();
+    ASSERT_FN(CHK_PTR(vs.get()));
+
+    auto p = point_t::create(3, -4);
+
+    auto path = write_temp_yaml("009-001-memberfn-enum",
+        "script:\n"
+        "  m_type: vc::lua_script_t\n"
+        "  m_source: |\n"
+        "    function get_quadrant(pt) return pt:quadrant() end\n");
+    ASSERT_FN(CHK_BOOL(vc::parse_config(vs.get(), path.c_str()) == vc::VC_ERROR_OK));
+
+    /* quadrant() returns point_quadrant_e - luaw_returner_t<Enum> pushes it as a plain lua_Number
+    (not a string), so the Lua side hands back a number matching the underlying int value. */
+    auto [q, err] = vc::call_lua<int>(vs.get(), "get_quadrant", p);
+    ASSERT_FN(CHK_BOOL(err == vc::VC_ERROR_OK));
+    ASSERT_FN(CHK_BOOL(q == (int)point_quadrant_e::IV));
+
+    return 0;
+}
+
 int test9_custom_object_members() {
     ASSERT_FN(test9_member_object_read_write_from_lua());
     ASSERT_FN(test9_member_function_call_from_lua());
+    ASSERT_FN(test9_member_function_enum_return_from_lua());
     return 0;
 }
 
