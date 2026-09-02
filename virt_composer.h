@@ -2038,21 +2038,68 @@ template <typename T, ssize_t index>
 struct luaw_param_t<std::vector<T>, index> {
     auto luaw_single_param(lua_State *L) {
         // DBG("Vector at index: %zd", index);
-        typename de_bitmaptizize<std::vector<T>>::Type ret;
+        using Ret = typename de_bitmaptizize<std::vector<T>>::Type;
         if (lua_isnil(L, index))
-            return ret;
+            return Ret{};
         if (!lua_istable(L, index)) {
             luaw_push_error(L, std::format("Invalid object of type: {} at index {}",
                     lua_typename(L, lua_type(L, index)), index));
         }
         int len = lua_rawlen(L, index);
+        Ret ret(len);
         for (int i = 1; i <= len; i++) {
             lua_rawgeti(L, index, i);
-            ret.push_back(luaw_param_t<T, -1>{}.luaw_single_param(L));
+            ret[i-1] = luaw_param_t<T, -1>{}.luaw_single_param(L);
             lua_pop(L, 1);
         }
         return ret;
     }
+};
+
+// helper to detect if a type is vc::ref_t<...>
+template <typename>
+struct is_vc_ref_t : std::false_type {};
+
+template <typename T>
+struct is_vc_ref_t<vc::ref_t<T>> : std::true_type {};
+
+template <typename T>
+constexpr bool is_vc_ref = is_vc_ref_t<T>::value;
+
+// helper to detect if a type is std::tuple<...>
+template <typename T>
+struct is_tupple_t : std::false_type {};
+
+template <typename ...Args>
+struct is_tupple_t<std::tuple<Args...>> : std::true_type {};
+
+template <typename T>
+constexpr bool is_tupple = is_tupple_t<T>::value;
+
+// helper to detect if a type is std::pair<...>
+template <typename T>
+struct is_pair_t : std::false_type {};
+
+template <typename A, typename B>
+struct is_pair_t<std::pair<A, B>> : std::true_type {};
+
+template <typename T>
+constexpr bool is_pair = is_pair_t<T>::value;
+
+// helper to detect if a type is std::vector<...>
+template <typename T>
+struct is_vector_t : std::false_type {};
+
+template <typename T, typename Alloc>
+struct is_vector_t<std::vector<T, Alloc>> : std::true_type {};
+
+template <typename T>
+constexpr bool is_vector = is_vector_t<T>::value;
+
+// helper to detect if a type is a known enum
+template <typename T>
+concept is_vc_enum = requires(fkyaml::node n) {
+    get_enum_val<T>(n);
 };
 
 /*!
@@ -2157,10 +2204,17 @@ template <typename T>
 struct luaw_returner_t<std::vector<T>> {
     void luaw_ret_push(lua_State *L, const std::vector<T>& v) {
         lua_createtable(L, v.size(), 0);
-        for (int i = 0; i < v.size(); i++) {
+        for (size_t i = 0; i < v.size(); i++) {
             luaw_returner_t<std::decay_t<T>>{}.luaw_ret_push(L, v[i]);
             lua_rawseti(L, -2, i+1);
         }
+    }
+};
+
+template <is_vc_enum Enum>
+struct luaw_returner_t<Enum> {
+    void luaw_ret_push(lua_State *L, Enum x) {
+        lua_pushnumber(L, (int)x);
     }
 };
 
@@ -2247,52 +2301,6 @@ inline int luaw_member_function_wrapper(lua_State *L) {
     }
     catch (...) { return luaw_catch_exception(L); }
 }
-
-// helper to detect if a type is vc::ref_t<...>
-template <typename>
-struct is_vc_ref_t : std::false_type {};
-
-template <typename T>
-struct is_vc_ref_t<vc::ref_t<T>> : std::true_type {};
-
-template <typename T>
-constexpr bool is_vc_ref = is_vc_ref_t<T>::value;
-
-// helper to detect if a type is std::tuple<...>
-template <typename T>
-struct is_tupple_t : std::false_type {};
-
-template <typename ...Args>
-struct is_tupple_t<std::tuple<Args...>> : std::true_type {};
-
-template <typename T>
-constexpr bool is_tupple = is_tupple_t<T>::value;
-
-// helper to detect if a type is std::pair<...>
-template <typename T>
-struct is_pair_t : std::false_type {};
-
-template <typename A, typename B>
-struct is_pair_t<std::pair<A, B>> : std::true_type {};
-
-template <typename T>
-constexpr bool is_pair = is_pair_t<T>::value;
-
-// helper to detect if a type is std::vector<...>
-template <typename T>
-struct is_vector_t : std::false_type {};
-
-template <typename T, typename Alloc>
-struct is_vector_t<std::vector<T, Alloc>> : std::true_type {};
-
-template <typename T>
-constexpr bool is_vector = is_vector_t<T>::value;
-
-// helper to detect if a type is a known enum
-template <typename T>
-concept is_vc_enum = requires(fkyaml::node n) {
-    get_enum_val<T>(n);
-};
 
 /* consteval + throw forces a compile-time-only error when `test` is false, same trick as
 luaw_static_assert() above. Unlike that one, the message parameter here is unnamed/unused in the
@@ -2402,18 +2410,36 @@ int luaw_member_object_wrapper(lua_State *L) {
     catch (...) { return luaw_catch_exception(L); }
 }
 
+/* Types excluded from luaw_lua_to_cpp_object()'s dispatch - conversions that are fine for
+call-scoped use (an ordinary function parameter, via luaw_param_t directly) but not safe to store
+long-term in a C++ object member. */
+template <typename T>
+struct luaw_setter_blacklist_t : std::false_type {};
+
+template <>
+struct luaw_setter_blacklist_t<const char *> : std::true_type {};
+
 /* [INTERNAL] The Lua->C++ counterpart to luaw_push_cpp_object() - converts the Lua value at
 `index` into `object`, dispatching on T's (decayed) category: string, bool, integral/floating-
 point, vector/tuple/pair (recursively, per element), enum (via the `bm_t<T>` single-value parsing
 path), and `vc::ref_t<T>` (a nil `lua_object_t` resets to an empty instance instead of failing,
 unlike every other `ref_t<T>` here, which fails on nil). Returns 0 on success, -1 on a shape
 mismatch (e.g. a table-shaped type given a non-table value). Used for member setters, call_lua()'s
-return conversion, and vector/tuple/pair element conversion. */
+return conversion, and vector/tuple/pair element conversion.
+
+Checks luaw_setter_blacklist_t first, before any other category - a blacklisted type must never
+reach a later branch (explicit today, or a generic luaw_param_t fallback added later), since either
+could otherwise convert it just fine. */
 template <typename T>
 int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
     using Type = std::decay_t<T>;
 
-    if constexpr (std::is_same_v<Type, std::string>) {
+    if constexpr (luaw_setter_blacklist_t<Type>::value) {
+        demangle_static_assert<false, decltype(object)>(
+                " - Is blacklisted from member-object setters (see luaw_setter_blacklist_t)");
+        return -1;
+    }
+    else if constexpr (std::is_same_v<Type, std::string>) {
         const char *str = lua_tostring(L, index);
         object = str ? str : "";
         return 0;
@@ -2433,18 +2459,11 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
         return 0;
     }
     else if constexpr (is_vector<Type>) {
-        if (!lua_istable(L, index)) {
-            DBG("Expected table here");
-            return -1;
-        }
-        int len = lua_rawlen(L, index);
-        std::vector<typename Type::value_type> to_asign(len);
-        for (int i = 1; i <= len; i++) {
-            lua_rawgeti(L, index, i);
-            luaw_lua_to_cpp_object(L, -1, to_asign[i-1]);
-            lua_pop(L, 1);
-        }
-        object = to_asign;
+        /* Delegates to luaw_param_t<Type,-1> - nil -> empty, non-table/non-nil -> lua_error via
+        luaw_push_error, element failures propagate the same way at any nesting depth. index is
+        hardcoded -1 because every current caller of luaw_lua_to_cpp_object already passes -1 (see
+        luaw_setter_blacklist_t's doc comment for the same assumption elsewhere in this function). */
+        object = luaw_param_t<Type, -1>{}.luaw_single_param(L);
         return 0;
     }
     else if constexpr (is_tupple<Type>) {
