@@ -11,6 +11,13 @@
 #include "path_utils.h"
 
 #ifdef UTILS_OS_WINDOWS
+# include <io.h>
+# include <fcntl.h>
+# include <sys/stat.h>
+# ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN
+# endif
+# include <windows.h> /* MoveFileExA/GetLastError - logger_swap_files()'s active/old rotation. */
 #elif defined(UTILS_OS_LINUX)
 # include <fcntl.h>
 # include <unistd.h>
@@ -74,8 +81,45 @@ inline std::string logger_get_date() {
 
 inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
 #ifdef UTILS_OS_WINDOWS
-	/* TODO: */
-	return 0;
+	{
+		std::lock_guard guard(_logger_data.logger_sl);
+
+		if (_logger_data.is_init) {
+			printf("Logger was initialized before, can't do that twice\n");
+			return -1;
+		}
+
+		std::string logfile_relpath = path_get_relative(logfile_path);
+
+		_logger_data.active_file = std::string(logfile_relpath) + ".log";
+		_logger_data.old_file = std::string(logfile_relpath) + ".old.log";
+		_logger_data.maxsz = maxsz / 2; /* half for active and half for old */
+
+		/* _O_BINARY - the byte counts this file tracks (curr_sz, maxsz) must match what's
+		actually on disk; the CRT's default text mode would translate '\n' -> "\r\n" on write,
+		silently growing every line past what curr_sz accounts for. perm/pmode here mirrors the
+		POSIX branch's mode_t argument - _S_IREAD|_S_IWRITE is as close as Windows gets to 0666. */
+		int flags = _O_CREAT | _O_RDWR | _O_TRUNC | _O_BINARY;
+		_logger_data.active_fd = _open(_logger_data.active_file.c_str(), flags, _S_IREAD | _S_IWRITE);
+		if (_logger_data.active_fd < 0) {
+			printf("Couldn't open logfile[%s], strerror[errno]: %s[%d]\n",
+					_logger_data.active_file.c_str(), strerror(errno), errno);
+			return -1;
+		}
+
+		_logger_data.old_fd = _open(_logger_data.old_file.c_str(), flags, _S_IREAD | _S_IWRITE);
+		if (_logger_data.old_fd < 0) {
+			printf("Couldn't open old logfile[%s], strerror[errno]: %s[%d]\n",
+					_logger_data.old_file.c_str(), strerror(errno), errno);
+			return -1;
+		}
+
+		_logger_data.curr_sz = _lseek(_logger_data.active_fd, 0, SEEK_END);
+		_logger_data.is_init = true;
+	}
+
+	std::string init_msg = "<<<< LOGGER INIT [" + logger_get_date() + "] >>>>\n";
+	return logger_log(init_msg.c_str());
 #elif defined(UTILS_OS_LINUX)
 	{
 		std::lock_guard guard(_logger_data.logger_sl);
@@ -122,7 +166,11 @@ inline bool logger_is_init() {
 /* does this function have any use? */
 inline void logger_uninit() {
 #ifdef UTILS_OS_WINDOWS
-	/* TODO: */
+	if (!_logger_data.is_init)
+		return ;
+	_close(_logger_data.old_fd);
+	_close(_logger_data.active_fd);
+	_logger_data.is_init = false;
 #elif defined(UTILS_OS_LINUX)
 	if (!_logger_data.is_init)
 		return ;
@@ -146,7 +194,30 @@ inline int renameat2(int olddirfd, const char *oldpath,
 
 inline int logger_swap_files() {
 #ifdef UTILS_OS_WINDOWS
-	/* TODO: */
+	/* No renameat2(RENAME_EXCHANGE) equivalent on Windows - close both fds (can't rename an
+	open-and-locked file out from under itself), move active -> old (overwriting whatever was
+	there), then reopen both fresh. Same net effect as the POSIX branch (active becomes empty,
+	old becomes what active just was), just not lock-free/atomic - acceptable for a debug logger
+	already serialized behind logger_sl. */
+	_close(_logger_data.active_fd);
+	_close(_logger_data.old_fd);
+
+	if (!MoveFileExA(_logger_data.active_file.c_str(), _logger_data.old_file.c_str(),
+			MOVEFILE_REPLACE_EXISTING)) {
+		printf("Couldn't move active file to old file, GetLastError: %lu\n", GetLastError());
+		return -1;
+	}
+
+	int flags = _O_CREAT | _O_RDWR | _O_TRUNC | _O_BINARY;
+	_logger_data.active_fd = _open(_logger_data.active_file.c_str(), flags, _S_IREAD | _S_IWRITE);
+	_logger_data.old_fd = _open(_logger_data.old_file.c_str(), _O_RDWR | _O_BINARY, _S_IREAD | _S_IWRITE);
+	if (_logger_data.active_fd < 0 || _logger_data.old_fd < 0) {
+		printf("Couldn't reopen log files after swap, strerror[errno]: %s[%d]\n", strerror(errno), errno);
+		return -1;
+	}
+
+	_logger_data.curr_sz = 0;
+
 	return 0;
 #elif defined(UTILS_OS_LINUX)
 	/* atomically moves active file to old file */
@@ -175,7 +246,28 @@ inline int logger_swap_files() {
 
 inline int logger_log(const char *msg) {
 #ifdef UTILS_OS_WINDOWS
-	/* TODO: */
+	uint32_t len = (uint32_t)strlen(msg);
+	if (len > _logger_data.maxsz) {
+		printf("Can't log more than allowed size: len[%u] maxsz[%llu]", len,
+				(unsigned long long)_logger_data.maxsz);
+		return -1;
+	}
+
+	int active_fd = 0;
+	{
+		std::lock_guard guard(_logger_data.logger_sl);
+		if (len + _logger_data.curr_sz > _logger_data.maxsz)
+			logger_swap_files();
+		else
+			_logger_data.curr_sz += len;
+		active_fd = _logger_data.active_fd;
+	}
+
+	if (_write(active_fd, msg, len) != (int)len) {
+		printf("Couldn't write msg in active file[%s] strerror[errno]: %s[%d]", msg,
+				strerror(errno), errno);
+		return -1;
+	}
 	return 0;
 #elif defined(UTILS_OS_LINUX)
 	/* if file would grow longer than maxsz the write will be done in  */
