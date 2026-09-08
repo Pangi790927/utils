@@ -1329,41 +1329,22 @@ static fkyaml::node create_yaml_from_lua_object(lua_State *L, int index) {
     return fkyaml::node{};
 }
 
-/* [INTERNAL] Implements the Lua-visible vc.force_release(obj) - registered under that name via
-add_lua_tab_funcs() in create_state(). Forces Lua's OWN strong claim on `obj` (arg 1) to be dropped
-right now, rather than waiting for Lua's collector to get around to it whenever it next runs
-(2026-09-04 design discussion - Lua's collector is a tracing GC, not refcounted: an object with
-zero references doesn't get destroyed the instant the last one goes away, it just becomes eligible,
-and stays alive-but-orphaned until the collector's next trace happens to reach it - measured
-directly on this same day, an object survived two full forced collectgarbage("collect") passes and
-only died at final Lua-state teardown). A tree-shaped ownership graph (mexpr_t's own children:
-owning shared_ptr down, non-owning raw parent pointer back up - math_expr_composer.h) has no cycles
-to worry about, so calling this on the ONE node just cut loose from its parent is enough -
-shared_ptr's own cascading destruction handles everything still owned beneath it, no need to walk
-and release a whole removed subtree by hand (verified empirically the same day: releasing a single
-leaf node destroyed it immediately, zero GC forcing needed, once it was genuinely its own last
-owner). Callers: mexpru.cut() (math_writer's mexpru.lua), the Lua-side counterpart that documents
-exactly when it's safe to call this.
-Registered as a plain global function (vc.force_release(obj)), NOT a `obj:force_release()` method -
-`:` -method calls go through this library's own per-class __index dispatch (VC_REGISTER_MEMBER_
-FUNCTION), which only knows about members explicitly registered that way; a bare lua_setfield()
-onto the shared __vc_metatable (the way __gc/__call are set up, right below) is invisible to it -
-only __gc/__call work that way because the Lua VM calls THOSE by their special metamethod names
-directly, never going through __index at all (found the hard way, 2026-09-04, first attempt).
-Deliberately resets self_obj alone (NOT box->~box_t() the way __gc does) - the userdata's own
-memory is still alive and Lua will still run __gc on it later; that call needs to find a validly-
-constructed (if now-empty) box_t, not a double-destructed one.
+/* [INTERNAL] Implements the Lua-visible vc.force_release(obj).
+@brief Ends Lua's ownership of a composer object at once, rather than at the collector's
+convenience, so the object can be destroyed at a point the caller picks.
 
-Also erases this object's own entry from weak_cache_ref (the raw-pointer-keyed cache push_vc_object()
-uses to hand back the SAME Lua wrapper for the same C++ object instead of making a duplicate one -
-see push_vc_object()'s own comment) BEFORE resetting self_obj. Found 2026-09-04, chasing a hard,
-silent native crash in a multi-level propagate_rebuild() chain: dropping the last strong ref here can
-free the underlying object right now (not on Lua's own lazy schedule), and a NEW object allocated
-moments later - same rebuild chain, same allocator, entirely plausible - can land at that exact freed
-address. weak_cache_ref is only value-weak, so its raw-pointer key doesn't get invalidated just
-because the object behind it died out of band; without this erase, push_vc_object() for that new
-object would find and hand back THIS box - self_obj already null - instead of creating a fresh
-wrapper, and the first method call on it null-derefs. */
+Core:
+  - On return Lua holds no strong reference to `obj`; if it held the last one the object is
+    already destroyed, not merely eligible. Lua's collector is tracing, so an unreferenced object
+    can outlive forced collectgarbage("collect") passes (2026-09-04: one died only at teardown).
+  - `obj` is unregistered from the name table and no wrapper for it survives anywhere, so it can
+    no longer be found by name and a later object can never be handed this wrapper.
+  - Every Lua handle to `obj` shares that one wrapper and is left alive but empty; none of them
+    may be used again, though __gc still runs on them.
+  - Call it only once `obj` is cut loose from its owner and nothing else holds it; everything
+    owned beneath it dies with it, provided that ownership is acyclic.
+
+Params: arg 1 is a vc object userdata, anything else is a silent no-op; returns nothing. */
 static int force_release_ref(lua_State *L) {
     auto *box = (box_t *)luaL_testudata(L, 1, "__vc_metatable");
     if (!box) {
