@@ -20,6 +20,34 @@ action that is relevant for the library, the context of the function, etc. A cou
 not null". The last part of this example is a detail. So the first step is to separate detail from
 important/structural.
 
+## Date
+
+Every comment carries the date and hour it was written, as `@date YYYY-MM-DD HH:MM` on a line of
+its own at the end. A comment that is rewritten takes the date of the rewrite: the stamp says when
+the text standing there was produced, not when the target first acquired a comment.
+
+What it buys is age. A comment cannot tell a reader whether it still matches the code, but one that
+was plainly written before the last change to the target is worth distrusting, and one written
+after it is worth believing. The hour is there because several comments are usually written in one
+sitting, and the ones from the same sitting were sorted against each other, so they stand or fall
+together.
+
+In a file that uses no doxygen tags the same stamp goes on the last line, in whatever form the
+comments around it already take.
+
+The stamp belongs on comments that document something: a function, a type, a macro, a file. A
+trailing one-line comment on an enumerator or a member is not one of those, and neither is a bare
+TODO note - stamping those costs more room than their age is worth.
+
+A comment small enough to be a brief and nothing else keeps its one-line shape, with the stamp
+appended inline rather than set apart:
+
+    /*! Unrefs whatever is currently held, if anything. @date 2026-09-08 06:54 */
+
+The sectioned form starts where the content does - roughly, once the whole comment no longer fits
+in four lines. Wrapping four words in headings and blank lines costs more room than it explains,
+and a file full of that scaffolding is harder to read than the comments it was meant to organise.
+
 ## Core and detail
 
 The second part of each comment will be the description itself; this description should be split into
@@ -64,7 +92,8 @@ that were never written cannot be told apart from the sections that were conside
 Should a size be specified for the comment, the sections give way in a fixed order: notes first,
 then detail, then parameters, then core. Each one is shrunk, and dropped entirely if that is not
 enough, before the next is touched, so the cuts land on the least essential part of the comment
-first. The brief is never dropped: in some form, however short, it is the minimum a comment can be.
+first. The brief and the date are never dropped: in some form, however short, they are the minimum a
+comment can be.
 
 A section is given up whole rather than thinned past the point where it still says something. Half
 a note explains nothing, and a detail with its reason cut out is worse than no detail at all, since

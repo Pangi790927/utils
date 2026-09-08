@@ -1344,7 +1344,9 @@ Core:
   - Call it only once `obj` is cut loose from its owner and nothing else holds it; everything
     owned beneath it dies with it, provided that ownership is acyclic.
 
-Params: arg 1 is a vc object userdata, anything else is a silent no-op; returns nothing. */
+Params: arg 1 is a vc object userdata, anything else is a silent no-op; returns nothing.
+
+@date 2026-09-08 06:54 */
 static int force_release_ref(lua_State *L) {
     auto *box = (box_t *)luaL_testudata(L, 1, "__vc_metatable");
     if (!box) {
