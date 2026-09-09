@@ -2,43 +2,39 @@
 #define VIRT_COMPOSER_H
 
 /*!
- * Virtual Composer is a C++ framework designed to create a pool of objects whose members and
- * member functions are backed by C++ code but can be configured via YAML and scripted using Lua.
+ * @brief A pool of C++-backed objects whose members and member functions can be configured from
+ * YAML and driven from Lua.
  *
- * The framework relies on the concept of a translation unit. All logic intended for object linking
- * must be included in a single translation unit. The header `virt_composer.h` should be included
- * in every file using the composer. Thanks to include guards, it will only be processed once per
- * translation unit. This header generates compile-time increments to assign unique IDs to different
- * object types, which are later used to instantiate objects from YAML config files and Lua scripts.
- * 
- * While all type registrations and parser links must be included in a single translation unit (to
- * ensure unique compile-time IDs), the actual implementation of functions, logic, or behaviors can
- * reside in separate .cpp files. This keeps the framework flexible: you only need to centralize
- * the type declarations and their association with the parser, while the rest of your codebase can
- * remain modular and organized. An example is exactly virt_composer.cpp, that needs to be compiled
- * and linked to the final object.
+ * Core:
+ *   - Object types, their members and their functions are declared in C++ and registered with the
+ *     parser. Once registered they are reachable from both YAML configs and Lua scripts, under the
+ *     names they were registered with.
+ *   - All registrations must live in a single translation unit. Type ids are handed out by
+ *     compile-time counting, so registrations split across translation units produce ids that do
+ *     not agree with each other.
+ *   - Only the declarations need to be centralised. The implementations behind those functions may
+ *     sit in any .cpp file, which is what keeps the rest of a codebase modular; virt_composer.cpp
+ *     is exactly that, compiled and linked separately.
+ *   - A virt-state owns one object pool and one Lua state shared by every object in it. The pool
+ *     is a name-indexed lookup reached through accessors such as `get_ref()`, which hand back
+ *     `vc::ref_t<vc::object_t>` handles; the pool itself does not hold ownership that way.
+ *   - The pool can be enriched or modified at run time by reading further YAML configs, and driven
+ *     by running Lua scripts against it.
  *
- * User-defined object types and their associated logic should be declared in separate headers,
- * preferably named as `*_composer.h`. These types and their members will be accessible from both
- * YAML configs and Lua scripts. After including all relevant headers, `virt_composer_end.h` must
- * be included to finalize internal counters and values.
+ * Detail:
+ *   - `virt_composer.h` goes into every file that uses the composer; include guards mean it is
+ *     processed once per translation unit.
+ *   - User-defined types belong in headers of their own, by convention named `*_composer.h`. After
+ *     the last of them, `virt_composer_end.h` must be included: it finalises the compile-time
+ *     counters and the values derived from them.
+ *   - `vc` is the namespace abbreviation for `virt_composer`, and `object_t` is the base class of
+ *     everything in the pool.
  *
- * The public interface of this header provides functions that apply to all user-defined
- * `*_composer.h` files, effectively creating a virt-composer-parser in the translation unit.
+ * @note The order in which Lua scripts run is not guaranteed, so a script should define functions
+ *       rather than perform actions. Basic initialisation is acceptable; anything order-dependent
+ *       is not.
  *
- * Users of the parser can instantiate a `virt-state`, which maintains a name-indexed lookup of
- * objects (`object_t` being the base class for all objects in the system, `vc` standing for
- * virt_composer) - obtained as `vc::ref_t<vc::object_t>` handles via accessors like `get_ref()`,
- * though the pool itself doesn't hold ownership that way. The object pool can be dynamically
- * enriched or modified by reading YAML config files. Additionally, users can execute Lua scripts to
- * interact with the object pool. A single Lua state is shared across all objects in the pool.
- *
- * Lua scripts are primarily used to define functions for later execution. While basic
- * initialization in scripts is acceptable, the order of script execution is not guaranteed.
- * Therefore, scripts should focus on defining functions rather than performing actions directly.
- *
- * User-defined composers must register object types, members, and functions to make them available
- * to the parser. Users can also attach custom Lua functions to objects during registration.
+ * @date 2026-09-08 06:54
  */
 
 /* TODO: all yaml nodes should be able to define dependencies, those dependencies would be
@@ -63,11 +59,22 @@ using ssize_t = ptrdiff_t;
  * but it will register it's types to the vs implementation, expanding it.
  * This needs to be done.
  */
-/* This define is meant to let a dynamically-loaded library (.so) give its own registered types a
-private ID range (e.g. lib-id << 24) instead of colliding with the host's, once the ".so type
-registration" TODO right above this is actually implemented. Currently it has NO EFFECT: nothing
-reads `virt_tag_t::off` (the value this macro feeds) - `compile_unique_id<virt_tag_t>()` always
-starts counting from 0 regardless of what this is set to. */
+/*!
+ * @def VIRT_COMPOSER_UID_START_OFFSET
+ * @brief Reserves a private type-id range for a dynamically loaded library, so that its registered
+ * types cannot collide with the host's.
+ *
+ * Core:
+ *   - Has no effect at present. Nothing reads `virt_tag_t::off`, the value this macro feeds, and
+ *     `compile_unique_id<virt_tag_t>()` starts counting from 0 whatever this is set to.
+ *
+ * Detail:
+ *   - It exists for the ".so registers its own types" plan in the TODO directly above: such a
+ *     library would take a range of its own, e.g. `lib-id << 24`, rather than counting up from the
+ *     same 0 as its host.
+ *
+ * @date 2026-09-08 06:54
+ */
 #ifndef VIRT_COMPOSER_UID_START_OFFSET
 # define VIRT_COMPOSER_UID_START_OFFSET 0
 #endif
@@ -76,11 +83,15 @@ starts counting from 0 regardless of what this is set to. */
  * @def VIRT_COMPOSER_ENABLE_LUA_IO
  * @brief Exposes Lua's standard `io` library to every Lua script running in this virt_state_t.
  *
- * Disabled (`0`) by default: `luaw_init()` skips `luaL_requiref(L, LUA_IOLIBNAME, ...)`, so Lua
- * scripts have no `io.*` functions at all (no reading/writing arbitrary files from Lua).
+ * Core:
+ *   - Disabled (`0`) by default. While disabled, `luaw_init()` skips
+ *     `luaL_requiref(L, LUA_IOLIBNAME, ...)`, so scripts have no `io.*` at all and cannot read or
+ *     write arbitrary files.
+ *   - Must be `#define`d before `virt_composer.h` is included, as every other `VIRT_COMPOSER_*`
+ *     configuration macro must. It is read while this header is processed, so a definition placed
+ *     after the include has no effect.
  *
- * @note Must be `#define`d before including `virt_composer.h`, like any other `VIRT_COMPOSER_*`
- *       configuration macro.
+ * @date 2026-09-08 06:54
  */
 #ifndef VIRT_COMPOSER_ENABLE_LUA_IO
 # define VIRT_COMPOSER_ENABLE_LUA_IO 0
@@ -90,11 +101,15 @@ starts counting from 0 regardless of what this is set to. */
  * @def VIRT_COMPOSER_ENABLE_LUA_OS
  * @brief Exposes Lua's standard `os` library to every Lua script running in this virt_state_t.
  *
- * Disabled (`0`) by default: `luaw_init()` skips `luaL_requiref(L, LUA_OSLIBNAME, ...)`, so Lua
- * scripts have no `os.*` functions at all (no `os.execute`, `os.remove`, `os.getenv`, etc.).
+ * Core:
+ *   - Disabled (`0`) by default. While disabled, `luaw_init()` skips
+ *     `luaL_requiref(L, LUA_OSLIBNAME, ...)`, so scripts have no `os.*` at all: no `os.execute`,
+ *     `os.remove`, `os.getenv` or the rest.
+ *   - Must be `#define`d before `virt_composer.h` is included, as every other `VIRT_COMPOSER_*`
+ *     configuration macro must. It is read while this header is processed, so a definition placed
+ *     after the include has no effect.
  *
- * @note Must be `#define`d before including `virt_composer.h`, like any other `VIRT_COMPOSER_*`
- *       configuration macro.
+ * @date 2026-09-08 06:54
  */
 #ifndef VIRT_COMPOSER_ENABLE_LUA_OS
 # define VIRT_COMPOSER_ENABLE_LUA_OS 0
@@ -107,25 +122,29 @@ at compile time, for whichever of the two is already enabled via these macros. *
 
 /*!
  * @def VIRT_COMPOSER_REGISTER_TYPE(type)
- * @brief Registers a new enumerator type for use with the virt_composer framework.
+ * @brief Registers an object type with the framework, giving it the unique id the parser uses to
+ * instantiate it.
  *
- * This macro generates a unique enumerator value for the given `type` using
- * `virt_object::compile_unique_id<virt_composer::virt_tag_t>()` and associates it with the
- * stringified enum name (`#type`). It is primarily used to register custom types as enumerators
- * within the virt_composer system.
+ * Core:
+ *   - Generates a unique enumerator value for `type` through
+ *     `virt_object::compile_unique_id<virt_composer::virt_tag_t>()`, and associates it with the
+ *     stringified enum name (`#type`).
+ *   - The value it produces is what the corresponding object, inheriting `vc::object_t`, is
+ *     expected to return from `type_id()` and `type_id_static()`.
+ *   - Used together with `virt_composer_end.h`, which computes `VIRT_TYPE_CNT` right before
+ *     `create_state()`, it guarantees the two properties the framework actually depends on: every
+ *     type id is distinct, and `virt_composer::VIRT_TYPE_CNT` is greater than all of them. Arrays
+ *     of that length are declared, so breaking either is not diagnosed, it is a bad access.
+ *
+ * Detail:
+ *   - Neither property requires this macro. Any type-id scheme is allowed as long as it keeps
+ *     both, and that is the only reason to care which one is in use.
  *
  * @param type The enum name associated to a type to register as an enumerator.
- * 
- * @note Those enums should be returned by the respective objects inheriting `vc::object_t`
- *       from `type_id()` and `type_id_static()`.
- * @note To be more precise: you can use whatever method you wish for your virtual objects' type
- *       id, but at the end of the day `virt_composer::VIRT_TYPE_CNT` must be a number greater than
- *       all the type ids in use (arrays of this length get declared) and every type id must be
- *       different. Using this macro plus `virt_composer_end.h` (which computes `VIRT_TYPE_CNT` for
- *       you automatically, right before `create_state()`) already guarantees both - this note only
- *       matters if you roll your own type-id scheme instead.
- * 
+ *
  * @see object_type_e
+ *
+ * @date 2026-09-08 06:54
  */
 #define VIRT_COMPOSER_REGISTER_TYPE(type) \
         constexpr virt_composer::object_type_e type{\
@@ -133,24 +152,27 @@ at compile time, for whichever of the two is already enabled via these macros. *
 
 /*!
  * @def VC_REGISTER_MEMBER_OBJECT(vs, obj_type, memb)
- * @brief Macro to simplify registering a member object for Lua scripting.
+ * @brief Makes a member variable of a registered type readable and writable from Lua.
  *
- * This macro expands to a call to `luaw_register_member_object`, registering the specified member
- * variable of `obj_type` for Lua access.
+ * Core:
+ *   - Expands to a call to `luaw_register_member_object`, binding `memb` of `obj_type` under its
+ *     own name (`#memb`) in the given virt-state.
+ *   - Only types the library knows how to carry across the Lua boundary may be registered: string,
+ *     bool, int and double, vector, tuple and pair, `vc::ref_t<T>` objects, and `vc::bm_t<T>`
+ *     (Lua to C++ only - see its own doc). For anything else the library has no conversion in
+ *     either direction.
  *
  * @param vs        Pointer to the virtual state (`virt_state_t`)
  * @param obj_type  The C++ class type (must inherit from `virt_composer::object_t`).
  * @param memb      The member variable to register.
  *
  * @see luaw_register_member_object
- * @note Only known object types can be used in those calls, usual data types: string, bool, int,
- *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>` (see its own doc -
- *       one-way, Lua->C++ only), `vc::ref_t<T>` objects. In rest, this library doesn't know how to
- *       convert them from Lua to their C++ counterpart and vice versa.
- * 
+ *
  * @example
  * VC_REGISTER_MEMBER_OBJECT(vs, cmdbuff_t, m_cmdpool)
  * VC_REGISTER_MEMBER_OBJECT(vs, cmdbuff_t, m_host_free)
+ *
+ * @date 2026-09-08 06:54
  */
 #define VC_REGISTER_MEMBER_OBJECT(vs, obj_type, memb)   \
 virt_composer::luaw_register_member_object<             \
@@ -160,18 +182,20 @@ virt_composer::luaw_register_member_object<             \
 
 /*!
  * @def VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER(vs, obj_type, memb)
- * @brief Registers a trivially-copyable member for `!copy`/`resolve_memb<T>()` access from YAML.
+ * @brief Lets a YAML field take a raw value straight out of an already-built object's member,
+ * byte for byte.
  *
- * This macro expands to a call to `register_trivially_copyable_member`, registering a memcpy-based
- * accessor for the specified member variable of `obj_type`. It's used from inside a builder
- * callback, via `resolve_memb<T>(vs, node)`, to let a YAML field tagged `!copy` (with
- * `object`/`member` sub-fields) pull a raw value straight out of another already-built object's
- * member, byte for byte.
+ * Core:
+ *   - Expands to a call to `register_trivially_copyable_member`, which registers a memcpy-based
+ *     accessor for `memb` of `obj_type`.
+ *   - What reaches that accessor is a YAML field tagged `!copy`, carrying `object` and `member`
+ *     sub-fields, resolved from inside a builder callback through `resolve_memb<T>(vs, node)`.
+ *   - The copy is untyped, so `memb` must satisfy `std::is_trivially_copyable_v`; a
+ *     `static_assert` enforces it.
  *
  * @param vs        Pointer to the virtual state (`virt_state_t`)
  * @param obj_type  The C++ class type (must inherit from `virt_composer::object_t`).
- * @param memb      The member variable to register. Must be trivially copyable
- *                  (`std::is_trivially_copyable_v`) - enforced by a `static_assert`.
+ * @param memb      The member variable to register. Must be trivially copyable.
  *
  * @see register_trivially_copyable_member, resolve_memb
  *
@@ -184,6 +208,8 @@ virt_composer::luaw_register_member_object<             \
  * //   value: !copy
  * //     object: some_vec3
  * //     member: x
+ *
+ * @date 2026-09-08 06:54
  */
 #define VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER(vs, obj_type, memb)   \
 virt_composer::register_trivially_copyable_member<                  \
@@ -193,24 +219,32 @@ virt_composer::register_trivially_copyable_member<                  \
 
 /*!
  * @def VC_REGISTER_MEMBER_FUNCTION(vs, obj_type, fn, ...)
- * @brief Macro to simplify registering a member function for Lua scripting.
+ * @brief Makes a member function of a registered type callable from Lua.
  *
- * This macro expands to a call to `luaw_register_member_function`, registering the specified member
- * function of `obj_type` for Lua invocation.
+ * Core:
+ *   - Expands to a call to `luaw_register_member_function`, binding `fn` of `obj_type` under its
+ *     own name (`#fn`) in the given virt-state.
+ *   - The parameter types are part of the registration and must be listed after `fn`; they are
+ *     what the call from Lua is parsed into.
+ *   - Only types the library knows how to carry across the Lua boundary may appear there: string,
+ *     bool, int and double, vector, tuple and pair, `vc::ref_t<T>` objects, and `vc::bm_t<T>`
+ *     (Lua to C++ only - see its own doc). For anything else the library has no conversion in
+ *     either direction.
+ *   - A function registered this way is reachable as a method, `obj:fn(...)`. Functions attached
+ *     by other means, such as a bare `lua_setfield()` on the shared metatable, are not: method
+ *     calls go through the per-class `__index` dispatch, which only sees what was registered here.
  *
  * @param vs        Pointer to the virtual state (`virt_state_t`)
  * @param obj_type  The C++ class type (must inherit from `virt_composer::object_t`).
  * @param fn        The member function to register.
  * @param ...       Parameter types of the member function.
  *
- * @see luaw_register_member_function 
- * @note Only known object types can be used in those calls, usual data types: string, bool, int,
- *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>` (see its own doc -
- *       one-way, Lua->C++ only), `vc::ref_t<T>` objects. In rest, this library doesn't know how to
- *       convert them from Lua to their C++ counterpart and vice versa.
+ * @see luaw_register_member_function
  *
  * @example
  * VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, begin_rpass, vc::ref_t<vku::framebuffs_t>, uint32_t);
+ *
+ * @date 2026-09-08 06:54
  */
 #define VC_REGISTER_MEMBER_FUNCTION(vs, obj_type, fn, ...)  \
 virt_composer::luaw_register_member_function<               \
@@ -228,8 +262,11 @@ namespace vo = virt_object;
 /*!
  * @brief Error codes returned throughout the virt_composer public API.
  *
- * Negative values follow this codebase's general convention (see e.g. `debug.h`'s `ASSERT_FN`) of
- * "negative means failure" - `VC_ERROR_OK` (`0`) is success, any other value is a failure.
+ * Core:
+ *   - `VC_ERROR_OK` is `0` and means success. Every other value is negative and means failure,
+ *     following this codebase's general convention (see e.g. `debug.h`'s `ASSERT_FN`).
+ *
+ * @date 2026-09-08 06:54
  */
 enum err_e : int32_t {
     VC_ERROR_OK = 0,           /*!< Success. */
@@ -246,12 +283,18 @@ enum err_e : int32_t {
 };
 
 /*!
- * Identifies a Lua arithmetic/relational/misc metamethod slot (`__add`, `__eq`, `__unm`, ...).
+ * @brief Identifies a Lua arithmetic, relational or misc metamethod slot (`__add`, `__eq`,
+ * `__unm`, ...).
  *
- * One `lua_CFunction` can be registered per `object_type_e` per entry here via
- * @ref set_class_operator. Every virt_composer object shares a single Lua metatable, so these
- * slots are the only per-type customization point for operators - see @ref set_class_operator
- * for the exact dispatch rules.
+ * Core:
+ *   - One `lua_CFunction` may be registered per `object_type_e` per entry here, through
+ *     @ref set_class_operator.
+ *   - Every virt_composer object shares a single Lua metatable, so these slots are the only
+ *     per-type customization point for operators.
+ *
+ * @see set_class_operator, which carries the exact dispatch rules.
+ *
+ * @date 2026-09-08 06:54
  */
 enum operator_e : int32_t {
     VC_OPERATOR_ADD,
@@ -277,21 +320,26 @@ enum operator_e : int32_t {
 };
 
 /*!
- * @brief The exception type virt_composer itself throws for framework-level errors.
+ * @brief The exception type virt_composer throws for errors in its own model.
  *
- * Thrown throughout the parser/Lua bridge for conditions specific to virt_composer's own model -
- * an invalid/unknown object type, a duplicate or missing name, a malformed YAML node shape, an
- * unknown enum string value, and similar. (A failed `ref_t<T>` cast throws plain
- * `std::runtime_error` instead, not this - see the note below for how that's reported differently.)
- * The constructor takes just the error message; it automatically prepends a C++
- * backtrace (`cpp_backtrace()`) to `err_str`, so `what()` already includes call-stack context
- * (a real backtrace on Linux/Unix when boost::stacktrace or <backtrace.h> is available, a fixed
- * placeholder string on MSVC - see cpp_backtrace.h).
+ * Core:
+ *   - Raised throughout the parser and the Lua bridge for conditions specific to virt_composer: an
+ *     invalid or unknown object type, a duplicate or missing name, a malformed YAML node shape, an
+ *     unknown enum string value, and similar.
+ *   - The constructor takes only the error message. It prepends a C++ backtrace
+ *     (`cpp_backtrace()`) to `err_str`, so `what()` already carries call-stack context.
+ *   - A failed `ref_t<T>` cast does not come through here: it throws a plain `std::runtime_error`
+ *     instead, and so is reported differently.
  *
- * @note `luaw_catch_exception()` catches `except_t` specifically, ahead of the generic
- *       `std::exception` fallback, so an `except_t` thrown from inside a Lua-callable wrapper is
- *       reported to Lua as `"Invalid call: <message>"` rather than the more generic
- *       `"std::exception: <message>"`.
+ * Detail:
+ *   - The backtrace is a real one on Linux and Unix where boost::stacktrace or <backtrace.h> is
+ *     available, and a fixed placeholder string on MSVC - see cpp_backtrace.h.
+ *
+ * @note `luaw_catch_exception()` catches `except_t` specifically, ahead of its generic
+ *       `std::exception` fallback, so one thrown from inside a Lua-callable wrapper reaches Lua as
+ *       `"Invalid call: <message>"` rather than the more generic `"std::exception: <message>"`.
+ *
+ * @date 2026-09-08 06:54
  */
 struct except_t : public std::exception {
     std::string err_str;
@@ -301,25 +349,28 @@ struct except_t : public std::exception {
 };
 
 /*!
- * @brief Opaque handle for one independent virt_composer instance - one Lua state, one pool of
- * named objects, one set of registered types/members.
+ * @brief Opaque handle for one independent virt_composer instance: one Lua state, one pool of
+ * named objects, one set of registered types, members and functions.
  *
- * `virt_state_t` is fully defined in `virt_composer.cpp`, not this header - from user code it's
- * only ever seen as a pointer (`virt_state_t *`), obtained from `create_state()` and passed to
- * essentially every other function in this file.
+ * Core:
+ *   - Obtained from `create_state()`, and passed to essentially every other function in this file.
+ *   - Two instances are fully independent - separate Lua states, separate name tables, separate
+ *     object pools - and nothing built in one is visible from the other.
+ *   - The single exception is `c_function_t::internal_funcs`, the table `add_internal_func()`
+ *     registers into. It is a process-wide static rather than per-instance, so registering an
+ *     internal function once makes it visible to every `virt_state_t` in the process, not only to
+ *     the one that was in mind.
+ *   - Every `vc::object_t` obtained from a state - through `get_ref`, `call_lua`, a member getter,
+ *     anything - is valid only while that state is alive, since its destruction closes the
+ *     underlying Lua state. Nothing here enforces that; the caller carries it.
  *
- * @note Two `virt_state_t` instances are fully independent - separate Lua states, separate name
- *       tables, separate object pools; nothing built in one is visible from the other. The one
- *       exception: `c_function_t::internal_funcs` (what `add_internal_func()` registers into)
- *       is a process-wide `static`, not per-instance - registering an internal function once
- *       makes it visible to every `virt_state_t` in the process, not just the one you had in mind.
- *
- * @warning Every `vc::object_t` obtained from a `virt_state_t` (via `get_ref`, `call_lua`, a member
- *       getter, ...) is only valid as long as that `virt_state_t` is alive - none of them are safe
- *       to keep around past its destruction (which closes the underlying Lua state).
- *       The caller is responsible for not letting that occur; nothing here enforces it.
+ * Detail:
+ *   - The type is fully defined in `virt_composer.cpp`, not in this header, so user code only ever
+ *     sees it as a `virt_state_t *`.
  *
  * @see create_state, get_ref, parse_config, call_lua
+ *
+ * @date 2026-09-08 06:54
  */
 /* TODO: nothing currently enforces the @warning above - a ref_t<T> (especially ref_t<lua_object_t>,
 which holds a raw lua_State* directly) that outlives its virt_state_t is a live use-after-free, not
@@ -331,15 +382,18 @@ struct virt_state_t;
 struct virt_tag_t { static constexpr int off = VIRT_COMPOSER_UID_START_OFFSET; };
 
 /*!
- * @brief Enumeration type for all objects derived from `vc::object_t`.
+ * @brief The type-id enumeration for every object derived from `vc::object_t`.
  *
- * This is a common type enumeration used to uniquely identify object types in the virt_composer
- * framework.
- * New types should be registered using @ref VIRT_COMPOSER_REGISTER_TYPE(name_of_enum), which
- * generates a unique enumerator for tracking within the implementation (up to including
- * `virt_composer_end.h`).
+ * Core:
+ *   - Identifies object types uniquely across the framework; it is what `type_id()` and
+ *     `type_id_static()` hand back.
+ *   - New types are registered with @ref VIRT_COMPOSER_REGISTER_TYPE(name_of_enum), which
+ *     generates the unique enumerator. Registrations are tracked up to and including
+ *     `virt_composer_end.h`.
  *
  * @see VIRT_COMPOSER_REGISTER_TYPE
+ *
+ * @date 2026-09-08 06:54
  */
 using object_type_e = vo::EnumClass<virt_tag_t>;
 
@@ -352,50 +406,68 @@ VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_C_FUNCTION);
 VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_LUA_OBJECT);
 
 /*!
- * @brief Base object type for virt_composer.
+ * @brief Base object type for virt_composer: everything the pool holds derives from it.
  *
- * This type represents the base class for all objects in the virt_composer framework - every
- * `vc::object_t`-derived type (`integer_t`, `float_t`, `string_t`, and any user-defined type) is
- * ultimately a `virt_object::object_t<object_type_e>` (see `virt_object.h`'s generic
- * `object_t<Id>`, parameterized here by this file's own `object_type_e` type-id enum).
+ * Core:
+ *   - An alias for `virt_object::object_t<object_type_e>` - the generic `object_t<Id>` from
+ *     `virt_object.h`, parameterized here by this file's own type-id enum.
+ *   - Every derived type is ultimately one of these: `integer_t`, `float_t`, `string_t`, and any
+ *     user-defined type.
+ *
+ * @date 2026-09-08 06:54
  */
 using object_t = vo::object_t<object_type_e>;
 
 /*!
  * @brief Return type for object operations.
  *
- * Alias for `virt_object::ret_t` (`int64_t`) - used as the return type of `init()`/`uninit()`-style
- * functions on objects derived from @ref object_t.
+ * Core:
+ *   - An alias for `virt_object::ret_t` (`int64_t`), used as the return type of `init()` and
+ *     `uninit()`-style functions on objects derived from @ref object_t.
+ *   - It carries an @ref err_e code, so `VC_ERROR_OK` means success and negative values mean
+ *     failure.
+ *
+ * @date 2026-09-08 06:54
  */
 using ret_t = vo::ret_t;
 
 /*!
- * @brief Reference type for virt_composer objects.
+ * @brief Reference to a virt_composer object, and the handle user code actually holds.
  *
- * Template alias for a reference to an object of type `T` (must be inherited from
- * virt_composer::object_t)
+ * Core:
+ *   - A template alias for `virt_object::ref_t<T>`, where `T` must derive from
+ *     `virt_composer::object_t`.
+ *   - Valid only while the `virt_state_t` it came from is alive; see @ref virt_state_t for what
+ *     that costs the caller.
  *
  * @tparam T The object type that is held by this reference.
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename T>
 using ref_t = vo::ref_t<T>;
 
 /*!
- * @brief Template struct for handling bitmask/enum parameters from Lua ("bm" = bitmap/bitmask).
+ * @brief Declares that a Lua argument is an enum or bitmask, so a script may pass it as a string,
+ * an integer, or a table of either.
  *
- * This struct enables Lua scripts to pass bitmask or enum values in multiple formats:
- * - As a **string** (e.g., `"vc.READ"`), which is converted to the corresponding enum value.
- * - As an **integer** (e.g., `1`), which is cast to the enum type.
- * - As a **table** of strings/integers (e.g., `{vc.READ, vc.WRITE}`), which are combined into a
- * bitmask.
+ * Core:
+ *   - Used as a parameter type in @ref VC_REGISTER_MEMBER_FUNCTION or @ref luaw_function_wrapper,
+ *     it accepts three Lua spellings of the same value: a string naming the enumerator
+ *     (`"vc.READ"`), an integer cast to `T`, or a table whose entries are combined into a single
+ *     bitmask (`{vc.READ, vc.WRITE}`).
+ *   - `T` must be convertible from both strings and integers. The string form needs a
+ *     `get_enum_val<T>` specialisation in the `virt_composer` namespace; without one the
+ *     registration will not work.
+ *   - The conversion is one-way, Lua to C++. `bm_t<T>` describes how an incoming Lua value is
+ *     parsed and has no existence past that point.
  *
- * It is typically used with @ref VC_REGISTER_MEMBER_FUNCTION or @ref luaw_function_wrapper,
- * to register functions that accept bitmask/enum parameters, allowing flexible input from Lua.
+ * Detail:
+ *   - The wrapper is stripped back to a plain `T` right after parsing, so a `T`-typed member or
+ *     return value is pushed back to Lua as a plain enum value and never re-wrapped into the
+ *     string or table forms.
  *
  * @tparam T The enum/bitmask type (e.g., `OpenFlagBits`).
- *
- * @note The enum/bitmask type `T` must be convertible from both strings (via `get_enum_val<T>`) and
- * integers. (!! You need to specialize get_enum_val in virt_composer namespace to make it work !!)
  *
  * @example
  * // C++:
@@ -406,10 +478,7 @@ using ref_t = vo::ref_t<T>;
  * vc.object:open("fname", "READ")              -- Single enum string
  * vc.object:open("fname", 1)                   -- Single enum integer value
  *
- * @note `bm_t<T>` only describes how an incoming Lua value gets parsed into a `T` - it has no
- * distinct existence beyond that (it's stripped back down to plain `T` right after parsing). A
- * `T`-typed member or return value is pushed back to Lua as a plain enum value, never re-wrapped
- * through `bm_t<T>`'s string/table forms - this is a one-way (Lua->C++) conversion helper.
+ * @date 2026-09-08 06:54
  */
 template <typename T>
 struct bm_t {
@@ -417,18 +486,18 @@ struct bm_t {
 };
 
 /*!
- * vc::integer_t
- * -------------
+ * @brief Wraps a 64-bit integer as a composer object, so a plain number can be named, referenced
+ * and held in the pool like any other object.
  *
- * Wraps a 64-bit integer for bookkeeping or parameter storage. Useful for tracking values in a
- * reference-managed system.
+ * Core:
+ *   - `value` is the stored integer and is public. Nothing guards it and nothing observes changes
+ *     to it; the object exists to give a number an identity, not to protect it.
+ *   - Built from YAML by structure rather than by `m_type`: a config entry whose value is a plain
+ *     integer produces one of these.
  *
- * Members:
- * - value: The stored 64-bit integer.
+ * @param value Initial integer value, taken by `create(value)`.
  *
- * Init: create(value)
- *   - Parameters:
- *     - value: Initial integer value.
+ * @date 2026-09-08 06:54
  */
 struct integer_t : public vc::object_t {
     int64_t value = 0;
@@ -451,18 +520,18 @@ struct integer_t : public vc::object_t {
 };
 
 /*!
- * vc::float_t
- * -----------
+ * @brief Wraps a double-precision float as a composer object, so a plain number can be named,
+ * referenced and held in the pool like any other object.
  *
- * Wraps a double-precision floating-point value for bookkeeping or parameter storage. Useful for
- * tracking values in a reference-managed system.
+ * Core:
+ *   - `value` is the stored double and is public. Nothing guards it and nothing observes changes
+ *     to it; the object exists to give a number an identity, not to protect it.
+ *   - Built from YAML by structure rather than by `m_type`: a config entry whose value is a plain
+ *     floating-point number produces one of these.
  *
- * Members:
- * - value: The stored double-precision floating-point number.
+ * @param value Initial floating-point value, taken by `create(value)`.
  *
- * Init: create(value)
- *   - Parameters:
- *     - value: Initial floating-point value.
+ * @date 2026-09-08 06:54
  */
 struct float_t : public vc::object_t {
     double value = 0;
@@ -486,18 +555,18 @@ struct float_t : public vc::object_t {
 };
 
 /*!
- * vc::string_t
- * ------------
+ * @brief Wraps a string as a composer object, so text can be named, referenced and held in the
+ * pool like any other object.
  *
- * Wraps a standard string for bookkeeping or parameter storage. Useful for managing text values
- * in a reference-managed system.
+ * Core:
+ *   - `value` is the stored string and is public. Nothing guards it and nothing observes changes
+ *     to it; the object exists to give the text an identity, not to protect it.
+ *   - Built from YAML by structure rather than by `m_type`: a config entry whose value is a plain
+ *     string produces one of these.
  *
- * Members:
- * - value: The stored string.
+ * @param value Initial string content, taken by `create(value)`.
  *
- * Init: create(value)
- *   - Parameters:
- *     - value: Initial string content.
+ * @date 2026-09-08 06:54
  */
 struct string_t : public vc::object_t {
     std::string value;
@@ -521,18 +590,19 @@ struct string_t : public vc::object_t {
 
 /* TODO: add `!lua` */
 /*!
- * vc::lua_script_t
- * ----------------
+ * @brief Holds Lua source as a named composer object, so a script can sit in the pool and be
+ * loaded or executed against a Lua state.
  *
- * Holds a Lua script as a string. Can be loaded or executed from C++ code using a Lua state,
- * enabling scripting functionality.
+ * Core:
+ *   - `content` is the script text and is public.
+ *   - Built from YAML by `m_type`, carrying exactly one of `m_source`, which holds the text
+ *     inline, or `m_source_path`, which names a file to read it from. Supplying both, or neither,
+ *     fails the build.
+ *   - Running it is one of the things that can produce @ref VC_ERROR_FAILED_CALL.
  *
- * Members:
- * - content: The text of the Lua script.
+ * @param content The Lua script source code as a string, taken by `create(content)`.
  *
- * Init: create(content)
- *   - Parameters:
- *     - content: The Lua script source code as a string.
+ * @date 2026-09-08 06:54
  */
 struct lua_script_t : public vc::object_t {
     std::string content;
@@ -556,28 +626,32 @@ struct lua_script_t : public vc::object_t {
 
 /* Does this really have any irl usage? ANSW: YES! It holds (should hold) C lua callbacks */
 /*!
- * vc::c_function_t
- * -----------------
+ * @brief Exposes a C++ callback to Lua as a named composer object, so a script can call into
+ * native code the way it calls anything else.
  *
- * Represents a C++ function exposed to Lua, callable from Lua scripts via a Lua state.
+ * Core:
+ *   - The callback is bound once, when the object is created, not looked up at call time. A name
+ *     that was never registered fails `create()` instead of producing an object that dies on its
+ *     first call.
+ *   - `add_internal_func(name, fn)` is what puts a callback within reach of `create()`. It is
+ *     static and shared by the whole process, so it has to run before any object naming that
+ *     function is built.
+ *   - `call(L)` invokes the bound callback with the given Lua state; `-1` means nothing was ever
+ *     successfully bound.
  *
- * Members:
- * - m_name:   Name of the function as seen in Lua.
- * - m_source: Where the function comes from. Currently only `"[INTERNAL]"` works - it looks
- *             `m_name` up in the table `add_internal_func()` registers into. Any other value
- *             fails `create()` right now (DLL/shared-object loading is planned but not yet
- *             implemented).
+ * Detail:
+ *   - `m_source` says where the callback comes from and currently accepts only `"[INTERNAL]"`,
+ *     which searches the table `add_internal_func()` fills. Loading from a DLL or shared object is
+ *     planned - `dll_handles` and `dll_funcs` are placeholders for it - but no other value works
+ *     yet.
  *
- * Member functions:
- * - call(L): Invokes the underlying C++ callback with the given Lua state; returns `-1` if
- *   nothing was ever successfully bound.
+ * @param name   Name of the function as seen from Lua, and the key `add_internal_func()` was
+ * given.
+ * @param source Must currently be `"[INTERNAL]"`.
+ * @throws vc::except_t if `init()` fails: a `source` other than `"[INTERNAL]"`, or a `name` that
+ * was never passed to `add_internal_func()`.
  *
- * Init: create(name, source)
- *   - Parameters:
- *     - name:   Name of the function in Lua.
- *     - source: Must currently be `"[INTERNAL]"` - see above.
- *   - Throws `vc::except_t` if `init()` fails (wrong `source`, or `name` was never registered
- *     via `add_internal_func()`).
+ * @date 2026-09-08 06:54
  */
 struct c_function_t : public vc::object_t {
     std::string m_name;
@@ -619,27 +693,36 @@ inline std::map<std::string, std::function<int(lua_State *L)>>  c_function_t::dl
 inline std::map<std::string, void *>                            c_function_t::dll_handles;
 
 /*!
- * vc::lua_object_t
- * ----------------
- * Holds a strong reference to an arbitrary Lua value (function, table, string, ...) so C++ can
- * keep it alive past the call that handed it over, and invoke/push it again later - the reverse
- * of c_function_t (a C++ callback exposed to Lua).
+ * @brief Holds a strong reference to an arbitrary Lua value - a function, table, string or
+ * anything else - so C++ can keep it alive past the call that handed it over and use it later.
  *
- * - `create()` - factory, makes an empty shell with nothing captured.
- * - `capture_ref(L)` - replaces the held value with whatever is on top of `L`'s stack.
- * - `capture(oth)` - Lua-visible "capture": takes its own independent reference to `oth`'s value
- *   rather than aliasing `oth`'s registry slot (`oth` may be a reference someone else still holds).
- * - `capture_lua_object(L, ref, idx)` - duplicates the value at stack index `idx` into an
- *   existing `ref`.
- * - `push(L)` - pushes the captured value back onto `L`; also the Lua-visible "push",
- *   registered as a raw `lua_CFunction` (not via `VC_REGISTER_MEMBER_FUNCTION`) so it always gets
- *   the real calling `L` rather than `this->L` - needed to stay correct when called from a
- *   coroutine running on a different thread than the one this value was captured on.
- * - `call(L, nargs)` / `call<R>(args...)` - invokes the captured value as a function.
+ * Core:
+ *   - The reverse direction of @ref c_function_t: that exposes a C++ callback to Lua, this keeps
+ *     a Lua value reachable from C++.
+ *   - The value is held in a dedicated sub-table, one per `virt_state_t` (`table_ref`), at its own
+ *     slot within it (`ref`), which is what keeps it out of Lua's reach for collection.
+ *   - `create()` makes an empty shell with nothing captured; a fresh object holds no value.
+ *   - `capture_ref(L)` replaces the held value with whatever is on top of `L`'s stack, releasing
+ *     what was held before.
+ *   - `capture(oth)`, the Lua-visible "capture", takes its own independent reference to `oth`'s
+ *     value rather than aliasing `oth`'s registry slot, since `oth` may be a reference someone
+ *     else still holds.
+ *   - `push(L)` pushes the captured value back onto `L`, and `call(L, nargs)` or `call<R>(args...)`
+ *     invokes it as a function.
  *
- * @warning `push(L)` and `call(L, nargs)` raise Lua errors via `luaw_push_error()` on failure -
- * only safe to call where a `lua_pcall` is already active up the call stack (as a registered
- * `lua_CFunction`, or inside `call_lua()`).
+ * Detail:
+ *   - `capture_lua_object(L, ref, idx)` duplicates the value at stack index `idx` into an existing
+ *     `ref`.
+ *   - `push` is registered as a raw `lua_CFunction` rather than through
+ *     @ref VC_REGISTER_MEMBER_FUNCTION, so that it always receives the real calling `L` instead of
+ *     `this->L`. That is what keeps it correct when it is called from a coroutine running on a
+ *     different thread than the one the value was captured on.
+ *
+ * @warning `push(L)` and `call(L, nargs)` raise Lua errors through `luaw_push_error()` on failure,
+ *       so they are only safe where a `lua_pcall` is already active further up the call stack: as
+ *       a registered `lua_CFunction`, or inside `call_lua()`.
+ *
+ * @date 2026-09-08 06:54
  */
 struct lua_object_t : public vc::object_t {
     lua_State *L = nullptr;
@@ -662,77 +745,107 @@ struct lua_object_t : public vc::object_t {
     }
 
     /*! Replaces the captured value with whatever is on top of `L`'s stack, releasing whatever was
-     * previously held first. */
+     * held before. @date 2026-09-08 06:54 */
     void capture_ref(lua_State *L);
 
     /*! Lua-visible "capture" (`self:capture(x)`). Takes its own independent reference to `oth`'s
-     * value rather than mutating `oth`'s registry slot directly, since `oth` may be a reference
-     * someone else still holds. A missing/nil argument is a release. */
+     * value rather than mutating `oth`'s registry slot, since `oth` may be a reference someone
+     * else still holds. A missing or nil argument is a release. @date 2026-09-08 06:54 */
     void capture(vc::ref_t<lua_object_t> oth);
 
-    /*! Pushes the captured value back onto `L`. Given the correct ambient `L` explicitly, so it
-     * stays correct from a different thread (e.g. a coroutine) than the one this value was
-     * captured on - also the Lua-visible "push", registered as a raw `lua_CFunction` for that
-     * reason (the member-function macro has no way to supply the real calling `L`). */
+    /*!
+     * @brief Pushes the captured value back onto `L`.
+     *
+     * Core:
+     *   - The ambient `L` is given explicitly, so the push stays correct when it happens on a
+     *     different thread - a coroutine, say - than the one this value was captured on.
+     *
+     * Detail:
+     *   - This is also the Lua-visible "push", registered as a raw `lua_CFunction` for exactly
+     *     that reason: the member-function macro has no way to supply the real calling `L`.
+     *
+     * @date 2026-09-08 06:54
+     */
     void push(lua_State *L);
 
     /*! Raw primitive: `nargs` argument values are already on `L` - pushes the captured callee
-     * below them and pcalls with `LUA_MULTRET`. */
+     * below them and pcalls with `LUA_MULTRET`. @date 2026-09-08 06:54 */
     int call(lua_State *L, int nargs);
 
-    /*! `call_lua<R>()`-shaped convenience: typed C++ args in, typed C++ result out. */
+    /*! `call_lua<R>()`-shaped convenience: typed C++ args in, typed C++ result out, paired with an
+     * @ref err_e. @date 2026-09-08 06:54 */
     template <typename R, typename ...Args>
     std::pair<std::conditional_t<!std::is_void_v<R>, R, int>, err_e>
     call(Args&& ...args);
 
-    /*! Unrefs whatever is currently held, if anything. */
+    /*! Unrefs whatever is currently held, if anything. @date 2026-09-08 06:54 */
     void release();
 
-    /*! Duplicates the value at stack index `idx` and captures it into `ref` (which must already
-     * exist, via `create()`). */
+    /*! Duplicates the value at stack index `idx` and captures it into an existing `ref`, which
+     * must already have been made by `create()`. @date 2026-09-08 06:54 */
     static void capture_lua_object(lua_State *L, vc::ref_t<lua_object_t> ref, int idx);
 };
 
 /*!
- * @brief Human-readable description of an `object_type_e` value - just its registered name
- * (`VIRT_COMPOSER_REGISTER_TYPE`'s stringified `#type`), e.g. `"VC_TYPE_INTEGER"`.
+ * @brief Human-readable description of an `object_type_e` value: its registered name.
+ *
+ * Core:
+ *   - The name is the stringified `#type` that `VIRT_COMPOSER_REGISTER_TYPE` recorded, e.g.
+ *     `"VC_TYPE_INTEGER"`.
+ *
+ * @date 2026-09-08 06:54
  */
 inline std::string to_string(object_type_e type);
 
 /* To string for own objects: */
 
 /*!
- * @brief Human-readable description of a virt_composer object reference: `"ref: "` followed by
- * the object's own `to_string()` (see `object_t::to_string()`, pure virtual - every concrete type
- * provides its own).
+ * @brief Human-readable description of a virt_composer object reference.
+ *
+ * Core:
+ *   - `"ref: "` followed by the object's own `to_string()`, which is pure virtual on `object_t`,
+ *     so every concrete type supplies its own.
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename T>
 inline std::string to_string(ref_t<T> ref);
 
 /*!
- * @brief Human-readable description of a virt_composer object: equivalent to calling
+ * @brief Human-readable description of a virt_composer object: the same as calling
  * `ref.to_string()` directly.
  *
- * Convenience overload for when you already have a plain reference (not a `ref_t<T>`) - e.g. from
- * inside a member function of the object itself (`*this`), or after dereferencing a `ref_t<T>`.
+ * Core:
+ *   - A convenience overload for when a plain reference is at hand rather than a `ref_t<T>`, such
+ *     as inside a member function of the object itself (`*this`), or after dereferencing one.
+ *
+ * @date 2026-09-08 06:54
  */
 inline std::string to_string(const object_t& ref);
 
 /*!
- * @brief Creates and returns a new shared pointer to a virtual state object.
+ * @brief Creates a new virt-state: one Lua state, one object pool, one set of registrations.
+ *
+ * Core:
+ *   - Failure is reported as `nullptr`, not as an exception.
  *
  * @return A shared pointer to the newly created @c virt_state_t object, or `nullptr` if this
- *         translation unit never included `virt_composer_end.h` (so `VIRT_TYPE_CNT` was never
- *         finalized), or if the underlying Lua state failed to initialize.
+ *         translation unit never included `virt_composer_end.h` - so `VIRT_TYPE_CNT` was never
+ *         finalized - or if the underlying Lua state failed to initialize.
+ *
+ * @date 2026-09-08 06:54
  */
 std::shared_ptr<virt_state_t> create_state();
 
 /*!
  * @brief Finds a previously-named object by name and casts it to the requested type.
  *
- * Looks `name` up in the virt_state_t's name table (populated by `mark_dependency_solved()` -
- * every top-level YAML entry, plus anything explicitly named via `vc.create_object(name, ...)`)
- * and casts the result to `T` via `object_t::to_related<T>()`.
+ * Core:
+ *   - `name` is looked up in the virt-state's name table, the one `mark_dependency_solved()`
+ *     populates: every top-level YAML entry, plus anything explicitly named through
+ *     `vc.create_object(name, ...)`.
+ *   - The result is cast with `object_t::to_related<T>()`, so a name that exists but holds another
+ *     type is an error rather than an empty result.
  *
  * @tparam T  The expected concrete type of the named object.
  * @param vs    Pointer to the virtual state (`virt_state_t`).
@@ -743,65 +856,70 @@ std::shared_ptr<virt_state_t> create_state();
  * @throws std::runtime_error (via `to_related<T>()`) if an object *is* found under `name` but
  *         isn't actually a `T` (or derived from it).
  *
- * @see get_ref_base (returns the untyped `ref_t<object_t>`, if you don't want the cast)
+ * @see get_ref_base, which hands back the untyped `ref_t<object_t>` and does not cast.
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename T>
 ref_t<T> get_ref(virt_state_t *vs, const std::string& name);
 
 /*!
- * @brief Converts a YAML/Lua node to an enum/bitmask value of type `T`, given an explicit
- * string-name -> value table.
+ * @brief Converts a YAML or Lua node into an enum/bitmask value of type `T`, given an explicit
+ * string-name to value table.
  *
- * Handles three node shapes:
- * - A **string** (e.g. `"READ"`): looked up in `enum_vals`; throws `vc::except_t` if not found.
- * - An **integer**: cast directly to `T` via `T(node.as_int())`.
- * - A **sequence** (e.g. `[READ, WRITE]`): each element resolved recursively and OR'd together,
- *   for combining bitmask flags.
- *
- * This is the helper `get_enum_val<T>(node)` (the single-argument, per-type overload declared
- * right below) is meant to be implemented in terms of - write your own `enum_vals` table once per
- * enum type and forward to this function, rather than reimplementing the string/integer/sequence
- * handling yourself. This is exactly the pattern every enum specialization in `vulkan/
- * vulkan_composer.h` uses, e.g.:
- * @code
- * inline std::unordered_map<std::string, VkImageTiling> vk_image_tiling_from_str = { ... };
- * template <> inline VkImageTiling get_enum_val<VkImageTiling>(fkyaml::node &n) {
- *     return get_enum_val(n, vk_image_tiling_from_str);
- * }
- * @endcode
+ * Core:
+ *   - Handles three node shapes: a string (e.g. `"READ"`), looked up in `enum_vals`; an integer,
+ *     cast directly through `T(node.as_int())`; and a sequence (e.g. `[READ, WRITE]`), whose
+ *     elements are resolved recursively and OR'd together for combining bitmask flags.
+ *   - This is what the single-argument `get_enum_val<T>(node)` overload below is meant to be
+ *     implemented in terms of. Write the `enum_vals` table once per enum type and forward to this
+ *     function rather than reimplementing the three shapes.
  *
  * @tparam T  The enum/bitmask type to produce.
  * @param node       The YAML/Lua-derived node to convert.
  * @param enum_vals  Table mapping each valid string name to its `T` value.
  *
- * @throws vc::except_t if `node` is a string not present in `enum_vals`, or isn't a
- *         string/integer/sequence at all.
+ * @throws vc::except_t if `node` is a string not present in `enum_vals`, or is not a string,
+ *         integer or sequence at all.
  *
  * @see get_enum_val(fkyaml::node&), bm_t
+ *
+ * @example
+ * // The pattern every enum specialization in vulkan/vulkan_composer.h uses:
+ * inline std::unordered_map<std::string, VkImageTiling> vk_image_tiling_from_str = { ... };
+ * template <> inline VkImageTiling get_enum_val<VkImageTiling>(fkyaml::node &n) {
+ *     return get_enum_val(n, vk_image_tiling_from_str);
+ * }
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename T>
 inline T get_enum_val(fkyaml::node &node, const std::unordered_map<std::string, T>& enum_vals);
 
 /*!
- * @brief Per-enum-type entry point for enum/bitmask conversion - deleted by default, meant to be
- * specialized once per enum type you want to use with `bm_t<T>`/YAML.
+ * @brief Per-enum-type entry point for enum/bitmask conversion: deleted by default, and meant to
+ * be specialized once per enum type.
  *
- * This primary template is intentionally `= delete`d: it is never meant to be called for a
- * generic, unspecialized `T` directly. To make your own enum type `T` usable as `bm_t<T>` (in
- * `VC_REGISTER_MEMBER_FUNCTION`/`luaw_function_wrapper`) or as a plain YAML/Lua-convertible enum
- * value, provide an explicit specialization that forwards to `get_enum_val<T>(node, enum_vals)`
- * with your own string-name table - see that function's doc for a real example from
- * `vulkan_composer.h`.
+ * Core:
+ *   - Specialize it for a type `T` to make `T` usable as `bm_t<T>` in
+ *     @ref VC_REGISTER_MEMBER_FUNCTION or `luaw_function_wrapper`, and as a plain YAML/Lua
+ *     convertible enum value. The specialization should forward to
+ *     `get_enum_val<T>(node, enum_vals)` with its own string-name table.
+ *   - The primary template is deliberately `= delete`d and is never meant to be called for an
+ *     unspecialized `T`.
  *
- * @note This deletion is also what `is_vc_enum<T>` (a `requires` expression checking whether
- *       `get_enum_val<T>(n)` is well-formed) relies on: for a `T` with no specialization, the
- *       expression resolves to this deleted primary, calling a deleted function is ill-formed,
- *       and the `requires` expression is SFINAE-friendly about that - it just evaluates to
- *       `false` rather than hard-erroring, so `is_vc_enum<T>` correctly reports "not a known
- *       enum" instead of breaking compilation everywhere it's checked.
+ * Detail:
+ *   - The deletion is what `is_vc_enum<T>` rests on. That is a `requires` expression checking
+ *     whether `get_enum_val<T>(n)` is well-formed; for a `T` with no specialization it resolves to
+ *     this deleted primary, and calling a deleted function is ill-formed. The `requires`
+ *     expression is SFINAE-friendly about that, so it evaluates to `false` and reports "not a
+ *     known enum" instead of breaking compilation wherever it is checked.
  *
- * @tparam T  The enum/bitmask type - must have its own explicit specialization to be usable.
+ * @tparam T  The enum/bitmask type. Must have its own explicit specialization to be usable.
+ *
  * @see get_enum_val(fkyaml::node&, const std::unordered_map<std::string,T>&), is_vc_enum, bm_t
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename T>
 inline T get_enum_val(fkyaml::node &n);
@@ -810,96 +928,114 @@ inline T get_enum_val(fkyaml::node &n);
 ------------------------------------------------------------------------------------------------- */
 
 /*!
- * @brief Parses a YAML configuration file and builds a schema for the given virtual state.
+ * @brief Parses a YAML configuration file and builds the objects it describes into the given
+ * virtual state.
  *
- * This function reads a YAML configuration file and constructs the virtual objects described in
- * said file, storing the resulting object in the virt_state_t object. References to those objects
- * can be retrieved and same objects can also be referenced in various LUA scripts.
+ * Core:
+ *   - The objects constructed from the file are stored in the `virt_state_t`, where they can be
+ *     retrieved by name from C++ and referenced from Lua scripts.
+ *   - An unresolved `!ref`, naming an object that never gets built, is not a failure. It is left
+ *     unresolved silently, so a successful return does not mean every reference was satisfied.
  *
- * @param vs    Pointer to the virtual state structure to be populated with the parsed configuration.
+ * @param vs    Pointer to the virtual state structure to be populated with the parsed
+ *              configuration.
  * @param path  Path to the YAML configuration file to parse.
  *
  * @return virt_composer::err_e
- *         - @c VC_ERROR_OK on success. Note: an unresolved `!ref` (naming an object that never
- *           gets built) does not cause a failure here - it's silently left unresolved.
+ *         - @c VC_ERROR_OK on success.
  *         - @c VC_ERROR_PARSE_YAML if the YAML file itself is malformed (fails to deserialize).
- *         - @c VC_ERROR_GENERIC for any other failure - schema construction failure, or an object
+ *         - @c VC_ERROR_GENERIC for any other failure - schema construction failing, or an object
  *           with an unrecognized `m_type`.
  *
+ * @date 2026-09-08 06:54
  */
 err_e parse_config(virt_state_t *vs, const char *path);
 
 /*!
- * @brief Registers a named builder callback for typed objects.
+ * @brief Registers a builder callback for typed objects, keyed by `m_type`.
  *
- * Adds a callback function to an internal array that will be invoked when a YAML node
- * with a matching `m_type` field is encountered during parsing. The callback is responsible
- * for constructing the object from the provided node.
+ * Core:
+ *   - The callback is invoked when a YAML node carrying a matching `m_type` field is met during
+ *     parsing, and is responsible for constructing the object from that node.
+ *   - Only typed objects, the ones with an `m_type` field, can be nested. Auto-identified objects
+ *     cannot, so a structure that must appear inside another has to be typed.
  *
  * @param vs      Pointer to the virtual state.
  * @param match   The `m_type` string to match against YAML nodes.
- * @param builder The callback coroutine function to invoke when a match is found.
- *                Parameters: virtual state, node name, and the YAML node itself
+ * @param builder The callback coroutine to invoke when a match is found. Parameters: virtual
+ *                state, node name, and the YAML node itself.
  *
- * @return `VC_ERROR_OK` (this function currently has no failure path).
+ * @return `VC_ERROR_OK`; this function currently has no failure path.
  *
- * @note Only typed objects (with an `m_type` field) can be nested. Auto-identified-objects cannot.
+ * @date 2026-09-08 06:54
  */
 err_e add_named_builder_callback(virt_state_t *vs, const std::string& match,
         std::function<co::task<vc::ref_t<vc::object_t>> (
                 virt_state_t *, const std::string&, fkyaml::node&)> builder);
 
 /*!
- * @brief Registers an automatic builder callback for auto-identified-objects.
+ * @brief Registers a builder callback for auto-identified objects, keyed by node structure
+ * instead of by `m_type`.
  *
- * Adds a callback pair to an internal array that will be invoked when a YAML node
- * matches the structure recognized by the analyser function. The analyser function should
- * return `true` if the node structure matches, and the builder function will then be called
- * to construct the object.
+ * Core:
+ *   - The pair is invoked when a YAML node matches what the analyser recognises: the analyser
+ *     returns `true` for a node it knows, and the builder is then called to construct the object.
+ *   - Only typed objects, the ones with an `m_type` field, can be nested. Objects identified this
+ *     way cannot, so anything that must appear inside another node has to be typed instead.
  *
  * @param vs       Pointer to the virtual state.
- * @param analyser Function that checks if a YAML node matches the expected structure.
- * @param builder  Coroutine function to construct the object if the analyser returns `true`.
- *                 Parameters: virtual state, node name, and the YAML node itself.
- *                 Return: `0` on success, or a negative value on error.
+ * @param analyser Function that checks whether a YAML node matches the expected structure.
+ * @param builder  Coroutine that constructs the object once the analyser has returned `true`.
+ *                 Parameters: virtual state, node name, and the YAML node itself. Returns `0` on
+ *                 success, or a negative value on error.
  *
- * @return `VC_ERROR_OK` (this function currently has no failure path).
+ * @return `VC_ERROR_OK`; this function currently has no failure path.
  *
- * @note Only typed objects (with an `m_type` field) can be nested. Auto-identified-objects cannot.
+ * @date 2026-09-08 06:54
  */
 err_e add_auto_builder_callback(virt_state_t *vs,
         std::function<bool(const std::string&, fkyaml::node& node)> analyser,
         std::function<co::task_t(virt_state_t *, const std::string&, fkyaml::node&)> builder);
 
 /*!
- * Marks a dependency as resolved and notifies all coroutines waiting for it. To be used inside
- * builder callbacks.
+ * @brief Marks a dependency as resolved and wakes everything waiting on it. Called from inside a
+ * builder callback.
  *
- * This function registers a newly constructed object in the virtual state (`virt_state_t`),
- * exposes it to Lua as `vc.<depend_name>`, and resumes any coroutines that were suspended while
- * waiting for this dependency.
+ * Core:
+ *   - Registers the newly constructed object in the virtual state under `depend_name`, which is
+ *     what later makes it findable through `get_ref()`.
+ *   - Exposes it to Lua as `vc.<depend_name>`.
+ *   - Resumes any coroutines that suspended while waiting for this dependency, which is how the
+ *     parser's ordering is resolved at all.
  *
  * @param vs            Pointer to the virtual state (`virt_state_t`), which manages objects and
  *                      dependencies.
  * @param depend_name   The name/identifier of the dependency being resolved.
  * @param depend        The object reference (`vc::ref_t<vc::object_t>`) to register.
  *
- * @throws vc::except_t If the object is null or if the dependency name is already taken.
+ * @throws vc::except_t if the object is null, or if the dependency name is already taken.
  *
  * @example
  * // After constructing an object, mark it as resolved:
  * mark_dependency_solved(vs, "my_object", my_object_ref);
+ *
+ * @date 2026-09-08 06:54
  */
 void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t<vc::object_t> dep);
 
 /*!
- * Asynchronously resolves a YAML node to an integer value, supporting both direct values and
- * references. To be used inside the build_object callback.
+ * @brief Resolves a YAML node to an `int64_t`, following references and evaluating expressions.
+ * To be used inside the build_object callback.
  *
- * This coroutine function resolves a YAML node to an `int64_t` value. It handles three cases:
- * 1. **Reference nodes** (e.g., `!ref object_name`): Resolves the referenced integer object.
- * 2. **String nodes**: Evaluates the string as a mathematical expression (using `texpr`).
- * 3. **Direct integer nodes**: Returns the integer value directly.
+ * Core:
+ *   - Handles three shapes: a reference node (`!ref object_name`), which resolves the referenced
+ *     integer object; a string node, evaluated as a mathematical expression through `texpr`; and a
+ *     direct integer node, returned as is.
+ *   - Being a coroutine, it suspends until a referenced object exists, so a builder need not care
+ *     about the order things are declared in YAML.
+ *
+ * Detail:
+ *   - The result of an evaluated expression is rounded to the nearest integer.
  *
  * @param vs    Pointer to the virtual state (`virt_state_t`), providing parsing context and
  *              dependency management.
@@ -908,48 +1044,54 @@ void mark_dependency_solved(virt_state_t *vs, std::string depend_name, vc::ref_t
  *
  * @return A coroutine task that yields the resolved `int64_t` value.
  *
- * @note
- * - Rounds the result of evaluated expressions to the nearest integer.
- *
  * @example
  * // Resolve a reference or expression:
  * int64_t val = co_await resolve_int(vs, yaml_node);
+ *
+ * @date 2026-09-08 06:54
  */
 co::task<int64_t> resolve_int(virt_state_t *vs, fkyaml::node& node);
 
 /*!
- * Asynchronously resolves a YAML node to a floating-point value, supporting both direct values and
- * references. To be used inside the build_object callback.
+ * @brief Resolves a YAML node to a `double`, following references and evaluating expressions.
+ * To be used inside the build_object callback.
  *
- * This coroutine function resolves a YAML node to a `double` value. It handles four cases:
- * 1. **Reference nodes** (e.g., `!ref object_name`): Resolves the referenced float object.
- * 2. **String nodes**: Evaluates the string as a mathematical expression (using `texpr`).
- * 3. **Integer nodes**: Cast directly to `double`.
- * 4. **Direct float nodes**: Returns the floating-point value directly.
+ * Core:
+ *   - Handles four shapes: a reference node (`!ref object_name`), which resolves the referenced
+ *     float object; a string node, evaluated as a mathematical expression through `texpr`; an
+ *     integer node, cast directly to `double`; and a direct float node, returned as is.
+ *   - Being a coroutine, it suspends until a referenced object exists, so a builder need not care
+ *     about the order things are declared in YAML.
  *
- * @param vs Pointer to the virtual state (`virt_state_t`), providing parsing context and dependency
- * management.
+ * @param vs   Pointer to the virtual state (`virt_state_t`), providing parsing context and
+ *             dependency management.
  * @param node The YAML node to resolve. Can be a reference, a string expression, an integer, or a
- * direct float.
+ *             direct float.
  *
  * @return A coroutine task that yields the resolved `double` value.
  *
  * @example
  * // Resolve a reference or direct float:
  * double val = co_await resolve_float(vs, yaml_node);
+ *
+ * @date 2026-09-08 06:54
  */
 co::task<double> resolve_float(virt_state_t *vs, fkyaml::node& node);
 
 /*!
- * Asynchronously resolves a YAML node to a string value, supporting both direct values and
- * references. To be used inside the build_object callback.
+ * @brief Resolves a YAML node to a `std::string`, following a reference if that is what it holds.
+ * To be used inside the build_object callback.
  *
- * This coroutine function resolves a YAML node to a `std::string` value. It handles two cases:
- * 1. **Reference nodes** (e.g., `!ref object_name`): Resolves the referenced string object.
- * 2. **Direct string nodes**: Returns the string value directly.
+ * Core:
+ *   - Handles two shapes: a reference node (`!ref object_name`), which resolves the referenced
+ *     string object, and a direct string node, whose value is returned as is.
+ *   - Being a coroutine, it suspends until a referenced object exists, so a builder need not care
+ *     about the order things are declared in YAML.
+ *   - Unlike @ref resolve_int and @ref resolve_float, a string is never treated as an expression
+ *     here; it is taken literally.
  *
- * @param vs Pointer to the virtual state (`virt_state_t`), providing parsing context and dependency
- * management.
+ * @param vs   Pointer to the virtual state (`virt_state_t`), providing parsing context and
+ *             dependency management.
  * @param node The YAML node to resolve. Can be a reference or a direct string.
  *
  * @return A coroutine task that yields the resolved `std::string` value.
@@ -957,63 +1099,68 @@ co::task<double> resolve_float(virt_state_t *vs, fkyaml::node& node);
  * @example
  * // Resolve a reference or direct string:
  * std::string val = co_await resolve_str(vs, yaml_node);
+ *
+ * @date 2026-09-08 06:54
  */
 co::task<std::string> resolve_str(virt_state_t *vs, fkyaml::node& node);
 
 /*!
- * Asynchronously resolves a YAML node into an object reference, handling direct references, tagged
- * mappings, and inlined object definitions. To be used inside the build_object callback.
+ * @brief Resolves a YAML node into a strongly-typed object reference, whether it names one,
+ * inlines one, or tags one. To be used inside the build_object callback.
  *
- * This coroutine function is used during configuration parsing to resolve a YAML node into a
- * strongly-typed reference (`vc::ref_t<T>`). It supports three cases:
- * 1. **Reference nodes** (e.g., `m_field: !ref object_name`).
- * 2. **Tagged mapping nodes** (e.g., `m_field: tag_name: m_type: "..."`).
- * 3. **Inlined object nodes** (e.g., `m_field: m_type: "..."`).
+ * Core:
+ *   - Supports three shapes: a reference node (`m_field: !ref object_name`), a tagged mapping
+ *     node (`m_field: tag_name: m_type: "..."`), and an inlined object node
+ *     (`m_field: m_type: "..."`).
+ *   - Being a coroutine, it suspends if the object is not yet available and resumes once it is,
+ *     so a builder need not care about the order things are declared in YAML.
  *
  * @tparam T The expected type of the resolved object.
- * @param vs Pointer to the virtual state (`virt_state_t`), providing parsing context and
- * dependency management.
- * @param node The YAML node to resolve. The node can be a reference, a tagged mapping, or an
- * inlined object.
+ * @param vs   Pointer to the virtual state (`virt_state_t`), providing parsing context and
+ *             dependency management.
+ * @param node The YAML node to resolve: a reference, a tagged mapping, or an inlined object.
  *
- * @return A coroutine task that yields a `vc::ref_t<T>`, a reference to the resolved object.
- *         The coroutine suspends if the object is not yet available and resumes when it is ready.
+ * @return A coroutine task that yields a `vc::ref_t<T>` to the resolved object.
  *
- * @throws vc::except_t If the node format is invalid or unsupported in the current context.
- *
+ * @throws vc::except_t if the node format is invalid or unsupported in the current context.
  *
  * @example
  * // Resolve a reference:
  * auto ref = co_await resolve_obj<my_type_t>(vs, yaml_node);
  *
+ * @date 2026-09-08 06:54
  */
 template <typename T>
 co::task<vc::ref_t<T>> resolve_obj(virt_state_t *vs, fkyaml::node& node);
 
 /*!
- * Reads a trivially-copyable value out of another, already-built object's member, by raw memcpy.
- * Uses the coroutine engine purely to let objects be declared in whatever order is convenient in
- * YAML, not to wait on any real I/O or external event: if the source object hasn't been built yet,
- * this pauses construction of the *current* object and lets other objects keep being built,
- * resuming once the source object becomes available. To be used inside a builder callback, on a
- * YAML node tagged `!copy` with `object`/`member` sub-fields (e.g.
- * `value: !copy\n  object: some_vec3\n  member: x`).
+ * @brief Reads a trivially-copyable value out of an already-built object's member, by raw memcpy.
+ * To be used inside a builder callback, on a YAML node tagged `!copy`.
  *
- * The target member must have been registered ahead of time with
- * `VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER`/`register_trivially_copyable_member` on the *source*
- * object's type - this function looks that registration up by the source object's runtime
- * `type_id()`, not by `T`, so `T` must match the exact type the member was registered with.
+ * Core:
+ *   - The node must be tagged `!copy` and carry `object` and `member` string fields naming the
+ *     source object and the member to read, e.g. `value: !copy\n  object: some_vec3\n  member: x`.
+ *   - The member must have been registered ahead of time on the *source* object's type, with
+ *     @ref VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER or `register_trivially_copyable_member`.
+ *   - The registration is looked up by the source object's runtime `type_id()`, not by `T`, so `T`
+ *     must match the exact type the member was registered with. The check is a runtime
+ *     `std::type_index` comparison, not a compile-time one.
  *
- * @tparam T  The C++ type to copy the member's bytes into - must match the registered member's
- *            type (checked at runtime via `std::type_index`, not enforced at compile time here).
+ * Detail:
+ *   - The coroutine engine is used here only to allow objects to be declared in whatever order is
+ *     convenient in YAML, never to wait on real I/O or an external event. If the source object has
+ *     not been built yet, construction of the *current* object pauses, other objects keep being
+ *     built, and this resumes once the source becomes available.
+ *
+ * @tparam T  The C++ type to copy the member's bytes into. Must match the registered member's
+ *            type.
  * @param vs    Pointer to the virtual state (`virt_state_t`).
- * @param node  The YAML node - must be tagged `!copy` and contain `object`/`member` string fields
- *              naming the source object and its member.
+ * @param node  The YAML node. Must be tagged `!copy` and contain `object`/`member` string fields.
  *
  * @return A coroutine task that yields the copied `T` value.
  *
- * @throws vc::except_t if `node` isn't tagged `!copy`, if the source object's type never
- *         registered `member` for trivial-copy access, or if the registered member's type doesn't
+ * @throws vc::except_t if `node` is not tagged `!copy`, if the source object's type never
+ *         registered `member` for trivial-copy access, or if the registered member's type does not
  *         match `T`.
  *
  * @see VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER
@@ -1028,6 +1175,8 @@ co::task<vc::ref_t<T>> resolve_obj(virt_state_t *vs, fkyaml::node& node);
  *
  * // inside a builder callback for my_float_copy_t:
  * float val = co_await resolve_memb<float>(vs, node["value"]);
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename T>
 co::task<T> resolve_memb(virt_state_t *vs, fkyaml::node& node);
@@ -1039,101 +1188,131 @@ co::task<T> resolve_memb(virt_state_t *vs, fkyaml::node& node);
  * @brief Adds free (non-member) functions to the `vc` Lua module table, callable as
  * `vc.<name>(...)` from any script.
  *
- * `create_state()` itself uses this to register `vc.create_object` internally; user code calls it
- * the same way to add its own top-level functions. Different from
- * `VC_REGISTER_MEMBER_FUNCTION`/`luaw_register_member_function`, which register a function ON a
- * specific object type (`obj:fn(...)`) - these live directly on the `vc` table itself, with no
- * receiver object.
+ * Core:
+ *   - These live directly on the `vc` table with no receiver object, unlike
+ *     @ref VC_REGISTER_MEMBER_FUNCTION and `luaw_register_member_function`, which register a
+ *     function ON a specific object type (`obj:fn(...)`).
+ *   - Safe to call more than once. Each call appends to whatever was already registered rather
+ *     than replacing the previous set.
+ *
+ * Detail:
+ *   - `create_state()` uses this itself to register `vc.create_object` internally; user code calls
+ *     it the same way to add its own top-level functions.
  *
  * @param vs           Pointer to the virtual state (`virt_state_t`).
  * @param vc_tab_funcs The functions to add, as `{name, lua_CFunction}` pairs (`luaL_Reg`). For a
  *                     C++ function with automatic argument/return conversion, wrap it with
- *                     `luaw_function_wrapper<...>` first (see that function's doc) rather than
- *                     writing a raw `lua_CFunction` by hand.
+ *                     `luaw_function_wrapper<...>` first rather than writing a raw `lua_CFunction`
+ *                     by hand.
  *
- * @return `VC_ERROR_OK` (this function currently has no failure path).
- *
- * @note Safe to call more than once - each call appends its functions to whatever was already
- *       registered, it doesn't replace the previous set.
+ * @return `VC_ERROR_OK`; this function currently has no failure path.
  *
  * @example
  * add_lua_tab_funcs(vs, {{"my_func", luaw_function_wrapper<&my_free_function, int, int>}});
  * // Lua: vc.my_func(1, 2)
+ *
+ * @date 2026-09-08 06:54
  */
 err_e add_lua_tab_funcs(virt_state_t *vs, const std::vector<luaL_Reg>& vc_tab_funcs);
 
 /*!
  * @brief Adds integer constants directly onto the `vc` Lua module table, e.g. `vc.READ = 1`.
  *
- * Makes `vc.READ`/`vc.WRITE`-style names usable as plain Lua expressions in scripts - without this,
- * `vc.READ` simply doesn't exist as a field on the `vc` table. This is one of two independent ways
- * a script can supply an enum/flag value to a `bm_t<T>` parameter: as this kind of named integer
- * constant (`vc.READ`, evaluated by Lua itself before the call happens), or as a bare string
- * literal (`"READ"`), resolved separately via a `get_enum_val<T>` specialization - see that
- * function's doc. The `unordered_map<std::string, T>` overload just below forwards to this one.
+ * Core:
+ *   - Without this, a name like `vc.READ` simply does not exist as a field on the `vc` table.
+ *   - This is one of two independent ways a script can hand an enum or flag value to a `bm_t<T>`
+ *     parameter: as a named integer constant registered here, which Lua evaluates before the call
+ *     happens, or as a bare string literal (`"READ"`), resolved separately through a
+ *     `get_enum_val<T>` specialization.
  *
  * @param vs      Pointer to the virtual state (`virt_state_t`).
  * @param mapping The constants to add, as `{integer_value, name}` pairs.
  *
- * @return `VC_ERROR_OK` (this function currently has no failure path).
+ * @return `VC_ERROR_OK`; this function currently has no failure path.
+ *
+ * @see get_enum_val, bm_t. The `unordered_map<std::string, T>` overload just below forwards here.
  *
  * @example
  * add_lua_flag_mapping(vs, {{1, "READ"}, {2, "WRITE"}});
  * // Lua: vc.READ == 1, vc.WRITE == 2
+ *
+ * @date 2026-09-08 06:54
  */
 err_e add_lua_flag_mapping(virt_state_t *vs,
         const std::vector<std::pair<lua_Integer, std::string>> &mapping);
 
 /*!
- * @brief Adds integer constants onto the `vc` Lua module table from an existing enum name table -
- * convenience wrapper around the `vector<pair<lua_Integer,string>>` overload.
+ * @brief Adds integer constants onto the `vc` Lua module table from an existing enum name table.
  *
- * Converts `mapping` into that overload's `{value, name}` pair form and forwards to it. The
- * intended pattern is to reuse the *same* table you already wrote for a `get_enum_val<T>`
- * specialization - one `std::unordered_map<std::string, T>` backing both the C++-side
- * string-to-enum lookup and the Lua-side `vc.<NAME>` constants, rather than keeping two separate
- * lists in sync. Confirmed as the actual pattern in `vulkan_composer.h`: `shader_stage_from_string`
- * backs both `get_enum_val<vku_shader_stage_e>`'s specialization and this function's own
- * registration.
+ * Core:
+ *   - A convenience wrapper: `mapping` is converted into the `{value, name}` pair form and
+ *     forwarded to the `vector<pair<lua_Integer,string>>` overload.
+ *   - The point is to reuse the *same* table already written for a `get_enum_val<T>`
+ *     specialization, so one `std::unordered_map<std::string, T>` backs both the C++ side
+ *     string-to-enum lookup and the Lua side `vc.<NAME>` constants, instead of two lists that have
+ *     to be kept in step.
  *
- * @tparam T  The enum/flag type - only its integer values matter here, they're cast to
+ * Detail:
+ *   - That is the actual pattern in `vulkan_composer.h`, where `shader_stage_from_string` backs
+ *     both `get_enum_val<vku_shader_stage_e>`'s specialization and this function's registration.
+ *
+ * @tparam T  The enum/flag type. Only its integer values matter here; they are cast to
  *            `lua_Integer`.
  * @param vs      Pointer to the virtual state (`virt_state_t`).
- * @param mapping The name -> value table to expose as `vc.<name>` constants.
+ * @param mapping The name to value table to expose as `vc.<name>` constants.
  *
- * @return `VC_ERROR_OK` (this function currently has no failure path).
+ * @return `VC_ERROR_OK`; this function currently has no failure path.
  *
  * @see add_lua_flag_mapping(virt_state_t*, const std::vector<std::pair<lua_Integer,std::string>>&),
  *      get_enum_val
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename T>
 err_e add_lua_flag_mapping(virt_state_t *vs, const std::unordered_map<std::string, T>& mapping);
 
-/**
- * @brief A Lua C function wrapper for calling C++ functions from Lua.
+/*!
+ * @brief Wraps a C++ function as a `lua_CFunction`, converting arguments and return values
+ * automatically.
  *
- * This template generates a Lua-compatible C function that wraps a C++ function,
- * automatically converting Lua arguments to C++ types and handling return values.
- * It can recognize `vc::ref_t<T>` references.
+ * Core:
+ *   - Lua arguments are converted into the declared `Params...` and the result is converted back,
+ *     so the wrapped function is written in plain C++ terms.
+ *   - `vc::ref_t<T>` references are recognised, so composer objects pass through in either
+ *     direction.
+ *   - Exceptions thrown by `function` are caught and turned into a Lua error, so no try/catch is
+ *     needed around it.
  *
  * @tparam function The C++ function to wrap. Must be callable with the provided `Params...`.
  * @tparam Params   The types of the parameters expected by the wrapped function.
  *
  * @param L The Lua state.
- * @return int The number of values returned to Lua (0 for void, 1 otherwise).
  *
- * @note Exceptions thrown by `function` are caught and turned into a Lua error - no need for your
- *       own try/catch around it.
+ * @return The number of values returned to Lua: 0 for void, 1 otherwise.
+ *
+ * @date 2026-09-08 06:54
  */
 template <auto function, typename ...Params>
 inline int luaw_function_wrapper(lua_State *L);
 
 /*!
- * @brief Registers a member function of a C++ class for Lua scripting.
+ * @brief Registers a member function of a C++ class so Lua scripts can call it on objects of that
+ * type.
  *
- * This template function registers a member function of a C++ class (which must inherit from
- * `virt_composer::object_t`) so that it can be called from Lua. It bridges the C++ member function
- * to Lua, allowing Lua scripts to invoke the function on objects of the registered type.
+ * Core:
+ *   - `T` must inherit from `virt_composer::object_t`. The function becomes reachable as
+ *     `obj:function_name(...)`.
+ *   - Only types the library knows how to carry across the Lua boundary may appear in `Params`:
+ *     string, bool, int and double, vector, tuple and pair, `vc::ref_t<T>` objects, and
+ *     `vc::bm_t<T>` (Lua to C++ only - see its own doc). For anything else the library has no
+ *     conversion in either direction.
+ *   - This is the only route onto the per-class `__index` dispatch. A function attached by other
+ *     means, such as a bare `lua_setfield()` on the shared metatable, is not reachable as a
+ *     method.
+ *
+ * Detail:
+ *   - Normally reached through the @ref VC_REGISTER_MEMBER_FUNCTION macro rather than called
+ *     directly.
  *
  * @tparam T            The C++ class type (must inherit from `virt_composer::object_t`).
  * @tparam member_ptr   Pointer to the member function to register.
@@ -1142,37 +1321,27 @@ inline int luaw_function_wrapper(lua_State *L);
  * @param vs            Pointer to the virtual state (`virt_state_t`)
  * @param function_name The name of the function as it will be exposed in Lua.
  *
- * @note This is typically used with the @ref VC_REGISTER_MEMBER_FUNCTION macro for convenience.
- * @note Only known object types can be used in those calls, usual data types: string, bool, int,
- *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>` (see its own doc -
- *       one-way, Lua->C++ only), `vc::ref_t<T>` objects. In rest, this library doesn't know how to
- *       convert them from Lua to their C++ counterpart and vice versa.
- *
  * @see VC_REGISTER_MEMBER_FUNCTION
  *
- * @example
- * // C++:
- * VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, begin_rpass, vc::ref_t<vku::framebuffs_t>, uint32_t);
- *
- * struct cmdbuff_t : public vc::object_t {
- *     ref_t<cmdpool_t>    m_cmdpool;
- *     bool                m_host_free;
- *     void begin_rpass(ref_t<framebuffs_t> fbs, uint32_t img_idx);
- * };
- *
- * // Lua:
- * vc = require("virt_composer")
- * vc.cmdbuff:begin_rpass(vc.fb, 2)  -- Calls the registered member function
- *                                   -- cmdbuff is a reference (vc::ref_t<cmdbuff_t> in C++)
+ * @date 2026-09-08 06:54
  */
 template <typename T, auto member_ptr, typename ...Params>
 void luaw_register_member_function(virt_state_t *vs, const char *function_name);
 
 /*!
- * @brief Registers a member object (variable) of a C++ class for Lua scripting.
+ * @brief Registers a member variable of a C++ class so Lua scripts can read and write it.
  *
- * This template function registers a member variable of a C++ class (which must inherit from
- * `virt_composer::object_t`) so that it can be accessed and modified from Lua scripts.
+ * Core:
+ *   - `T` must inherit from `virt_composer::object_t`. The variable becomes reachable as
+ *     `obj.member_name`, for both reading and assignment.
+ *   - Only types the library knows how to carry across the Lua boundary may be registered: string,
+ *     bool, int and double, vector, tuple and pair, `vc::ref_t<T>` objects, and `vc::bm_t<T>`
+ *     (Lua to C++ only - see its own doc). For anything else the library has no conversion in
+ *     either direction.
+ *
+ * Detail:
+ *   - Normally reached through the @ref VC_REGISTER_MEMBER_OBJECT macro rather than called
+ *     directly.
  *
  * @tparam T            The C++ class type (must inherit from `virt_composer::object_t`).
  * @tparam member_ptr   Pointer to the member variable to register.
@@ -1180,12 +1349,6 @@ void luaw_register_member_function(virt_state_t *vs, const char *function_name);
  * @param vs            Pointer to the virtual state (`virt_state_t`)
  * @param member_name   The name of the member variable as it will be exposed in Lua.
  *
- * @note This is typically used with the @ref VC_REGISTER_MEMBER_OBJECT macro for convenience.
- * @note Only known object types can be used in those calls, usual data types: string, bool, int,
- *       double (compatible with Lua), vector, tuples, pairs, and `vc::bm_t<T>` (see its own doc -
- *       one-way, Lua->C++ only), `vc::ref_t<T>` objects. In rest, this library doesn't know how to
- *       convert them from Lua to their C++ counterpart and vice versa.
- * 
  * @see VC_REGISTER_MEMBER_OBJECT
  *
  * @example
@@ -1202,6 +1365,8 @@ void luaw_register_member_function(virt_state_t *vs, const char *function_name);
  * vc = require("virt_composer")
  * vc.cmdbuff.m_host_free = false  -- Sets the member variable
  * vc.cmdbuff.m_cmdpool:do_something()  -- Accesses the member object
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename T, auto member_ptr>
 void luaw_register_member_object(virt_state_t *vs, const char *member_name);
@@ -1210,44 +1375,37 @@ void luaw_register_member_object(virt_state_t *vs, const char *member_name);
  * @brief Tells the framework that one registered object type is a base of another, so members
  * registered on the base become visible on the derived type too.
  *
- * By default, every registered type (`VIRT_COMPOSER_REGISTER_TYPE`) is its own island as far as
- * Lua/yaml member access is concerned: a member registered with `VC_REGISTER_MEMBER_FUNCTION`,
- * `VC_REGISTER_MEMBER_OBJECT`, or `VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER` on type `T` is only
- * reachable through an object whose `type_id()` is exactly `T`. `register_inheritance<T, U>(vs)`
- * teaches the framework that `T` and `U` are actually related - whichever one is the real C++
- * base (`T` or `U`, order doesn't matter, it's detected automatically) has its members exposed to
- * the derived type as well. This mirrors real C++ inheritance for the *scripting* surface, on top
- * of a C++ hierarchy you must already have: `T` and `U` are required (`std::is_base_of_v<T, U>`
- * or `std::is_base_of_v<U, T>`, checked at compile time) to be genuinely related in C++ - this
- * function does not, and cannot, invent an inheritance relationship between two unrelated types.
+ * Core:
+ *   - By default every registered type is its own island for Lua and YAML member access: a member
+ *     registered on `T` is only reachable through an object whose `type_id()` is exactly `T`.
+ *     This links two of them.
+ *   - The order of `T` and `U` does not matter. Whichever is the real C++ base is detected
+ *     automatically, and its members are exposed on the derived type.
+ *   - It mirrors an inheritance that must already exist in C++: `std::is_base_of_v<T, U>` or
+ *     `std::is_base_of_v<U, T>` is checked at compile time. It cannot invent a relationship
+ *     between unrelated types.
+ *   - Call order matters against member registration, not only against other
+ *     `register_inheritance` calls. Propagation happens once, when a member or operator is
+ *     registered, so a member added to the base *before* this call will never reach the derived
+ *     type. Register the pair first, then the members.
+ *   - It is not transitive. For `A <- B <- C`, linking `A,B` and `B,C` does not make `A`'s members
+ *     visible on `C`. Every pair that must be visible has to be registered, `A,C` included.
+ *
+ * Detail:
+ *   - "Propagation happens once" means `set_lua_class_member()`, `set_class_member_setter()`,
+ *     `set_trivial_copy_member()` and `set_class_operator()` each copy the registration into every
+ *     type currently known to descend from the one being registered on. There is no live or lazy
+ *     link to re-evaluate later.
+ *   - `std::is_base_of_v` holds for any ancestor/descendant pair however many levels apart, so the
+ *     type constraint never stands in the way of registering the non-adjacent pairs.
  *
  * @tparam T One of the two related types (must inherit from `virt_composer::object_t`).
  * @tparam U The other related type (must inherit from `virt_composer::object_t`).
  *
  * @param vs Pointer to the virtual state (`virt_state_t`).
  *
- * @note **Call order matters relative to member registration, not just relative to other
- *       `register_inheritance` calls.** Propagation happens once, at the moment a member/operator
- *       is registered (`set_lua_class_member()`/`set_class_member_setter()`/
- *       `set_trivial_copy_member()`/`set_class_operator()` all copy it into every type currently
- *       known to descend from it) - it is not a live/lazy link. A member added to the base *before*
- *       `register_inheritance()` establishes the relation will never retroactively reach the
- *       derived type. Always call `register_inheritance()` for a pair before registering members
- *       on the base you want the derived type to inherit.
- *
- * @note **This call is not transitive across a hierarchy deeper than the one pair you give it.**
- *       For a chain `A <- B <- C`, calling `register_inheritance<A,B>(vs)` then
- *       `register_inheritance<B,C>(vs)` does *not* also make `A`'s members visible on `C`, even
- *       though `C` genuinely is an `A` in C++ - each call only links the exact two types passed
- *       to it. Since `std::is_base_of_v` (and therefore this function's own type constraint) is
- *       satisfied for *any* ancestor/descendant pair regardless of how many levels separate them,
- *       the fix is simply to register every pair you actually need visible, not just the adjacent
- *       links: `register_inheritance<A,B>(vs); register_inheritance<B,C>(vs);
- *       register_inheritance<A,C>(vs);` for a 3-level hierarchy where `A`'s members must reach
- *       `C` too.
- *
- * @see VC_REGISTER_MEMBER_FUNCTION, VC_REGISTER_MEMBER_OBJECT, VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER,
- *      set_class_operator
+ * @see VC_REGISTER_MEMBER_FUNCTION, VC_REGISTER_MEMBER_OBJECT,
+ *      VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER, set_class_operator
  *
  * @example
  * // C++:
@@ -1260,42 +1418,40 @@ void luaw_register_member_object(virt_state_t *vs, const char *member_name);
  * // Lua: an object whose real type is derived_t can now read base_val too, even though it was
  * // only ever registered against base_t:
  * vc.some_derived_instance.base_val
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename T, typename U>
 requires std::is_base_of_v<vc::object_t, T> && std::is_base_of_v<vc::object_t, U>
 void register_inheritance(virt_state_t *vs);
 
 /*!
- * Registers `fn` as the handler for Lua operator `op` (e.g. `VC_OPERATOR_ADD` for `a + b`) on
- * objects of `type`.
+ * @brief Registers `fn` as the handler for a Lua operator on objects of a given type, e.g.
+ * `VC_OPERATOR_ADD` for `a + b`.
  *
- * `fn` is a plain `lua_CFunction` - it is NOT wrapped/generated the way `VC_REGISTER_MEMBER_FUNCTION`
- * wraps a C++ member function pointer. This is intentional: the two operands of a Lua operator can
- * be any mix of vc objects and plain Lua values (e.g. `vc_obj + 5`, or two different vc types), so
- * there's no single fixed C++ signature to template over - `fn` gets the raw Lua stack and decides
- * for itself what to do with each operand (via `get_object_from_lua`, `lua_tonumber`, etc.).
+ * Core:
+ *   - `fn` is a plain `lua_CFunction` and is not wrapped or generated the way
+ *     @ref VC_REGISTER_MEMBER_FUNCTION wraps a C++ member function pointer. The two operands of a
+ *     Lua operator can be any mix of vc objects and plain Lua values (`vc_obj + 5`, or two
+ *     different vc types), so there is no single fixed C++ signature to template over; `fn` gets
+ *     the raw stack and decides for itself, through `get_object_from_lua`, `lua_tonumber` and the
+ *     like.
+ *   - For a binary operator, both operands are checked in order for a registered handler, and `fn`
+ *     is called with the stack `[operand1, operand2, which]`. `which` is `1` or `2`, saying which
+ *     side carried the handler: Lua always passes the operands in left-to-right order either way,
+ *     so a non-commutative operator such as SUB needs this to know which side dispatched.
+ *   - For a unary operator there is no ambiguity and no `which` is pushed; `fn` is called with the
+ *     stack `[operand1]`.
+ *   - Whatever `fn` returns is passed back unmodified, following the normal `lua_CFunction`
+ *     contract: push results, return their count. No manual stack cleanup is needed.
+ *   - If neither operand has a handler for `op`, a Lua error is raised.
+ *   - As with member registration, an operator registered on `type` also reaches every type
+ *     already linked to it through `register_inheritance()`. Link the pair first, or a derived
+ *     type registered afterwards will not pick the operator up.
  *
- * @par Dispatch (binary operators: ADD, SUB, MUL, DIV, MOD, POW, IDIV, BAND, BOR, BXOR, SHL, SHR,
- * CONCAT, EQ, LT, LE)
- * Both operands are checked in order (operand 1, then operand 2) for whichever one has an operator
- * registered for this `op`, then:
- *  - Pushes one extra argument, a 3rd stack slot: `1` if operand 1 was the one with the registered
- *    handler, `2` if operand 2 was. This tells `fn` which side triggered the call, since Lua always
- *    passes both operands in original left-to-right order either way (needed to get non-commutative
- *    operators like SUB right regardless of which side dispatched).
- *  - Calls `fn(L)` with stack `[operand1, operand2, which]`, and returns whatever `fn` returns,
- *    unmodified - `fn` follows the normal `lua_CFunction` return contract (push results, return
- *    their count); no manual stack cleanup needed.
- *  - If neither operand has a handler for `op`, raises a Lua error.
- *
- * @par Dispatch (unary operators: UNM, BNOT, LEN)
- * Only one operand exists, so there's no ambiguity and no `which` argument is pushed - `fn` is
- * called with stack `[operand1]`.
- *
- * @note Like `VC_REGISTER_MEMBER_FUNCTION`/`VC_REGISTER_MEMBER_OBJECT`, registering an operator on
- *       `type` also reaches every type already linked to it via `register_inheritance()` - call
- *       `register_inheritance()` for the pair first, or a derived type registered afterward won't
- *       pick up the operator.
+ * Detail:
+ *   - The binary operators are ADD, SUB, MUL, DIV, MOD, POW, IDIV, BAND, BOR, BXOR, SHL, SHR,
+ *     CONCAT, EQ, LT and LE. The unary ones are UNM, BNOT and LEN.
  *
  * @param vs   Virtual state context.
  * @param type The enumerated type of the C++ class (must be registered with
@@ -1303,7 +1459,9 @@ void register_inheritance(virt_state_t *vs);
  * @param op   Which operator slot to bind (see @ref operator_e).
  * @param fn   Raw Lua C function implementing the operator for this type.
  *
- * @see operator_e
+ * @see operator_e, register_inheritance
+ *
+ * @date 2026-09-08 06:54
  */
 void set_class_operator(virt_state_t *vs, object_type_e type, operator_e op, lua_CFunction fn);
 
@@ -1313,47 +1471,57 @@ void set_class_operator(virt_state_t *vs, object_type_e type, operator_e op, lua
  * @brief Pushes a virt_composer object onto the Lua stack, as a value Lua's garbage collector
  * actually tracks.
  *
- * Repeated pushes of the same object return the same Lua value (so `==` between them holds in
- * Lua), and the object is kept alive for exactly as long as Lua can still reach that value - once
- * nothing references it anymore, it's eligible for collection like any other Lua-owned object.
+ * Core:
+ *   - Repeated pushes of the same object return the same Lua value, so `==` between them holds in
+ *     Lua.
+ *   - The object is kept alive for exactly as long as Lua can still reach that value. Once nothing
+ *     references it any more it is eligible for collection like any other Lua-owned object.
  *
  * @param L      Lua state.
  * @param object The virt_composer object to push.
  *
- * @return `0` always (this function currently has no failure path).
+ * @return `0` always; this function currently has no failure path.
  *
- * @see get_object_from_lua (the inverse)
+ * @see get_object_from_lua, the inverse.
+ *
+ * @date 2026-09-08 06:54
  */
 int push_vc_object(lua_State *L, ref_t<object_t> object);
 
 /*!
- * @brief Retrieves the `vc::object_t*` a Lua stack value represents, or `nullptr` if it isn't one.
+ * @brief Retrieves the `vc::object_t*` a Lua stack value represents, or `nullptr` if it is not
+ * one.
  *
- * The inverse of `push_vc_object()`: given a Lua stack index, returns the underlying `object_t*` if
- * the value there is a virt_composer object, or `nullptr` for anything else. Useful when writing
- * your own raw `lua_CFunction` (e.g. an operator handler registered via `set_class_operator()`)
- * that needs to inspect its arguments.
+ * Core:
+ *   - The inverse of @ref push_vc_object: given a stack index, it hands back the underlying
+ *     `object_t*` if the value there is a virt_composer object, and `nullptr` for anything else.
+ *   - A non-object is not an error here, so a raw `lua_CFunction` - an operator handler registered
+ *     through `set_class_operator()`, say - can use it to inspect arguments of mixed kinds.
  *
  * @param L    The Lua state.
  * @param idx  Stack index of the value to inspect.
  *
- * @return The object's `object_t*`, or `nullptr` if the value at `idx` isn't a virt_composer
+ * @return The object's `object_t*`, or `nullptr` if the value at `idx` is not a virt_composer
  *         object.
  *
  * @see push_vc_object
+ *
+ * @date 2026-09-08 06:54
  */
 object_t *get_object_from_lua(lua_State *L, int idx);
 
 /*!
  * @brief Calls a global Lua function by name and converts its result back to C++.
  *
- * Looks `function_name` up as a **global** (via `lua_getglobal`) - a function nested in a table
- * (e.g. `vc.foo`) or a script-local one won't be found this way, and the call fails the same as an
- * unknown name would.
+ * Core:
+ *   - `function_name` is looked up as a **global**, through `lua_getglobal`. A function nested in
+ *     a table (`vc.foo`) or local to a script is not found this way, and the call then fails
+ *     exactly as an unknown name would.
+ *   - Failure is reported in the returned pair, not thrown.
  *
  * @tparam R            Return type to convert the Lua function's result into. Pass `void` if the
- *                       return value should be ignored - the returned pair's first element is then
- *                       a meaningless placeholder `int` (always `0`), not an actual return value.
+ *                      return value should be ignored; the pair's first element is then a
+ *                      meaningless placeholder `int`, always `0`, not an actual return value.
  * @tparam Args         The types of the function parameters.
  *
  * @param vs            The virtual state that contains the function.
@@ -1361,8 +1529,10 @@ object_t *get_object_from_lua(lua_State *L, int idx);
  * @param args...       The arguments to pass, pushed onto the Lua stack in order before the call.
  *
  * @return A pair: the converted return value (or the `void` placeholder above), and `VC_ERROR_OK`
- *         on success or `VC_ERROR_FAILED_CALL` if `function_name` doesn't resolve to a callable
- *         value, or the call itself errors.
+ *         on success, or `VC_ERROR_FAILED_CALL` if `function_name` does not resolve to a callable
+ *         value or the call itself errors.
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename R, typename ...Args>
 std::pair<std::conditional_t<!std::is_void_v<R>, R, int>, err_e>
@@ -1397,212 +1567,256 @@ enum luaw_member_e {
 };
 
 /*!
- * [INTERNAL] Asynchronously builds an object from a YAML node using registered callbacks.
+ * [INTERNAL]
+ * @brief Builds an object from a YAML node using the registered typed-builder callbacks.
  *
- * @param vs Virtual state context.
- * @param name Object name (used for registration and debugging).
+ * Core:
+ *   - The node must be a mapping carrying `m_type`; anything else yields `nullptr` rather than an
+ *     error.
+ *   - `build_object_cbks` is walked for a callback matching that `m_type`, and construction is
+ *     delegated to it. The coroutine suspends if the callback needs something not built yet.
+ *   - For the parser and dependency-resolution system only.
+ *
+ * Detail:
+ *   - Invalid nodes and unknown types are logged on the way through.
+ *
+ * @param vs   Virtual state context.
+ * @param name Object name, used for registration and debugging.
  * @param node YAML node defining the object (must be a mapping with `m_type`).
  *
- * @return Coroutine task yielding a `vc::ref_t<vc::object_t>`.
- *         Returns `nullptr` if the node is not a mapping.
+ * @return Coroutine task yielding a `vc::ref_t<vc::object_t>`, or `nullptr` if the node is not a
+ *         mapping.
  *
  * @throws vc::except_t if no callback matches the object type.
  *
- * @details
- * - Iterates through `build_object_cbks` to find a matching callback.
- * - Delegates construction to the callback and suspends if needed.
- * - Logs errors for invalid nodes or unknown types.
- *
- * @note
- * - For internal use only (parser/dependency resolution system).
+ * @date 2026-09-08 06:54
  */
 co::task<vc::ref_t<vc::object_t>> build_object(virt_state_t *vs,
         const std::string& name, fkyaml::node& node);
 
 /*!
- * [INTERNAL] Asynchronously builds a pseudo-object from a YAML node without requiring an explicit type.
+ * [INTERNAL]
+ * @brief Builds an object from a YAML node that carries no explicit type, by recognising its
+ * shape.
  *
- * Pseudo-objects are a simplified way to create objects without boilerplate, supporting:
- * - Integers (creates an `integer_t` object).
- * - Floats (creates a `float_t` object).
- * - Strings (creates a `string_t` object).
- * - A node named exactly `"lua_script"`: loaded and executed as a Lua script (same underlying
- *   mechanism as a `vc::lua_script_t`'s `m_source`/`m_source_path`, just without needing the
- *   explicit `m_type` tag).
+ * Core:
+ *   - This is what lets a config skip the boilerplate: an integer node becomes an `integer_t`, a
+ *     float a `float_t`, a string a `string_t`.
+ *   - A node named exactly `"lua_script"` is loaded and executed as a Lua script - the same
+ *     underlying mechanism as a `vc::lua_script_t`'s `m_source`/`m_source_path`, without needing
+ *     the explicit `m_type` tag.
+ *   - Specialized objects, such as SPIR-V shaders or GPU resources, do not come through here.
+ *     They go through the registered `build_psudo_object_cbks` callbacks instead.
  *
- * For specialized objects (e.g., SPIR-V shaders, GPU resources), callbacks (`build_psudo_object_cbks`)
- * are used instead.
- *
- * @param vs Virtual state context.
+ * @param vs   Virtual state context.
  * @param name Name of the object to build.
  * @param node YAML node defining the object.
  *
- * @return Coroutine task yielding:
- *         - `0` on success (object built and registered).
- *         - `-1` on failure (invalid node or unsupported type).
+ * @return Coroutine task yielding `0` on success, the object built and registered, or `-1` on
+ *         failure: an invalid node, or an unsupported type.
+ *
+ * @date 2026-09-08 06:54
  */
 co::task_t build_pseudo_object(virt_state_t *vs, const std::string& name, fkyaml::node& node);
 
 /*!
- * [INTERNAL] Generates a unique anonymous name for untagged objects.
+ * [INTERNAL]
+ * @brief Generates a unique anonymous name for an untagged object.
  *
- * @param vs Virtual state context - mutates `vs`'s anonymous-name counter each call.
- * @return A unique name of the form `"__<N>"` (e.g. `"__0"`, `"__1"`, ...), where `N` is a
- *         per-virt_state_t counter incremented on every call.
+ * Core:
+ *   - Names are of the form `"__<N>"` - `"__0"`, `"__1"`, and so on - where `N` comes from a
+ *     counter held per `virt_state_t`.
+ *   - The counter is advanced on every call, so this mutates `vs` and never returns the same name
+ *     twice for one state.
+ *
+ * @param vs Virtual state context.
+ *
+ * @return The generated name.
+ *
+ * @date 2026-09-08 06:54
  */
 std::string new_anon_name(virt_state_t *vs);
 
 /*!
- * [INTERNAL] Pushes a formatted error message with stack trace context to Lua and raises a Lua
- * error.
+ * [INTERNAL]
+ * @brief Raises a Lua error carrying a formatted message and the Lua-side stack trace.
  *
- * This function constructs a detailed error message by capturing the Lua call stack,
- * including source file names, line numbers, and the relevant line of code (if available).
- * The error message is then pushed to the Lua stack and raised as a Lua error.
+ * Core:
+ *   - The Lua call stack is walked to gather context for each frame - source file, line number,
+ *     and the line of code itself - and the result is concatenated with `err_str`, pushed, and
+ *     raised through `lua_error`.
+ *   - `lua_error` does not return, so nothing after a call to this runs.
  *
- * @param L       The Lua state.
- * @param err_str The error message to include in the error output.
+ * Detail:
+ *   - Where the source file cannot be read or the line number is invalid, `"<unknown>"` stands in.
  *
- * @details
- * The function walks the Lua call stack to gather context information for each stack frame,
- * such as the source file, line number, and the actual line of code where the error occurred.
- * The resulting error message is a concatenation of the stack trace and the provided error string.
- * The error is then pushed to the Lua stack and raised using `lua_error`.
- *
- * @note
- * If the source file cannot be read or the line number is invalid, "<unknown>" is used as a placeholder.
+ * @param L       Lua state.
+ * @param err_str The message to report.
+ * @param sloc    C++ source location of the call site, defaulted.
  *
  * @see lua_Debug, lua_getstack, lua_getinfo, lua_error
+ *
+ * @date 2026-09-08 06:54
  */
 void luaw_push_error(lua_State *L, const std::string& err_str,
         const std::source_location sloc = std::source_location::current());
 
 /*!
- * [INTERNAL] Catches C++ exceptions and propagates them as Lua errors.
+ * [INTERNAL]
+ * @brief Catches C++ exceptions inside a Lua C function wrapper and turns them into Lua errors.
  *
- * This function is designed to be called from Lua C function wrappers to handle
- * exceptions thrown during the execution of wrapped C++ functions. It catches
- * exceptions of various types and converts them into Lua errors, ensuring that
- * exceptions do not escape into Lua and break the Lua state.
+ * Core:
+ *   - Keeps exceptions from escaping into Lua, which would corrupt the Lua state. Meant to be
+ *     called from the `catch` of a wrapper's `try`/`catch`.
+ *   - `fkyaml::exception`, `vc::except_t` and `std::exception` are converted to Lua errors with
+ *     descriptive messages. `vc::except_t` is caught ahead of the generic `std::exception`, so it
+ *     is reported as `"Invalid call: <message>"` rather than `"std::exception: <message>"`.
+ *   - Anything else is re-thrown, on the assumption that it is already a Lua error in flight.
  *
  * @param L The Lua state.
- * @return int Always returns 0, as the function either propagates a Lua error or re-throws.
  *
- * @details
- * - TODO: callback can be called here, to check if the error can be handled by the user
- * - Catches `fkyaml::exception`, `std::exception`, vc::except_t, converting them to Lua errors with
- * descriptive messages.
- * - Re-throws any other exceptions, which are assumed to be Lua errors already.
+ * @return Always `0`: the function either raises a Lua error or re-throws.
  *
- * @note
- * This function is intended to be used in `try`/`catch` blocks within Lua C function wrappers.
- * It ensures that C++ exceptions are safely converted to Lua errors, preventing Lua state corruption.
- *
+ * @date 2026-09-08 06:54
  */
 int luaw_catch_exception(lua_State *L);
 
 /*!
- * [INTERNAL] Retrieves the `vc::virt_state_t` pointer stored in the Lua registry from inside the
- * LUA State. L references vs and vice-versa.
+ * [INTERNAL]
+ * @brief Retrieves the `vc::virt_state_t` pointer stored in the Lua registry.
+ *
+ * Core:
+ *   - `L` references `vs` and `vs` references `L`, so either can be recovered from the other; this
+ *     is the direction from inside a Lua state.
  *
  * @param L The Lua state.
- * @return vc::virt_state_t* Pointer to the `virt_state_t` object stored in the Lua registry.
  *
+ * @return Pointer to the `virt_state_t` object stored in the Lua registry.
+ *
+ * @date 2026-09-08 06:54
  */
 virt_state_t *luaw_get_virt_state(lua_State *L);
 
 /*!
- * [INTERNAL] Retrieves the `lua_state` pointer stored in the vc::virt_state_t object. L
- * references vs and vice-versa.
+ * [INTERNAL]
+ * @brief Retrieves the `lua_State` pointer stored in a `vc::virt_state_t`.
+ *
+ * Core:
+ *   - The other direction of @ref luaw_get_virt_state: `L` references `vs` and `vs` references
+ *     `L`.
  *
  * @param vs The virt_state_t pointer.
- * @return lua_State* Pointer to the Lua state object stored in the virtual state.
  *
+ * @return Pointer to the Lua state object stored in the virtual state.
+ *
+ * @date 2026-09-08 06:54
  */
 lua_State *luaw_get_lua_state(virt_state_t *vs);
 
 /*!
- * [INTERNAL] Registers a type-erased, memcpy-based accessor for a trivially-copyable member -
- * the low-level primitive `register_trivially_copyable_member<T, member_ptr>()`/
- * `VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER` build on top of.
+ * [INTERNAL]
+ * @brief Registers a type-erased, memcpy-based accessor for a trivially-copyable member.
  *
- * Stores `copy_fn` (expected to memcpy the member's bytes into the caller-supplied destination
- * buffer) under `type`/`member_name`, for later lookup by `resolve_memb_data()` (which
- * `resolve_memb<T>()`/the `!copy` YAML tag use). Participates in the same base->derived member
- * propagation as `set_lua_class_member()`/`set_class_member_setter()`: it writes into every type
- * currently in `inheritance_table[type]`, so the same registration-order rule applies -
- * `register_inheritance()` must be called before this for the member to reach a derived type too.
+ * Core:
+ *   - The low-level primitive that `register_trivially_copyable_member<T, member_ptr>()` and
+ *     @ref VC_REGISTER_TRIVIALLY_COPIABLE_MEMBER are built on.
+ *   - `copy_fn` is stored under `type` and `member_name`, to be found later by
+ *     `resolve_memb_data()`, which is what `resolve_memb<T>()` and the `!copy` YAML tag use.
+ *   - It takes part in the same base to derived propagation as `set_lua_class_member()` and
+ *     `set_class_member_setter()`: it writes into every type currently in
+ *     `inheritance_table[type]`. The same ordering rule therefore applies -
+ *     `register_inheritance()` must have been called first for the member to reach a derived type.
  *
  * @param vs           Virtual state context.
  * @param type         The enumerated type of the C++ class the member belongs to (must be
- *                      registered with @ref VIRT_COMPOSER_REGISTER_TYPE).
+ *                     registered with @ref VIRT_COMPOSER_REGISTER_TYPE).
  * @param member_name  The name of the member, as referenced from a YAML `!copy` tag's `member`
- *                      field.
- * @param tid          `std::type_index` of the member's actual C++ type - checked against the
- *                      caller's requested `T` at `resolve_memb<T>()` time, so a mismatch is
- *                      caught rather than silently memcpy'd into the wrong-sized destination.
- * @param copy_fn      Type-erased copy function: given the source object and a destination
- *                      buffer/size, copies the member's raw bytes into it.
+ *                     field.
+ * @param tid          `std::type_index` of the member's actual C++ type. It is checked against the
+ *                     caller's requested `T` at `resolve_memb<T>()` time, so a mismatch is caught
+ *                     rather than silently memcpy'd into a wrong-sized destination.
+ * @param copy_fn      Type-erased copy function: given the source object and a destination buffer
+ *                     with its size, copies the member's raw bytes into it.
+ *
+ * @date 2026-09-08 06:54
  */
 void set_trivial_copy_member(virt_state_t *vs, object_type_e type, const char *member_name,
         std::type_index tid, std::function<void(vc::object_t *, void *, size_t)> copy_fn);
 
 /*!
- * [INTERNAL] Registers a Lua-accessible member (function or object) for a C++ class type.
+ * [INTERNAL]
+ * @brief Registers a Lua-accessible member, function or object, for a C++ class type.
  *
- * This function binds a C++ class member (function or variable) to Lua, making it callable or
- * accessible from Lua scripts. The member is associated with the specified `type` and `member_name`.
+ * Core:
+ *   - Binds the member to `type` under `member_name`, which is what makes it callable or readable
+ *     from a Lua script.
+ *   - Propagates to every type currently linked to `type` by `register_inheritance()`, once, at
+ *     the moment of this call.
  *
  * @param vs            Virtual state context.
- * @param type          The enumerated type of the C++ class (must be registered with 
- *                      @refVIRT_COMPOSER_REGISTER_TYPE).
+ * @param type          The enumerated type of the C++ class (must be registered with
+ *                      @ref VIRT_COMPOSER_REGISTER_TYPE).
  * @param member_name   The name of the member as it will be exposed in Lua.
  * @param fn            The Lua C function wrapper for the member.
- * @param member_type   The type of member (@ref luaw_member_e: function or object).
+ * @param member_type   The kind of member (@ref luaw_member_e: function or object).
+ *
+ * @date 2026-09-08 06:54
  */
 void set_lua_class_member(virt_state_t *vs, object_type_e type, const char *member_name,
         lua_CFunction fn, luaw_member_e member_type);
 
 /*!
- * [INTERNAL] Registers a setter function for a Lua-accessible member object of a C++ class type.
+ * [INTERNAL]
+ * @brief Registers the setter for a Lua-accessible member object of a C++ class type.
  *
- * This function binds a setter for a C++ class member variable, allowing its value to be modified
- * from Lua. The setter is associated with the specified `type` and `member_name`.
+ * Core:
+ *   - Binds the setter to `type` under `member_name`, which is what makes the member assignable
+ *     from Lua rather than only readable.
+ *   - Propagates to every type currently linked to `type` by `register_inheritance()`, once, at
+ *     the moment of this call.
  *
  * @param vs            Virtual state context.
- * @param type          The enumerated type of the C++ class (must be registered with 
+ * @param type          The enumerated type of the C++ class (must be registered with
  *                      @ref VIRT_COMPOSER_REGISTER_TYPE).
  * @param member_name   The name of the member as it will be exposed in Lua.
- * @param fn            The Lua C function wrapper for setting the member's value.
+ * @param fn            The Lua C function implementing the assignment.
+ *
+ * @date 2026-09-08 06:54
  */
 void set_class_member_setter(virt_state_t *vs, object_type_e type, const char *member_name,
         lua_CFunction fn);
 
 /*!
- * [INTERNAL] Raw bookkeeping behind `register_inheritance<T,U>()` - records `derived` as
- * inheriting `base`'s registered members, with no compile-time relationship check.
+ * [INTERNAL]
+ * @brief Raw bookkeeping behind `register_inheritance<T,U>()`: records `derived` as inheriting
+ * `base`'s registered members.
  *
- * `register_inheritance<T,U>()` is what actually enforces `std::is_base_of_v<T,U>` (at compile
- * time, via its `requires` clause) before figuring out which of `T`/`U` is genuinely the base and
- * calling this function with `base`/`derived` in the right order - this function itself performs
- * no such check, so calling it directly can link two `object_type_e` values that have no real C++
- * relationship at all. See `register_inheritance()`'s doc for the full behavior this produces
- * (including the registration-order and non-transitivity caveats) - this function is the same
- * mechanism, just without the type safety.
+ * Core:
+ *   - No relationship check is performed here, so calling this directly can link two
+ *     `object_type_e` values with no real C++ relationship at all.
+ *   - `register_inheritance<T,U>()` is what enforces `std::is_base_of_v<T,U>` at compile time
+ *     through its `requires` clause, works out which of `T` and `U` is genuinely the base, and
+ *     calls this with the two in the right order.
+ *   - The behaviour produced is otherwise identical, registration-order and non-transitivity
+ *     caveats included. See @ref register_inheritance for those.
  *
  * @param vs      Pointer to the virtual state (`virt_state_t`).
  * @param base    The type whose members should also become visible on `derived`.
  * @param derived The type that should inherit `base`'s members.
+ *
+ * @date 2026-09-08 06:54
  */
 void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type_e derived);
 
 /*!
  * @brief Finds a previously-named object by name, without casting it to any particular type.
  *
- * Looks `name` up in the virt_state_t's name table (the same lookup `get_ref<T>()` uses
- * internally) and returns it as a plain `ref_t<object_t>` - no `to_related<T>()` cast applied, so
- * this never throws on a type mismatch the way `get_ref<T>()` can. Useful when you don't know (or
- * don't care about) the object's concrete type, or want to do your own type check/cast.
+ * Core:
+ *   - Uses the same name-table lookup `get_ref<T>()` does, and hands back a plain
+ *     `ref_t<object_t>` with no `to_related<T>()` cast applied.
+ *   - Because there is no cast, this never throws on a type mismatch the way `get_ref<T>()` can.
+ *     Use it when the concrete type is unknown or irrelevant, or when the check and cast should be
+ *     done by hand.
  *
  * @param vs    Pointer to the virtual state (`virt_state_t`).
  * @param name  The name the object was registered under.
@@ -1610,6 +1824,8 @@ void set_base_derived_relation(virt_state_t *vs, object_type_e base, object_type
  * @return A `ref_t<object_t>` to the object, or `nullptr` if no object is registered under `name`.
  *
  * @see get_ref
+ *
+ * @date 2026-09-08 06:54
  */
 ref_t<vc::object_t> get_ref_base(virt_state_t *vs, const std::string& name);
 
@@ -1621,40 +1837,46 @@ ref_t<T> get_ref(virt_state_t *vs, const std::string& name) {
 }
 
 /*!
- * [INTERNAL] Type-erased coroutine behind `resolve_memb<T>()` - does the actual dependency wait,
- * type check, and memcpy.
+ * [INTERNAL]
+ * @brief Type-erased coroutine behind `resolve_memb<T>()`: does the dependency wait, the type
+ * check and the memcpy.
  *
- * `resolve_memb<T>()` is a thin wrapper around this: it declares `T ret;` and calls this with
- * `&ret, sizeof(T), typeid(T)`. See `resolve_memb<T>()`'s doc for the full user-facing behavior
- * (suspend/resume ordering, registration requirements, error conditions) - this function is where
- * that's actually implemented, for callers that want to work with a raw destination
- * buffer/size/type_index instead of a template parameter.
+ * Core:
+ *   - `resolve_memb<T>()` is a thin wrapper over this. It declares a `T ret;` and calls here with
+ *     `&ret, sizeof(T), typeid(T)`.
+ *   - This is the entry point for a caller that would rather work with a raw destination buffer,
+ *     size and `type_index` than with a template parameter.
+ *   - The user-facing behaviour - suspend and resume ordering, registration requirements, error
+ *     conditions - is documented on @ref resolve_memb; this is where it is implemented.
  *
  * @param vs        Pointer to the virtual state (`virt_state_t`).
- * @param obj_name  Name of the source object to copy the member from (waits for it to be built if
- *                  it isn't yet).
- * @param memb_name Name of the member to copy, as registered via `set_trivial_copy_member()`.
+ * @param obj_name  Name of the source object to copy the member from. Waits for it to be built if
+ *                  it has not been yet.
+ * @param memb_name Name of the member to copy, as registered through `set_trivial_copy_member()`.
  * @param dst       Destination buffer to memcpy the member's bytes into.
- * @param sz        Size, in bytes, of `dst` (and of the copy).
- * @param tid       Expected `std::type_index` of the member - must match what it was registered
+ * @param sz        Size in bytes of `dst`, and of the copy.
+ * @param tid       Expected `std::type_index` of the member. Must match what it was registered
  *                  with, or this throws.
  *
- * @throws vc::except_t if `memb_name` was never registered for `obj_name`'s type, or if `tid`
- *         doesn't match the registered member's type.
+ * @throws vc::except_t if `memb_name` was never registered for `obj_name`'s type, or if `tid` does
+ *         not match the registered member's type.
+ *
+ * @date 2026-09-08 06:54
  */
 co::task_t resolve_memb_data(virt_state_t *vs, const std::string &obj_name,
         const std::string& memb_name, void *dst, size_t sz, std::type_index tid);
 
 /*!
- * [INTERNAL] Non-templated core of the dependency resolver.
+ * [INTERNAL]
+ * @brief Non-templated core of the dependency resolver.
  *
- * This struct provides the low-level functionality required by the parser to manage
- * object dependencies during configuration parsing. It is used internally by the
- * templated `depend_resolver_t` to handle waiting, checking, and retrieving dependencies.
+ * Core:
+ *   - Holds the low-level operations the parser needs to manage object dependencies while parsing
+ *     a configuration: marking a wait, checking whether a dependency exists, and retrieving it.
+ *   - Used by the templated `depend_resolver_t`, which supplies the typing on top. It is not meant
+ *     to be used directly outside the parser and dependency-resolution system.
  *
- * @note
- * This is an internal utility and should not be used directly outside the parser or
- * dependency resolution system.
+ * @date 2026-09-08 06:54
  */
 struct depend_resolver_internal_t {
     virt_state_t *vs;
@@ -1668,19 +1890,26 @@ struct depend_resolver_internal_t {
 };
 
 /*!
- * [INTERNAL] Awaitable that suspends the calling coroutine until an object named `required_depend`
+ * [INTERNAL]
+ * @brief Awaitable that suspends the calling coroutine until an object named `required_depend`
  * has been built, then resolves it to a `ref_t<T>`.
  *
- * The low-level mechanism `resolve_int()`/`resolve_float()`/`resolve_str()`'s `!ref` handling and
- * `resolve_obj<T>()` all build on: `await_ready()` checks whether the dependency is already
- * registered (via `depend_resolver_internal_t::internal_check_depend()`); if not, `await_suspend()`
- * parks the caller on the wait queue for that name (`internal_mark_wait()`) and yields to the next
- * runnable coroutine, to be resumed later by `mark_dependency_solved()` once an object with that
- * name is registered; `await_resume()` then looks the object up and casts it to `T` via
- * `to_related<T>()`, throwing `vc::except_t` if the resolved object isn't actually a `T`.
+ * Core:
+ *   - This is the low-level mechanism the `!ref` handling in `resolve_int()`, `resolve_float()`
+ *     and `resolve_str()`, and all of `resolve_obj<T>()`, are built on.
+ *   - `await_ready()` checks whether the dependency is already registered, through
+ *     `depend_resolver_internal_t::internal_check_depend()`.
+ *   - If it is not, `await_suspend()` parks the caller on the wait queue for that name
+ *     (`internal_mark_wait()`) and yields to the next runnable coroutine. It is resumed later by
+ *     `mark_dependency_solved()`, once an object with that name is registered.
+ *   - `await_resume()` then looks the object up and casts it to `T` through `to_related<T>()`,
+ *     throwing `vc::except_t` if the resolved object is not actually a `T`.
  *
  * @tparam T  The expected type of the resolved object.
+ *
  * @see resolve_obj, mark_dependency_solved
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename T>
 struct depend_resolver_t : depend_resolver_internal_t {
@@ -1779,13 +2008,17 @@ err_e add_lua_flag_mapping(virt_state_t *vs, const std::unordered_map<std::strin
 } 
 
 /*!
- * [INTERNAL] Template for converting Lua values to C++ types.
+ * [INTERNAL]
+ * @brief Template for converting a Lua value at a given stack index into a C++ type.
  *
- * Specializations of this template handle conversion of Lua values (at a given stack index)
- * to C++ types. Unsupported types will trigger a static assertion.
+ * Core:
+ *   - The conversions live in the specializations; the primary template exists to reject anything
+ *     unsupported with a static assertion rather than silently misconverting it.
  *
  * @tparam Param The C++ type to convert to.
  * @tparam index The Lua stack index of the value to convert.
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename Param, ssize_t index>
 struct luaw_param_t{
@@ -1979,11 +2212,16 @@ struct luaw_param_t<std::string, index> {
 };
 
 /*!
- * [INTERNAL] Helper template to remove `bm_t` wrappers from types.
+ * [INTERNAL]
+ * @brief Helper template that strips `bm_t` wrappers off a type.
  *
- * Used to normalize types for tuple/pair/vector specializations of `luaw_param_t`.
+ * Core:
+ *   - Used to normalize types for the tuple, pair and vector specializations of `luaw_param_t`,
+ *     which need the underlying type rather than the parsing marker.
  *
  * @tparam T The type to process.
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename T>
 struct de_bitmaptizize { using Type = T; }; 
@@ -2132,12 +2370,16 @@ concept is_vc_enum = requires(fkyaml::node n) {
 };
 
 /*!
- * [INTERNAL] Template for pushing C++ return values to Lua.
+ * [INTERNAL]
+ * @brief Template for pushing a C++ return value of type `T` onto the Lua stack.
  *
- * Specializations of this template handle pushing C++ values of type `T` to the Lua stack.
- * Unsupported types will trigger a static assertion.
+ * Core:
+ *   - The pushes live in the specializations; the primary template exists to reject anything
+ *     unsupported with a static assertion.
  *
  * @tparam T The C++ type to push to Lua.
+ *
+ * @date 2026-09-08 06:54
  */
 /* TODO: returners and parameters must be part of the interface because users need to be able to
 add their types */
@@ -2319,21 +2561,27 @@ inline int luaw_function_wrapper(lua_State *L) {
 }
 
 /*!
- * [INTERNAL] A Lua C function wrapper for calling C++ member functions from Lua.
+ * [INTERNAL]
+ * @brief Wraps a C++ member function as a `lua_CFunction`, converting arguments and return values
+ * automatically.
  *
- * This template generates a Lua-compatible C function that wraps a C++ member function,
- * automatically converting Lua arguments to C++ types and handling return values.
- * The first Lua argument is expected to be a userdata representing the object instance.
+ * Core:
+ *   - The first Lua argument is expected to be a userdata representing the object instance.
+ *   - Exceptions thrown by the wrapped member function are caught and turned into a Lua error.
+ *
+ * Detail:
+ *   - The parameter and return conversion itself happens in
+ *     `luaw_member_function_wrapper_impl()`; this is the try/catch around it.
  *
  * @tparam T          The type of the object instance.
  * @tparam member_ptr The member function pointer to wrap.
  * @tparam Params     The types of the parameters expected by the member function.
  *
- * @param L     The Lua state.
- * @return int  The number of values returned to Lua (0 for void, 1 otherwise).
+ * @param L The Lua state.
  *
- * @note Exceptions thrown by the wrapped member function are caught and turned into a Lua error -
- *       see luaw_member_function_wrapper_impl() for the actual parameter/return conversion.
+ * @return The number of values returned to Lua: 0 for void, 1 otherwise.
+ *
+ * @date 2026-09-08 06:54
  */
 template <typename T, auto member_ptr, typename ...Params>
 inline int luaw_member_function_wrapper(lua_State *L) {

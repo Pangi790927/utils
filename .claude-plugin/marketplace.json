@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "pangi-utils",
+  "description": "Everything AI-related kept alongside Pangi's C++ utils library: skills, templates and worked examples, carried between machines as a plugin.",
+  "owner": {
+    "name": "Andrei Pangratie",
+    "email": "andrpangr@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "pangi-ai",
+      "description": "Working conventions, templates and real cases for AI-assisted work, kept in the repo they came from and installed anywhere.",
+      "author": {
+        "name": "Andrei Pangratie"
+      },
+      "category": "workflow",
+      "source": "./ai"
+    }
+  ]
+}
