@@ -68,7 +68,7 @@ struct lua_vector_t : public std::vector<T> {
     }
 };
 
-/*  ---------------------------------------------------------------------------------------------
+/*  ------------------------------------------------------------------------------------------------
     type_id_static(): WHY IT IS DECLARED HERE AND DEFINED SOMEWHERE ELSE
 
     Both templates below declare
@@ -111,7 +111,7 @@ struct lua_vector_t : public std::vector<T> {
     function, so the first use of that instantiation fails to LINK with an undefined reference
     naming `wref_t<your_type>::type_id_static()`. That is a worse error message than a compile
     error and a much better one than a wrong answer at runtime.
-    --------------------------------------------------------------------------------------------- */
+------------------------------------------------------------------------------------------------- */
 
 /*! wref_t<T> - a weak, Lua-creatable reference to a T (T must derive from vc::object_t). Doesn't
 keep the target alive - get_obj() returns an empty ref_t<T> if the target's already gone, instead of
