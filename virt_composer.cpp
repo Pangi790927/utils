@@ -485,7 +485,7 @@ static co::task<vc::ref_t<vc::object_t>> init_lua_script(vc::virt_state_t *vs,
         const std::string& name, fkyaml::node& node)
 {
     if (!(node.contains("m_source") || node.contains("m_source_path"))) {
-        DBG("lua-script must be a node that has either m_source or m_source_path")
+        DBG("lua-script must be a node that has either m_source or m_source_path");
         co_return nullptr;
     }
 
@@ -783,6 +783,19 @@ static int luaopen_vc(lua_State *L) {
         /* params: 1.usrptr -> returns: 1.string */
         lua_pushcfunction(L, [](lua_State *L) {
             auto obj = get_object_from_lua(L, -1);
+            /* A RELEASED OBJECT IS NOT A CRASH. get_object_from_lua answers null whenever the box
+            no longer holds anything - force_release_ref() does exactly that while leaving the
+            userdata and this metatable in place - so a Lua handle can outlive its object and be
+            used afterwards. Before this, every such use dereferenced null: an 0xC0000005 with no
+            Lua error, no log line, and the window simply gone.
+
+            THE ONE METAMETHOD HERE THAT CANNOT ANSWER NIL. Lua raises "'__tostring' must return a
+            string" if this hands back anything else, so a dead object gets a readable marker
+            rather than the nil its siblings return. */
+            if (!obj) {
+                lua_pushstring(L, "<released vc object>");
+                return 1;
+            }
             lua_pushstring(L, obj->to_string().c_str());
             return 1;
         });
@@ -792,6 +805,22 @@ static int luaopen_vc(lua_State *L) {
         lua_pushcfunction(L, [](lua_State *L) {
             // DBG("__index: %d", lua_gettop(L));
             auto obj = get_object_from_lua(L, -2);
+            /* READING A MEMBER OF A RELEASED OBJECT YIELDS NIL - see __tostring above for what
+            makes obj null and why this is reachable from ordinary Lua.
+
+            NIL RATHER THAN AN ERROR, on request: "return null in that case, not throw". It reads
+            the way Lua already reads - an absent field is nil, and code that goes on to use the
+            result fails where it uses it, with a Lua error naming that line, rather than being
+            stopped here with a message about an internal lifetime. Raising would also make the
+            defensive `if x then` idiom impossible, since the test itself would throw.
+
+            This was found by the bar-bracket crash in math_writer, 2026-09-11: Lua held a node
+            from before a tree rebuild, indexed it afterwards, and the process died with no
+            diagnostic at all. */
+            if (!obj) {
+                lua_pushnil(L);
+                return 1;
+            }
             const char *member_name = lua_tostring(L, -1); /* an const char *, ok on unwind */
 
             auto vs = luaw_get_virt_state(L);
@@ -825,6 +854,13 @@ static int luaopen_vc(lua_State *L) {
         /* params: 1.usrptr, 2.key, 3.value  */
         lua_pushcfunction(L, [](lua_State *L) {
             auto obj = get_object_from_lua(L, -3);
+            /* WRITING TO A RELEASED OBJECT IS DROPPED - same null as __index above, and the same
+            ruling not to throw. A write returns no values, so "return nil" has no meaning here;
+            doing nothing is its analogue. The write cannot be honoured either way - there is
+            nothing left to write to - and the alternative was dereferencing null. */
+            if (!obj) {
+                return 0;
+            }
             const char *member_name = lua_tostring(L, -2); /* an const char *, ok on unwind */
 
             auto vs = luaw_get_virt_state(L);

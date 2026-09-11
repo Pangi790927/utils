@@ -65,14 +65,23 @@ inline std::string path_get_module_path() {
             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)&path_get_module_path, &mod);
     if (ret == 0)
         mod = NULL;
+    /* NOTHING IS CLOSED HERE, and both of the CloseHandle(mod) calls that used to be are gone.
+
+    Two independent reasons, either one sufficient. An HMODULE is a module BASE ADDRESS, not a
+    kernel handle - the call that releases one is FreeLibrary, and handing a base address to
+    CloseHandle passes it something that was never a handle. And GET_MODULE_HANDLE_EX_FLAG_
+    UNCHANGED_REFCOUNT, above, means no reference was taken in the first place: that flag exists
+    precisely so the caller has nothing to release, by any call.
+
+    WHY IT LOOKED HARMLESS FOR SO LONG: Windows only raises STATUS_INVALID_HANDLE for a bad close
+    when a debugger is attached. Without one it is swallowed, so this fired on every run and was
+    never seen. With one it stops the process before main() finishes - found 2026-09-11 while
+    trying to attach cdb to math_writer, which could not get past startup until the exception was
+    explicitly ignored. That is the real cost: it made the program undebuggable.
+    @date 2026-09-11 15:10 */
     char path_buff[1024] = {0};
-    if (!(ret = GetModuleFileNameExA(GetCurrentProcess(), mod, path_buff, sizeof(path_buff)))) {
-        if (mod)
-            CloseHandle(mod);
+    if (!(ret = GetModuleFileNameExA(GetCurrentProcess(), mod, path_buff, sizeof(path_buff))))
         return "";
-    }
-    if (mod)
-        CloseHandle(mod);
     return path_buff;
 #elif defined(UTILS_OS_LINUX)
     std::string mod_path;

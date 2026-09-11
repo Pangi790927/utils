@@ -47,7 +47,27 @@ inline uint64_t logger_get_time() {
 
 /* TODO: change this mess, keep the printf-style but make it more clear and add configuration flags:
 for example to enable printing the time, thread id, proc id, etc. */
+/*  do/while(0), and the macro does NOT end in a semicolon - so DBG(x); is exactly ONE
+statement and the caller's own ";" is the one that terminates it.
+
+It used to be a bare `(...)();` INCLUDING that semicolon, which made every DBG(x); two statements:
+the call, then an empty one. That is invisible almost everywhere and vicious in the one place it is
+not - an unbraced if/else:
+
+    if (cond)
+        DBG("a");   // if takes the call; the stray ";" is a second statement...
+    else            // ...so this else has no if. C2181 on MSVC.
+
+Found 2026-09-10 writing main.cpp's Ctrl+R reload, where it was a compile error. In a context that
+still parsed it would be worse: an else silently binding to the wrong if.
+
+Every call site already writes its own ";" (stated as a rule, 2026-09-10), so removing the one
+baked into the macro changes nothing for any of them. The lambda is kept as-is inside the wrap -
+it returns void, so no call site could ever have used DBG as an expression anyway: the old trailing
+";" made that a syntax error already.
+@date 2026-09-10 00:20 */
 #define DBG_RAW(fmt, dbg_filename_, dbg_line_, dbg_funcname_, ...)                                 \
+do {                                                                                               \
 ([&](const char *dbg_filename, int dbg_line, const char *dbg_funcname) {                           \
     std::vector<char> logger_buff;                                                                 \
     uint64_t time_ms = logger_get_time();                                                          \
@@ -56,7 +76,8 @@ for example to enable printing the time, thread id, proc id, etc. */
     snprintf(logger_buff.data(), logger_buff.size(), "[%" PRIu64 "][%d] %s:%d %s() :> " fmt "\n", \
             time_ms, getpid(), dbg_filename, dbg_line, dbg_funcname, ##__VA_ARGS__);               \
     logger_log_message(logger_buff.data());                                                        \
-}(dbg_filename_, dbg_line_, dbg_funcname_));
+}(dbg_filename_, dbg_line_, dbg_funcname_));                                                       \
+} while (0)
 
 #define DBG(fmt, ...) DBG_RAW(fmt, __FILE__, __LINE__, __func__, ##__VA_ARGS__)
 
@@ -116,16 +137,33 @@ inline std::string windows_get_last_error_as_string() {
     return message + "[" + std::to_string(err_msg_id) +"]";
 }
 
+/* No trailing ";" - see DBG_RAW. The linux DBGE above never had one; this one did, which would
+have left DBGE(x); as two statements and undone the fix on the platform it was found on. */
 # define DBGE(fmt, ...)\
-        DBG("[SYS] " fmt "[err: %s]", ##__VA_ARGS__, windows_get_last_error_as_string().c_str());
+        DBG("[SYS] " fmt "[err: %s]", ##__VA_ARGS__, windows_get_last_error_as_string().c_str())
 
 #endif /* end windows */
 
+/*  do/while(0) for the same reason DBG_RAW has one: this expands to a STATEMENT, and a bare
+`if (...) { ... }` is one that an unbraced else can bind to wrongly.
+
+    if (ok)
+        ASSERT_FN(x);   // the outer if takes this if-statement as its body...
+    else                // ...and the stray ";" leaves this else with no if.
+
+The `return` still returns from the ENCLOSING function - do/while(0) is a loop only to the
+parser, and return is not break. That is the whole reason the idiom is usable here at all.
+
+Checked before wrapping: every ASSERT_FN/ASSERT_RET call site in this project already ends in
+a ";", so the macro no longer supplying one changes nothing for them (2026-09-10).
+@date 2026-09-10 00:15 */
 #define ASSERT_RET(err_ret, fn_call)\
-if (intptr_t(fn_call) < 0) {\
-    DBGE("FAILED: " #fn_call);\
-    return (err_ret);\
-}
+do {\
+    if (intptr_t(fn_call) < 0) {\
+        DBGE("FAILED: " #fn_call);\
+        return (err_ret);\
+    }\
+} while (0)
 
 #define ASSERT_FN(fn_call) ASSERT_RET(-1, fn_call)
 
