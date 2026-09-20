@@ -9,9 +9,6 @@
  *   - Object types, their members and their functions are declared in C++ and registered with the
  *     parser. Once registered they are reachable from both YAML configs and Lua scripts, under the
  *     names they were registered with.
- *   - All registrations must live in a single translation unit. Type ids are handed out by
- *     compile-time counting, so registrations split across translation units produce ids that do
- *     not agree with each other.
  *   - Only the declarations need to be centralised. The implementations behind those functions may
  *     sit in any .cpp file, which is what keeps the rest of a codebase modular; virt_composer.cpp
  *     is exactly that, compiled and linked separately.
@@ -39,7 +36,19 @@
 
 /* TODO: all yaml nodes should be able to define dependencies, those dependencies would be
 especially usefull for things like shaders, lua scripts, expressions, etc. This would in a sense
-create a strict ordering that and I should check if it can create cycles (deadlocks). */
+create a strict ordering that and I should check if it can create cycles (deadlocks).
+
+Plugins want the same thing and want it more, because what a plugin brings is not an object another
+node can wait for. A node's `m_type` is resolved while that node is built and build_object() throws
+on one it does not know; a `vc::c_function_t` with `m_source: "[INTERNAL]"` is looked up while it
+is built and create() throws when the name is not registered yet. Neither can wait the way an
+unresolved `!ref` waits, so a config that loads a plugin and uses what the plugin brought, in the
+same file, is right or wrong according to the order its nodes happen to be built in.
+
+Both failures are loud - parse_config() answers an error and names what it did not know - so this
+costs a config that refuses to load rather than one that loads wrongly. Until a node can say what
+it depends on, the way around it is to load plugins in a pass of their own, before the config that
+uses them is parsed. 2026-09-20 18:40 */
 
 #include  <typeindex>
 
@@ -49,34 +58,75 @@ create a strict ordering that and I should check if it can create cycles (deadlo
 #include "minilua.h"
 #include "demangle.h"
 
-
 #if defined(_MSC_VER) && !defined(ssize_t)
 using ssize_t = ptrdiff_t;
 #endif
 
-/*! TODO: this:
- * Something like: in .so you have a int register_meta(vc::virt_state_t *vs) function like usual,
- * but it will register it's types to the vs implementation, expanding it.
- * This needs to be done.
- */
 /*!
- * @def VIRT_COMPOSER_UID_START_OFFSET
- * @brief Reserves a private type-id range for a dynamically loaded library, so that its registered
- * types cannot collide with the host's.
+ * @def VIRT_COMPOSER_ABI
+ * @brief Identifies the build of virt_composer a translation unit was compiled against.
  *
  * Core:
- *   - Has no effect at present. Nothing reads `virt_tag_t::off`, the value this macro feeds, and
- *     `compile_unique_id<virt_tag_t>()` starts counting from 0 whatever this is set to.
+ *   - A plugin bakes this in when it is compiled and reports it back through `get_version()`. The
+ *     host compares it with its own and refuses a plugin whose value differs.
+ *   - It is written by hand and raised by hand. Anything that changes what crosses between a host
+ *     and a plugin - `object_t`'s layout, a signature, the meaning of a type id - wants it raised
+ *     in the same edit, because nothing else will notice.
+ *
+ * @warning A build may override it, and only a test has any business doing so: it is the one way
+ *       to produce a plugin that disagrees with its host on purpose, and the refusal in
+ *       `load_plugin()` cannot be exercised otherwise. Overriding it anywhere else defeats the
+ *       check rather than passing it - a plugin told to claim the host's version still runs
+ *       against a library it was not built for, which is the whole of what this guards against.
+ *       Rebuild the plugin instead.
+ * @warning Forgetting to raise it is caught nowhere in the library. A plugin built against an
+ *       older header passes the check and runs against a library it no longer agrees with, which
+ *       is the failure this macro exists to prevent. The test suite watches for that - see
+ *       `tests/virt_composer/021-003-abi_hash.cpp`, which hashes the files whose contents cross
+ *       the boundary and fails when this no longer matches them. Deriving the value from the
+ *       source was tried and dropped: `__TIMESTAMP__` written in a header answers for the
+ *       translation unit's main file rather than for the header, so it compared two unrelated
+ *       source files and refused every honest plugin.
+ *
+ * @see get_version, load_plugin
+ *
+ * @date 2026-09-20 18:45
+ */
+#ifndef VIRT_COMPOSER_ABI
+# define VIRT_COMPOSER_ABI  "0.2-4bf389f4"
+#endif
+
+/*!
+ * @def VIRT_COMPOSER_PLUGIN_COUNTERS
+ * @brief Marks a translation unit as a plugin's, so that it counts its types without publishing
+ * the answer.
+ *
+ * Core:
+ *   - Left undefined, the translation unit is a host's: `virt_composer_end.h` publishes the type
+ *     count in `VIRT_TYPE_CNT` and raises `VIRT_TYPES_INITIALIZED`, which is what `create_state()`
+ *     reads and what it refuses to run without.
+ *   - Defined, the translation unit is a plugin's: the counting still happens and still closes the
+ *     registrations, but nothing is published. A plugin answers for its own types through
+ *     `plugin_type_cnt()` instead, and the host asks it there.
+ *   - Only whether it is defined matters, not what it is defined to. It must be defined before
+ *     this header is included.
  *
  * Detail:
- *   - It exists for the ".so registers its own types" plan in the TODO directly above: such a
- *     library would take a range of its own, e.g. `lib-id << 24`, rather than counting up from the
- *     same 0 as its host.
+ *   - Both published variables are `inline`, so a plugin resolving this library's symbols from its
+ *     host resolves those two as well - they are the host's, not copies. A plugin that published
+ *     its own count would therefore overwrite the host's while it loads, which happens before the
+ *     host can check anything about the plugin, its version included. Publishing nothing is what
+ *     avoids that.
+ *   - Publishing nothing rather than hiding the host's symbols from the plugin: a hidden symbol
+ *     would give the plugin a second, zero-valued copy, and a read would quietly answer 0 instead
+ *     of the host's count.
  *
- * @date 2026-09-08 06:54
+ * @see load_plugin, VIRT_COMPOSER_REGISTER_PLUGIN_TYPE
+ *
+ * @date 2026-09-20 17:14
  */
-#ifndef VIRT_COMPOSER_UID_START_OFFSET
-# define VIRT_COMPOSER_UID_START_OFFSET 0
+#ifndef VIRT_COMPOSER_PLUGIN_COUNTERS
+// Nothing here, this is only for documentation purposes
 #endif
 
 /*!
@@ -115,6 +165,7 @@ using ssize_t = ptrdiff_t;
 # define VIRT_COMPOSER_ENABLE_LUA_OS 0
 #endif
 
+
 /* TODO: VIRT_COMPOSER_ENABLE_LUA_IO/_OS are currently a single compile-time, process-wide switch -
 we may want Lua io/os access to be enabled per virt_state_t instead (so e.g. a "trusted" state and
 a "sandboxed" state can coexist in the same process) and/or toggleable at runtime rather than only
@@ -147,8 +198,45 @@ at compile time, for whichever of the two is already enabled via these macros. *
  * @date 2026-09-08 06:54
  */
 #define VIRT_COMPOSER_REGISTER_TYPE(type) \
-        constexpr virt_composer::object_type_e type{\
+        constexpr virt_composer::object_type_e type{ \
         virt_object::compile_unique_id<virt_composer::virt_tag_t>(), #type}
+
+
+/*!
+ * @def VIRT_COMPOSER_REGISTER_PLUGIN_TYPE(type)
+ * @brief Registers a plugin's object type, as a function answering the id rather than a constant.
+ *
+ * Core:
+ *   - Defines `type()`, which answers the `object_type_e` the object inheriting `vc::object_t` is
+ *     expected to return from `type_id()` and `type_id_static()`. It is called, not read:
+ *     `VC_TYPE_FOO()` where a host's type would be written `VC_TYPE_FOO`.
+ *   - The id it answers is `_type_offset` plus an index counted under
+ *     `virt_composer::plugin_tag_t`. The plugin's translation unit must define `_type_offset`, and
+ *     one that does not fails to link, so the offset cannot be left out quietly.
+ *   - It answers correctly only once the host has set `_type_offset`, which `load_plugin()` does
+ *     before it lets the plugin register. Read before that, every id is its bare index and
+ *     collides with the host's built-in types.
+ *   - It also defines `type##_local`, the index on its own, so two types whose names differ only
+ *     by that suffix collide.
+ *
+ * Detail:
+ *   - A function rather than a constant precisely because of the ordering above. A namespace-scope
+ *     constant is initialised while the shared object loads, which is before the host can hand
+ *     over an offset, so it would capture 0 and say nothing about it.
+ *   - `plugin_tag_t` counts from 0 independently of `virt_tag_t`, so a plugin's first type is its
+ *     index 0 and the offset needs no adjustment for the six types this header registers.
+ *
+ * @param type The enum name associated to a type to register as an enumerator.
+ *
+ * @see VIRT_COMPOSER_REGISTER_TYPE, plugin_tag_t, load_plugin
+ *
+ * @date 2026-09-20 16:07
+ */
+#define VIRT_COMPOSER_REGISTER_PLUGIN_TYPE(type) \
+        constexpr int type##_local = \
+                virt_object::compile_unique_id<virt_composer::plugin_tag_t>(); \
+        inline virt_composer::object_type_e type() { \
+            return virt_composer::object_type_e{_type_offset + type##_local, #type}; }
 
 /*!
  * @def VC_REGISTER_MEMBER_OBJECT(vs, obj_type, memb)
@@ -280,6 +368,10 @@ enum err_e : int32_t {
     VC_ERROR_FAILED_CALL = -3, /*!< A Lua call failed - lua_pcall()/luaL_dostring() returned
                                      non-OK, e.g. from call_lua(), or from executing a
                                      lua_script_t's m_source/m_source_path content. */
+    VC_ERROR_REDEFINED = -4,   /*!< A name is already registered by someone else and was not taken
+                                     from them. The first claimant of a name keeps it, so this says
+                                     the registration did not happen, not that anything was
+                                     replaced. */
 };
 
 /*!
@@ -372,14 +464,43 @@ struct except_t : public std::exception {
  *
  * @date 2026-09-08 06:54
  */
-/* TODO: nothing currently enforces the @warning above - a ref_t<T> (especially ref_t<lua_object_t>,
-which holds a raw lua_State* directly) that outlives its virt_state_t is a live use-after-free, not
-a caught error. Worth investigating a real fix: a weak_ptr<virt_state_t> stashed alongside the raw
-lua_State* so a stale reference can be detected and turned into a thrown exception instead of UB,
-or some cheaper "generation counter"/invalidation scheme checked at each entry point
-(release()/capture()/push()/call() for lua_object_t; to_related<T>()/get_ref<T>() more generally). */
 struct virt_state_t;
-struct virt_tag_t { static constexpr int off = VIRT_COMPOSER_UID_START_OFFSET; };
+
+
+/*!
+ * @brief Counts the type ids belonging to a program itself, the ones registered with
+ * VIRT_COMPOSER_REGISTER_TYPE.
+ *
+ * Core:
+ *   - Serves two unrelated purposes: it is the tag `compile_unique_id` counts against, and the tag
+ *     that makes `object_type_e` a type of its own. Every id is an `object_type_e`, whichever
+ *     counter produced it.
+ *   - The count restarts at 0 in every translation unit, so the six types this header registers
+ *     always take 0 through 5, in a plugin exactly as in its host. Plugins depend on that
+ *     agreement, since those six are the host's and are shared with it.
+ *
+ * @see plugin_tag_t, VIRT_COMPOSER_REGISTER_TYPE, object_type_e
+ *
+ * @date 2026-09-20 16:07
+ */
+struct virt_tag_t {};
+
+
+/*!
+ * @brief Counts the type ids belonging to a plugin, separately from its host's.
+ *
+ * Core:
+ *   - A plugin's types count from 0 under this tag while the built-in types count from 0 under
+ *     `virt_tag_t`, so the two never interleave and a plugin's first type is its index 0. What
+ *     keeps a plugin's ids clear of its host's is the offset added on top, not this tag.
+ *   - Each shared object counts on its own, the counter being per translation unit, so one tag
+ *     serves every plugin.
+ *
+ * @see virt_tag_t, VIRT_COMPOSER_REGISTER_PLUGIN_TYPE, load_plugin
+ *
+ * @date 2026-09-20 16:07
+ */
+struct plugin_tag_t {};
 
 /*!
  * @brief The type-id enumeration for every object derived from `vc::object_t`.
@@ -660,7 +781,7 @@ struct c_function_t : public vc::object_t {
     c_function_t(vc::object_t::Private priv) : vc::object_t(priv) {}
     virtual ~c_function_t() { uninit(); }
 
-    static vc::ref_t<c_function_t> create(std::string name, std::string source);
+    static vc::ref_t<c_function_t> create(virt_state_t *vs, std::string name, std::string source);
 
     virtual vc::object_type_e type_id() const override { return VC_TYPE_C_FUNCTION; }
     static vc::object_type_e type_id_static() { return VC_TYPE_C_FUNCTION; }
@@ -672,19 +793,47 @@ struct c_function_t : public vc::object_t {
                 (void*)this, m_name, m_source);
     }
 
+    /*! Registers a callback under a name, for a `[INTERNAL]` c_function_t to bind later.
+     *
+     * This one fills the table belonging to the module it is called from, which is what the host
+     * wants: it may be called before any state exists. A plugin wants
+     * @ref add_plugin_internal_func instead. @date 2026-09-20 19:10 */
     static void add_internal_func(std::string name, std::function<int(lua_State *L)> fn) {
         c_function_t::internal_funcs[name] = fn;
+    }
+
+    /*! Registers a callback into the table the given state binds its `[INTERNAL]` names from.
+     *
+     * Core:
+     *   - The same as @ref add_internal_func except for which table it fills, and a plugin must
+     *     use this one.
+     *   - The table add_internal_func() fills is a static of this header. A plugin carrying its
+     *     own copy of this library therefore fills a table its host never reads, and every
+     *     `[INTERNAL]` name the plugin meant to serve goes missing. Where the two share one copy
+     *     the calls are the same, which is what makes the mistake invisible until it is ported.
+     *
+     * @date 2026-09-20 19:10 */
+    static void add_plugin_internal_func(virt_state_t *vs, std::string name,
+            std::function<int(lua_State *L)> fn);
+
+    /*! [INTERNAL] Answers the internal-function table belonging to the module this is compiled
+     * into, which is the one a state made by that module is created pointing at.
+     * @date 2026-09-20 19:10 */
+    static std::map<std::string, std::function<int(lua_State *L)>> *own_internal_funcs() {
+        return &internal_funcs;
     }
 
 private:
     std::function<int(lua_State *L)> _fn;
     static std::map<std::string, std::function<int(lua_State *L)>> internal_funcs;
 
-    /* TODO: */
+    /* TODO: unused placeholders for loading a function out of a shared object.
+    WARNING: load_plugin() answers that question now, and building on these would make a second
+    answer to it. They want deleting rather than filling in. 2026-09-20 19:10 */
     static std::map<std::string, void *> dll_handles;
     static std::map<std::string, std::function<int(lua_State *L)>> dll_funcs;
 
-    vc::ret_t init();
+    vc::ret_t init(virt_state_t *vs);
     vc::ret_t uninit() { return VC_ERROR_OK; }
 };
 
@@ -838,6 +987,54 @@ inline std::string to_string(const object_t& ref);
 std::shared_ptr<virt_state_t> create_state();
 
 /*!
+ * @brief Loads a plugin into a state, giving it a private range of type ids to register into.
+ *
+ * Core:
+ *   - Enlarges the state to fit the plugin's types, hands the plugin the offset of that range and
+ *     lets it register. Afterwards its types are constructible from YAML and usable from Lua like
+ *     any other.
+ *   - The plugin must export `plugin_get_version`, `plugin_type_cnt` and `plugin_register_meta`,
+ *     answering its own VIRT_COMPOSER_ABI rather than calling `get_version()`, which resolves to
+ *     the host's copy and would agree with the host whatever the plugin was built against. It must
+ *     have been built against this same virt_composer. A plugin built against another is refused.
+ *   - A plugin that has taken a range keeps it for the life of the process, and every state that
+ *     loads it afterwards places its types at that same range. So a plugin may serve any number of
+ *     states, and its types carry one id throughout.
+ *   - Asking a state for a plugin it already has, by any path that resolves to the same file, does
+ *     nothing and answers success. Anything that fails before the range is taken may be corrected
+ *     and asked for again; a plugin that took a range and then failed to register is not asked
+ *     again at all.
+ *   - A plugin does not load a plugin. Only whoever owns the state calls this, and a plugin that
+ *     called it would be reaching for bookkeeping that belongs to the host - which on a platform
+ *     where a plugin carries its own copy of this library is its own, and would hand out ranges
+ *     from a counter the host knows nothing about.
+ *   - `plugin_register_meta` therefore runs once per state, not once per process. A plugin that
+ *     does something there which is not about the state it is handed will find it happening again
+ *     for the next one.
+ *   - A state pays for the ranges it skips. Loading only the second of two plugins still grows the
+ *     state past the first's range, leaving rows nothing will ever index.
+ *
+ * @warning A plugin's types do not inherit from its host's. A plugin type may derive from a host
+ *       type in C++, but the base's members are not carried over to it, and nothing says so at the
+ *       point it fails - the member is simply absent in Lua.
+ * @warning A plugin must not keep a `vc::ref_t` in static or global storage. It outlives the state
+ *       it came from, and releasing it at process exit reaches through a dead `lua_State`.
+ *
+ * @param vs    The state to load into.
+ * @param path  The plugin's path, in any spelling that resolves to the file.
+ *
+ * @return 0 when the plugin is loaded and registered, -1 otherwise.
+ *
+ * @date 2026-09-20 08:35
+ */
+int load_plugin(virt_state_t *vs, const char *path);
+
+/*! [INTERNAL] Answers the internal-function table the given state binds its `[INTERNAL]` names
+ * from. It exists because virt_state_t is only declared in this header, so the inline bodies below
+ * cannot reach into one themselves. @date 2026-09-20 19:10 */
+std::map<std::string, std::function<int(lua_State *L)>> *state_internal_funcs(virt_state_t *vs);
+
+/*!
  * @brief Finds a previously-named object by name and casts it to the requested type.
  *
  * Core:
@@ -923,6 +1120,8 @@ inline T get_enum_val(fkyaml::node &node, const std::unordered_map<std::string, 
  */
 template <typename T>
 inline T get_enum_val(fkyaml::node &n);
+
+const char *get_version();
 
 /* Virt Composer - YAML Parser API
 ------------------------------------------------------------------------------------------------- */
@@ -1189,29 +1388,34 @@ co::task<T> resolve_memb(virt_state_t *vs, fkyaml::node& node);
  * `vc.<name>(...)` from any script.
  *
  * Core:
- *   - These live directly on the `vc` table with no receiver object, unlike
- *     @ref VC_REGISTER_MEMBER_FUNCTION and `luaw_register_member_function`, which register a
- *     function ON a specific object type (`obj:fn(...)`).
- *   - Safe to call more than once. Each call appends to whatever was already registered rather
- *     than replacing the previous set.
- *
- * Detail:
- *   - `create_state()` uses this itself to register `vc.create_object` internally; user code calls
- *     it the same way to add its own top-level functions.
+ *   - These sit on the `vc` table with no receiver, unlike @ref VC_REGISTER_MEMBER_FUNCTION, which
+ *     registers a function ON a type (`obj:fn(...)`).
+ *   - A function added here is callable the moment this returns and no config mentions it, where
+ *     one given to `add_internal_func()` stays a name in a registry until a yaml node binds it as
+ *     an object. Reach for this one unless the config must hold the function itself.
+ *   - Safe to call more than once; each call appends to what was registered before.
  *
  * @param vs           Pointer to the virtual state (`virt_state_t`).
  * @param vc_tab_funcs The functions to add, as `{name, lua_CFunction}` pairs (`luaL_Reg`). For a
- *                     C++ function with automatic argument/return conversion, wrap it with
- *                     `luaw_function_wrapper<...>` first rather than writing a raw `lua_CFunction`
- *                     by hand.
+ *                     C++ function whose arguments and result convert themselves, wrap it with
+ *                     `luaw_function_wrapper<...>` rather than writing a raw one.
  *
  * @return `VC_ERROR_OK`; this function currently has no failure path.
  *
- * @example
+ * @code
  * add_lua_tab_funcs(vs, {{"my_func", luaw_function_wrapper<&my_free_function, int, int>}});
- * // Lua: vc.my_func(1, 2)
  *
- * @date 2026-09-08 06:54
+ * // Raw, for what the wrapper cannot describe - here answering an object. push_vc_object()
+ * // leaves it on the stack and answers an error code, so the result count is ours to give.
+ * static int make_point(lua_State *L) {
+ *     auto obj = point_t::create(lua_tointeger(L, 1), lua_tointeger(L, 2));
+ *     vc::push_vc_object(L, obj->to_related<vc::object_t>());
+ *     return 1;
+ * }
+ * add_lua_tab_funcs(vs, {{"make_point", make_point}});   // Lua: vc.make_point(3, 4)
+ * @endcode
+ *
+ * @date 2026-09-20 18:40
  */
 err_e add_lua_tab_funcs(virt_state_t *vs, const std::vector<luaL_Reg>& vc_tab_funcs);
 
@@ -1538,7 +1742,6 @@ template <typename R, typename ...Args>
 std::pair<std::conditional_t<!std::is_void_v<R>, R, int>, err_e>
 call_lua(virt_state_t *vs, const char *function_name,
         Args&& ...args);
-
 
 /*! IMPLEMENTATION
  * 
@@ -2056,7 +2259,9 @@ struct luaw_param_t<vc::ref_t<T>, index> {
         if constexpr (std::is_same_v<T, lua_object_t>) {
             if (auto obj = get_object_from_lua(L, index);
                     obj && obj->type_id() == lua_object_t::type_id_static())
+            {
                 return obj->to_related<lua_object_t>();
+            }
             auto obj = lua_object_t::create();
             lua_object_t::capture_lua_object(L, obj, index);
             return obj;
@@ -2976,11 +3181,13 @@ lua_object_t::call(Args&& ...args)
 /* Builds a `c_function_t`, then calls `init()` immediately - see that function's doc for what
 `source` needs to be for this to actually succeed. Throws if `init()` fails, so a `c_function_t`
 never exists without a working `_fn` already bound. */
-inline vc::ref_t<c_function_t> c_function_t::create(std::string name, std::string source) {
+inline vc::ref_t<c_function_t> c_function_t::create(virt_state_t *vs, std::string name,
+        std::string source)
+{
     auto ret = std::make_shared<c_function_t>(vc::object_t::Private{type_id_static()});
     ret->m_name = name;
     ret->m_source = source;
-    if (ret->init() < 0)
+    if (ret->init(vs) < 0)
         throw vc::except_t("Failed c_function_t init");
     DBG("Created Lua Function: name: %s src: %s", name.c_str(), source.c_str());
     return ret;
@@ -3002,9 +3209,10 @@ inline int c_function_t::call(lua_State *L) {
 `m_source == "[INTERNAL]"` looks `m_name` up in `internal_funcs` (populated by
 `add_internal_func()`). Any other `m_source` falls into the `else` and fails - DLL/shared-object
 loading is planned (see the TODO below) but not implemented yet. */
-inline vc::ret_t c_function_t::init() {
-    if (m_source == "[INTERNAL]" && has(internal_funcs, m_name)) {
-        _fn = internal_funcs[m_name];
+inline vc::ret_t c_function_t::init(virt_state_t *vs) {
+    auto *funcs = state_internal_funcs(vs);
+    if (m_source == "[INTERNAL]" && has(*funcs, m_name)) {
+        _fn = (*funcs)[m_name];
         return VC_ERROR_OK;
     }
     /* TODO: DLL/SO source */

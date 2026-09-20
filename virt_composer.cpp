@@ -5,6 +5,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <set>
 
 #define LUA_IMPL
 
@@ -182,6 +183,33 @@ struct virt_state_t {
     std::vector<std::unordered_set<int>> inheritance_table =
             std::vector<std::unordered_set<int>>{VIRT_TYPE_CNT};
 
+    /*! The plugins already registered into this state, by real path.
+     *
+     * It lives here rather than in a table beside the plugins because a state is the thing it
+     * describes: a rebuilt state is a new object with an empty set, where anything keyed on a
+     * state's address would still be answering for a state that no longer exists.
+     * 2026-09-20 18:55 */
+    std::set<std::string> loaded_plugins;
+
+    /*! The internal-function table this state binds its `[INTERNAL]` names from.
+     *
+     * A pointer and not a table, because a plugin carrying its own copy of this library has an
+     * internal_funcs of its own. What matters is that the plugin and its host write into and read
+     * from the same one, and that one is whichever module made the state. 2026-09-20 19:10 */
+    std::map<std::string, std::function<int(lua_State *L)>> *internal_funcs =
+            c_function_t::own_internal_funcs();
+
+    /*! Who is registering right now, as a plugin's real path, or null when it is the host.
+     *
+     * load_plugin() sets it around plugin_register_meta() and clears it after, so a registration
+     * can name the owner of what it is about to write without being handed it. 2026-09-20 19:30 */
+    const std::string *registering_plugin = nullptr;
+
+    /*! Set when a registration was refused for a name already owned, and read by load_plugin()
+     * once the plugin has finished. It exists because a registration has nowhere else to report
+     * this - nothing checks what those functions answer. 2026-09-20 19:30 */
+    bool name_conflict = false;
+
     /* Closes the Lua state - see virt_state_t's own doc comment in virt_composer.h for why nothing
     obtained from this virt_state_t is safe to keep alive past this point. */
     ~virt_state_t() {
@@ -192,6 +220,12 @@ struct virt_state_t {
         }
     }
 };
+
+/* [INTERNAL] How far this state's per-type tables reach, which is one past the largest type id it
+can answer for. Not a count of the types it knows: a plugin's range sits at an offset fixed for the
+process, so a state that skipped an earlier plugin's range still reaches past it and carries unused
+rows where that plugin's types would have been. 2026-09-20 17:45 */
+static size_t max_type_cnt(vc::virt_state_t *vs) { return vs->lua_class_members.size(); }
 
 /* [INTERNAL] The full userdata every vc object is boxed into on the Lua side - see
 push_vc_object()/get_object_from_lua() for how it gets created/unboxed, and the __gc metamethod in
@@ -259,6 +293,220 @@ std::shared_ptr<virt_state_t> create_state() {
     return vs;
 }
 
+/* [INTERNAL] The one platform difference in loading a plugin, kept to three lines so load_plugin
+below reads the same everywhere. RTLD_LOCAL is not incidental: it is what keeps each plugin's
+_type_offset its own, since two plugins both define that symbol and RTLD_GLOBAL would let the first
+one's satisfy the second's lookups. The plugin still sees the host's symbols, but that comes from
+the host being linked -export-dynamic, not from here. 2026-09-20 08:35 */
+#if defined(UTILS_OS_WINDOWS)
+using plugin_handle_t = HMODULE;
+static plugin_handle_t plugin_open(const char *p)         { return LoadLibraryA(p); }
+static void *plugin_sym(plugin_handle_t h, const char *n) { return (void *)GetProcAddress(h, n); }
+static void plugin_close(plugin_handle_t h)               { FreeLibrary(h); }
+#else
+using plugin_handle_t = void *;
+static plugin_handle_t plugin_open(const char *p)         { return dlopen(p, RTLD_NOW|RTLD_LOCAL); }
+static void *plugin_sym(plugin_handle_t h, const char *n) { return dlsym(h, n); }
+static void plugin_close(plugin_handle_t h)               { dlclose(h); }
+#endif
+
+/* [INTERNAL] The range of type ids a plugin owns, by real path, and where the next plugin's range
+will begin. A range belongs to the process rather than to any one state, and is never given back.
+
+It has to be the process's, because a plugin holds one _type_offset for all of its types: were two
+states to hand it different offsets, whichever registered last would silently move the ids of the
+objects the other had already made. Assigning the range once and having every state adopt it is
+what lets a plugin serve more than one of them. It works because VIRT_TYPE_CNT is a constant of the
+host binary, so every state in the process begins the same size and an offset means the same thing
+in all of them. 2026-09-20 17:45 */
+struct plugin_range_t {
+    size_t off;
+    size_t cnt;
+};
+static std::map<std::string, plugin_range_t> plugin_ranges;
+static size_t next_plugin_offset = 0;
+
+/* [INTERNAL] The plugins already open in this process, by real path, with what the host needs from
+each. A plugin is opened and checked once and kept for good, so asking for it again costs neither
+an open nor a version check, and every state that asks registers from the same entry.
+
+Deliberately keyed by path and holding no virt_state_t: a state is a heap address, a rebuilt one
+routinely lands on the address a destroyed one had, and a table out here remembering "this plugin
+is already in that state" would then skip registering into a state that has nothing. What a state
+has is the state's own to know, and virt_state_t::loaded_plugins knows it. 2026-09-20 18:55 */
+struct plugin_t {
+    plugin_handle_t handle;
+    size_t type_cnt;
+    int (*register_meta)(virt_state_t *, int);
+};
+static std::map<std::string, plugin_t> open_plugins;
+
+/* [INTERNAL] The plugins that could not be used, by real path. Only what cannot be undone is
+remembered: a plugin that spent a range and then failed to register. Everything that goes wrong
+before the range is spent is left out and the library is closed again, so correcting the plugin and
+asking once more genuinely retries - closing drops the last reference, and the next open reads the
+file from disk instead of handing back the copy already in the process. 2026-09-20 17:45 */
+static std::set<std::string> broken_plugins;
+
+/* [INTERNAL] Answers where a plugin's types live, assigning it a range the first time it is asked
+for, and grows this state's per-type containers far enough to cover it. A state that skipped an
+earlier plugin's range still has to reach past it, and carries unused rows there. The room is never
+given back. 2026-09-20 17:45 */
+static size_t reserve_plugin_types(virt_state_t *vs, const std::string& real, size_t cnt) {
+    auto it = plugin_ranges.find(real);
+    if (it == plugin_ranges.end()) {
+        if (!next_plugin_offset)
+            next_plugin_offset = VIRT_TYPE_CNT;
+        it = plugin_ranges.insert({real, {next_plugin_offset, cnt}}).first;
+        next_plugin_offset += cnt;
+    }
+
+    size_t off  = it->second.off;
+    size_t need = off + it->second.cnt;
+    if (max_type_cnt(vs) >= need)
+        return off;
+
+    vs->trivial_copy_member.resize(need);
+    vs->lua_class_members.resize(need);
+    vs->lua_class_member_setters.resize(need);
+    vs->lua_class_operators.resize(need);
+    vs->inheritance_table.resize(need);
+
+    return off;
+}
+
+/* [INTERNAL] Opens a plugin and satisfies itself that it can be used, or answers null having said
+why. A plugin is opened once per process and kept, so a later ask costs neither an open nor a
+version check. Everything that fails here fails before any range is taken, so the library is closed
+again and correcting the plugin and asking once more genuinely retries. 2026-09-20 17:45 */
+static plugin_t *open_plugin(const std::string& real) {
+    if (has(open_plugins, real))
+        return &open_plugins[real];
+
+    plugin_handle_t handle = plugin_open(real.c_str());
+    if (!handle) {
+        DBG("Could not open plugin: %s", real.c_str());
+        return nullptr;
+    }
+
+    auto version_fn = (const char *(*)())plugin_sym(handle, "plugin_get_version");
+    auto cnt_fn     = (int (*)())plugin_sym(handle, "plugin_type_cnt");
+    auto reg_fn     = (int (*)(virt_state_t *, int))plugin_sym(handle, "plugin_register_meta");
+    if (!version_fn || !cnt_fn || !reg_fn) {
+        DBG("Not a plugin, one of plugin_get_version/plugin_type_cnt/plugin_register_meta is "
+                "missing: %s", real.c_str());
+        plugin_close(handle);
+        return nullptr;
+    }
+
+    if (strcmp(version_fn(), VIRT_COMPOSER_ABI) != 0) {
+        DBG("Plugin %s was built against another virt_composer:\n  plugin: %s\n  host:   %s",
+                real.c_str(), version_fn(), VIRT_COMPOSER_ABI);
+        plugin_close(handle);
+        return nullptr;
+    }
+
+    int cnt = cnt_fn();
+    if (cnt < 0) {
+        DBG("Plugin %s reports a negative type count: %d", real.c_str(), cnt);
+        plugin_close(handle);
+        return nullptr;
+    }
+
+    open_plugins[real] = plugin_t{handle, (size_t)cnt, reg_fn};
+    return &open_plugins[real];
+}
+
+/* See load_plugin()'s declaration in virt_composer.h for its doc comment. */
+int load_plugin(virt_state_t *vs, const char *path) {
+    std::error_code ec;
+    std::string real = std::filesystem::canonical(path, ec).string();
+    if (ec) {
+        DBG("No such plugin: %s [%s]", path, ec.message().c_str());
+        return -1;
+    }
+    if (has(broken_plugins, real)) {
+        DBG("Plugin %s took a range and then failed to register, it is not asked again",
+                real.c_str());
+        return -1;
+    }
+
+    if (has(vs->loaded_plugins, real))
+        return 0;
+
+    plugin_t *plug = open_plugin(real);
+    if (!plug)
+        return -1;
+
+    size_t off = reserve_plugin_types(vs, real, plug->type_cnt);
+
+    /* Marked where the range is spent, not where registering finishes. From this line the state
+    holds this plugin's ids whether the registration below succeeds or not, so this is the moment
+    it is true. 2026-09-20 19:10 */
+    vs->loaded_plugins.insert(real);
+
+    /* The plugin is named for as long as it registers, so every name it claims is recorded as its
+    own and a name already belonging to another is refused rather than replaced. 2026-09-20 19:30 */
+    vs->registering_plugin = &real;
+    vs->name_conflict = false;
+    int reg = plug->register_meta(vs, (int)off);
+    vs->registering_plugin = nullptr;
+
+    if (reg < 0 || vs->name_conflict) {
+        DBG("Plugin %s was refused: %s. Its range stays unused.", real.c_str(),
+                vs->name_conflict ? "it claimed a name another already owns"
+                                  : "plugin_register_meta failed");
+        broken_plugins.insert(real);
+        return -1;
+    }
+    return 0;
+}
+
+/* [INTERNAL] Who owns each registered name, by name, with the empty string for the host. A name
+has one owner and keeps it for the life of the process.
+
+Process-wide, and it has to be, because the tables it guards are: the internal-function table
+belongs to the module, not to any one state, so an owner map that died with a state would let the
+next state hand a name to someone else and change what the first state answers. Checked
+20-09-2026: a per-state map let exactly that through. 2026-09-20 19:45 */
+static std::map<std::string, std::string> name_owner;
+
+/* [INTERNAL] Answers whether `name` may be registered by whoever is registering now, and says so
+when it may not. The first claimant keeps the name: a second is turned away, because letting it
+through would mean a call written against one plugin running another's code with nothing said.
+2026-09-20 19:30 */
+static bool may_claim_name(virt_state_t *vs, const std::string& name) {
+    std::string owner = vs->registering_plugin ? *vs->registering_plugin : "";
+
+    auto it = name_owner.find(name);
+    if (it == name_owner.end()) {
+        name_owner[name] = owner;
+        return true;
+    }
+    if (it->second == owner)
+        return true;
+
+    DBG("The name '%s' belongs to %s, and %s may not take it", name.c_str(),
+            it->second.empty() ? "the host" : it->second.c_str(),
+            owner.empty() ? "the host" : owner.c_str());
+    vs->name_conflict = true;
+    return false;
+}
+
+/* See state_internal_funcs()'s declaration in virt_composer.h for its doc comment. */
+std::map<std::string, std::function<int(lua_State *L)>> *state_internal_funcs(virt_state_t *vs) {
+    return vs->internal_funcs;
+}
+
+/* See add_plugin_internal_func()'s declaration in virt_composer.h for its doc comment. */
+void c_function_t::add_plugin_internal_func(virt_state_t *vs, std::string name,
+        std::function<int(lua_State *L)> fn)
+{
+    if (!may_claim_name(vs, name))
+        return;
+    (*vs->internal_funcs)[name] = fn;
+}
+
 /* See get_ref_base()'s declaration in virt_composer.h for its doc comment. */
 ref_t<vc::object_t> get_ref_base(virt_state_t *vs, const std::string& name) {
     if (!has(vs->name_to_object, name))
@@ -294,6 +542,8 @@ err_e add_named_builder_callback(vc::virt_state_t *vs, const std::string& match,
         std::function<co::task<vc::ref_t<vc::object_t>>(
                 vc::virt_state_t *, const std::string&, fkyaml::node&)> builder)
 {
+    if (!may_claim_name(vs, match))
+        return VC_ERROR_REDEFINED;
     vs->build_object_cbks.push_back({match, builder});
     return VC_ERROR_OK;
 }
@@ -543,7 +793,7 @@ co::task<vc::ref_t<vc::object_t>> build_object(vc::virt_state_t *vs,
     if (node["m_type"] == "vc::c_function_t") {
         /* lua_function has the same tag_name as the function name */
         auto src = co_await resolve_str(vs, node["m_source"]);
-        auto obj = vc::c_function_t::create(name, src);
+        auto obj = vc::c_function_t::create(vs, name, src);
         mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
         co_return obj->to_related<vc::object_t>();
     }
@@ -631,6 +881,8 @@ std::string new_anon_name(virt_state_t *vs) {
     return "__" + std::to_string(vs->anonymous_increment++);
 }
 
+const char *get_version() { return VIRT_COMPOSER_ABI; }
+
 /* [INTERNAL] Builds every top-level entry of a parsed YAML document (`root` must be a mapping) -
 dispatches each one to build_object() (has `m_type`) or build_pseudo_object() (doesn't), scheduling
 both as coroutines via co::sched() so they can suspend/resume on each other's dependencies rather
@@ -703,7 +955,7 @@ static int luaw_binary_operator_dispatch(lua_State *L) {
         if (!obj)
             continue;
         vc::object_type_e class_id = obj->type_id();
-        if (class_id < 0 || class_id >= (int)VIRT_TYPE_CNT) {
+        if (class_id < 0 || class_id >= (int)max_type_cnt(vs)) {
             luaw_push_error(L, std::format("invalid class id: {}", vc::to_string(class_id)));
             return 0;
         }
@@ -734,7 +986,7 @@ static int luaw_unary_operator_dispatch(lua_State *L) {
 
     auto vs = luaw_get_virt_state(L);
     vc::object_type_e class_id = obj->type_id();
-    if (class_id < 0 || class_id >= (int)VIRT_TYPE_CNT) {
+    if (class_id < 0 || class_id >= (int)max_type_cnt(vs)) {
         luaw_push_error(L, std::format("invalid class id: {}", vc::to_string(class_id)));
         return 0;
     }
@@ -825,7 +1077,7 @@ static int luaopen_vc(lua_State *L) {
 
             auto vs = luaw_get_virt_state(L);
             vc::object_type_e class_id = obj->type_id(); /* an int, still ok on unwind */
-            if (class_id < 0 || class_id >= (int)VIRT_TYPE_CNT) {
+            if (class_id < 0 || class_id >= (int)max_type_cnt(vs)) {
                 luaw_push_error(L, std::format("invalid class id: {}", vc::to_string(class_id)));
             }
             if (!has(vs->lua_class_members[class_id], member_name)) {
@@ -865,7 +1117,7 @@ static int luaopen_vc(lua_State *L) {
 
             auto vs = luaw_get_virt_state(L);
             vc::object_type_e class_id = obj->type_id(); /* an int, still ok on unwind */
-            if (class_id < 0 || class_id >= (int)VIRT_TYPE_CNT) {
+            if (class_id < 0 || class_id >= (int)max_type_cnt(vs)) {
                 luaw_push_error(L, std::format("invalid class id: {}", vc::to_string(class_id)));
             }
             if (!has(vs->lua_class_member_setters[class_id], member_name)) {

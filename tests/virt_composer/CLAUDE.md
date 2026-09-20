@@ -107,6 +107,62 @@ running each test binary.
 | 018 | Reproduced Bugs | `018-001` | permanent regression checks for fixed bugs that used to be `BUGS.md` entries (see co-lib's Category 18 for the convention this follows) |
 | 019 | Operators | `019-001` | `vc::set_class_operator()`/`operator_e`, all binary ops (ADD/SUB/MUL/EQ/LT/LE/CONCAT) + unary (UNM/LEN), the `which` (1 vs 2) argument's role for non-commutative ops, and the "neither operand has a handler" error path |
 | 020 | Lua Objects | `020-001` | `vc::lua_object_t`/`capture_lua_object()` - capturing a Lua callback into C++ (`vc::ref_t<lua_object_t>` as a member-function param), `call<R>(...)` (typed convenience) vs `call(L, nargs)` (raw primitive, incl. `LUA_MULTRET`), and pushing a captured value back to Lua as the original callable (not a re-boxed userdata) |
+| 021 | Plugins | `021-001`, `021-002` | `vc::load_plugin()` loading two separately built `.so`s - a refused path/non-plugin, six type ids in two runs of three starting past the host's own, all six `tag()` methods and all four registered functions answering with values of their own, one plugin's members not reaching the other's types, and a plugin serving several states at the same ids (including a state that loads only the second plugin and so reaches past a range it has no types for). `021-002` holds `VIRT_COMPOSER_ABI` to its word: it hashes the four files whose contents cross between a host and a plugin and fails, printing the value to paste, when the hash written in the macro no longer matches |
+
+## Plugins used by tests
+
+`plugins/` holds shared objects a test loads, not tests. It is a subdirectory precisely because
+`linux.makefile`'s `TEST_FILES := $(wildcard *.cpp)` would otherwise build a plugin as a test
+binary and fail on its missing `main()`. Each `plugins/*.cpp` is built into a `.so` of its own by a
+rule of its own, and `all` builds them before running any test.
+
+A plugin is built `-fPIC -shared` and is deliberately **not** linked against `virt_composer_core.o`:
+it carries no copy of the library and resolves every virt_composer symbol from whoever loads it, so
+one library state serves the process. That is also why `LIBS` carries `-export-dynamic` for every
+test binary - without it the host's symbols are not in the dynamic table and a plugin opens with
+undefined symbols.
+
+`021-003` is the reason an edit to `../../virt_composer.h`, `../../virt_composer.cpp`,
+`../../virt_object.h` or `../../virt_composer_end.h` makes the suite fail until `VIRT_COMPOSER_ABI`
+is updated. That is the point of it - the macro is written by hand and nothing else would notice it
+going stale. The failure prints the hash to paste. The line defining the macro is skipped when
+hashing, since the value lives inside a file it covers and would otherwise never settle.
+
+`plugins/mock_plugin_stale.so` is built with `-DVIRT_COMPOSER_ABI` overridden, by a target-specific
+variable in `linux.makefile`. That is the only reason `VIRT_COMPOSER_ABI` is guarded rather than
+defined outright, and the only place the override belongs: `021-004` needs a plugin that disagrees
+with its host on purpose, and no other branch of `load_plugin()` is otherwise unreachable.
+
+### Writing one
+
+**Read `plugins/reference_plugin.cpp` first.** It is the shape, and the file to copy. A plugin is
+its composers plus one final file, the same division a host keeps between its `*_composer.h` files
+and its `main.cpp`:
+
+- Each composer is a header under a directory of the plugin's own (`plugins/reference/`) holding
+  its types and one `register_meta(vs)`. A composer carries as many types as belong together -
+  `vec2_composer.h` has one and `shapes_composer.h` has two, and neither is the rule.
+- The final `.cpp` has no types. It defines `VIRT_COMPOSER_PLUGIN_COUNTERS` before including
+  `virt_composer.h`, declares `_type_offset`, includes the composers, includes
+  `virt_composer_end.h` after the last of them, and exports `plugin_get_version`,
+  `plugin_type_cnt` and `plugin_register_meta` - the last calling each composer's
+  `register_meta()`.
+
+That order is load-bearing and each composer header enforces its share of it with an `#error` on
+`VIRT_COMPOSER_PLUGIN_COUNTERS`, so including one directly says what to do rather than failing on
+an undeclared `_type_offset`.
+
+Types are registered with `VIRT_COMPOSER_REGISTER_PLUGIN_TYPE`, which makes a **function**: a
+plugin's type is written `RECT()`, with the brackets, because the host supplies its id at load time
+and a constant would have been initialised before then.
+
+`plugins/mock_common.h` and the `mock_plugin_*` files take a shortcut the reference does not - a
+shared header and a declaration macro - which keeps them short and makes them a poor thing to learn
+from. Read them for what `021-002` is testing, not for how to write a plugin.
+
+See `virt_composer.h`'s `load_plugin()` for the rules a plugin lives under: its `register_meta`
+runs once per state rather than once per process, its types do not inherit from its host's, and it
+must not keep a `vc::ref_t` in static storage.
 
 ## Working docs in this directory
 
