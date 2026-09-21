@@ -107,7 +107,7 @@ running each test binary.
 | 018 | Reproduced Bugs | `018-001` | permanent regression checks for fixed bugs that used to be `BUGS.md` entries (see co-lib's Category 18 for the convention this follows) |
 | 019 | Operators | `019-001` | `vc::set_class_operator()`/`operator_e`, all binary ops (ADD/SUB/MUL/EQ/LT/LE/CONCAT) + unary (UNM/LEN), the `which` (1 vs 2) argument's role for non-commutative ops, and the "neither operand has a handler" error path |
 | 020 | Lua Objects | `020-001` | `vc::lua_object_t`/`capture_lua_object()` - capturing a Lua callback into C++ (`vc::ref_t<lua_object_t>` as a member-function param), `call<R>(...)` (typed convenience) vs `call(L, nargs)` (raw primitive, incl. `LUA_MULTRET`), and pushing a captured value back to Lua as the original callable (not a re-boxed userdata) |
-| 021 | Plugins | `021-001`, `021-002` | `vc::load_plugin()` loading two separately built `.so`s - a refused path/non-plugin, six type ids in two runs of three starting past the host's own, all six `tag()` methods and all four registered functions answering with values of their own, one plugin's members not reaching the other's types, and a plugin serving several states at the same ids (including a state that loads only the second plugin and so reaches past a range it has no types for). `021-002` holds `VIRT_COMPOSER_ABI` to its word: it hashes the four files whose contents cross between a host and a plugin and fails, printing the value to paste, when the hash written in the macro no longer matches |
+| 021 | Plugins | `021-001` .. `021-006` | `vc::load_plugin()` and what a plugin may do once loaded. `021-001` is the reference plugin, read it first. `021-002` loads two separately built `.so`s: a refused path/non-plugin, six type ids in two runs of three past the host's own, all six `tag()` methods and all four registered functions answering for themselves, one plugin's members not reaching the other's types, and a plugin serving several states at the same ids (including one that loads only the second plugin and so reaches past a range it has no types for). `021-003` holds `VIRT_COMPOSER_ABI` to the sources it stands for. `021-004` refuses a plugin built against another virt_composer and shows the refusal cost the state nothing. `021-005` refuses a plugin claiming a name another owns, including from a second state, while letting a plugin keep its own. `021-006` builds a plugin's type from a config and refuses a type no builder was registered for |
 
 ## Plugins used by tests
 
@@ -132,6 +132,14 @@ hashing, since the value lives inside a file it covers and would otherwise never
 variable in `linux.makefile`. That is the only reason `VIRT_COMPOSER_ABI` is guarded rather than
 defined outright, and the only place the override belongs: `021-004` needs a plugin that disagrees
 with its host on purpose, and no other branch of `load_plugin()` is otherwise unreachable.
+
+`plugins/mock_plugin_clash.cpp` registers a name `mock_plugin_a` already owns, and exists to be
+turned away. A registered name has one owner for the life of the process: the first claimant keeps
+it and a second is refused with `VC_ERROR_REDEFINED`, which fails the load it was part of. The host
+is an owner too, so a plugin cannot take a name the host registered - but `add_internal_func()`,
+which the host uses and which takes no state, does not go through the check. That asymmetry is
+deliberate: the host registers before any state exists, so the first config can be parsed and reach
+those functions.
 
 ### Writing one
 

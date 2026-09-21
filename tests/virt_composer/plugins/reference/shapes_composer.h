@@ -111,6 +111,23 @@ inline int lua_make_circle(lua_State *L) {
     return 1;
 }
 
+/*! Builds a rect_t from a yaml node, so a config can name one by its type.
+ *
+ * A plugin's types reach yaml the same way a host's custom types do. build_object() knows the
+ * handful of built-in types by name and hands everything else to the builders registered with
+ * add_named_builder_callback(), so a type nobody registered a builder for cannot be named in a
+ * config at all - plugin or not. 2026-09-20 20:00 */
+inline co::task<vc::ref_t<vc::object_t>> yaml_make_rect(vc::virt_state_t *vs,
+        const std::string& name, fkyaml::node& node)
+{
+    auto w = co_await vc::resolve_int(vs, node["w"]);
+    auto h = co_await vc::resolve_int(vs, node["h"]);
+
+    auto obj = rect_t::create(w, h);
+    vc::mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
+    co_return obj->to_related<vc::object_t>();
+}
+
 /*! Registers everything this composer lends to the given state, both its types together, and
  * answers 0 on success.
  *
@@ -130,6 +147,10 @@ inline int register_meta(vc::virt_state_t *vs) {
 
     vc::c_function_t::add_plugin_internal_func(vs, "ref_rect", lua_make_rect);
     vc::c_function_t::add_plugin_internal_func(vs, "ref_circle", lua_make_circle);
+
+    /* What lets a config say `m_type: shapes::rect_t`. The name is this plugin's from here on,
+    and another plugin asking for it is refused. 2026-09-20 20:00 */
+    ASSERT_FN(vc::add_named_builder_callback(vs, "shapes::rect_t", yaml_make_rect));
     return 0;
 }
 
