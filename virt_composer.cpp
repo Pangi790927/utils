@@ -214,6 +214,12 @@ struct virt_state_t {
     obtained from this virt_state_t is safe to keep alive past this point. */
     ~virt_state_t() {
         DBG_SCOPE();
+        /* The pool goes first. A task suspended on a semaphore or on I/O holds whatever it was
+        awaiting, and a Lua coroutine's resumer holds a thread of the state below; clear() destroys
+        every one of them, so none is left to resume a thread that lua_close has already taken
+        away. 2026-09-22 03:32 */
+        if (pool)
+            pool->clear();
         if (L) {
             lua_close(L);
             L = nullptr;
@@ -1336,6 +1342,11 @@ vc::virt_state_t *luaw_get_virt_state(lua_State *L) {
 /* See luaw_get_lua_state()'s declaration in virt_composer.h for its doc comment. */
 lua_State *luaw_get_lua_state(vc::virt_state_t *vs) {
     return vs->L;
+}
+
+/* See luaw_get_pool()'s declaration in virt_composer.h for its doc comment. */
+co::pool_p luaw_get_pool(vc::virt_state_t *vs) {
+    return vs->pool;
 }
 
 /* See set_trivial_copy_member()'s declaration in virt_composer.h for its doc comment. */

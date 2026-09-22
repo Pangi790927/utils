@@ -93,7 +93,7 @@ using ssize_t = ptrdiff_t;
  * @date 2026-09-20 18:45
  */
 #ifndef VIRT_COMPOSER_ABI
-# define VIRT_COMPOSER_ABI  "0.2-4bf389f4"
+# define VIRT_COMPOSER_ABI  "0.3-9164ffa4"
 #endif
 
 /*!
@@ -1915,6 +1915,23 @@ virt_state_t *luaw_get_virt_state(lua_State *L);
  * @date 2026-09-08 06:54
  */
 lua_State *luaw_get_lua_state(virt_state_t *vs);
+
+/*!
+ * @brief Answers the coroutine pool a virt-state runs everything on.
+ *
+ * Core:
+ *   - It is the one pool of the state: a config being parsed, the builders it wakes and any
+ *     script that waits all run on it, so anything meant to run beside them is scheduled here.
+ *   - It is valid for as long as the state is, and is cleared before the state's Lua state is
+ *     closed.
+ *
+ * @param vs The virt_state_t pointer.
+ *
+ * @return The state's pool.
+ *
+ * @date 2026-09-22 03:52
+ */
+co::pool_p luaw_get_pool(virt_state_t *vs);
 
 /*!
  * [INTERNAL]
