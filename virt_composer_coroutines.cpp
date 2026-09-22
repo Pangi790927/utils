@@ -124,7 +124,10 @@ co::task<err_e> lua_coro_t::run() {
         co_await done->wait();
 
     if (resume_status != LUA_OK) {
-        DBG("The script failed: %s", lua_tostring(thread, -1));
+        /* A script that errored left its message on the thread; one that was closed left an empty
+        stack, and asking for the top of that answers null rather than a reason. 2026-09-22 12:00 */
+        const char *why = lua_gettop(thread) > 0 ? lua_tostring(thread, -1) : nullptr;
+        DBG("The script failed: %s", why ? why : "it was closed before it could answer");
         co_return VC_ERROR_FAILED_CALL;
     }
     co_return VC_ERROR_OK;
