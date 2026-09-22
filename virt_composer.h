@@ -94,7 +94,7 @@ using ssize_t = ptrdiff_t;
  * @date 2026-09-20 18:45
  */
 #ifndef VIRT_COMPOSER_ABI
-# define VIRT_COMPOSER_ABI  "0.3-71696559"
+# define VIRT_COMPOSER_ABI  "0.3-c6ee5b2a"
 #endif
 
 /*!

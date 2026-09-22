@@ -12,8 +12,8 @@
  *   - @ref lua_await is what a `lua_CFunction` returns when it cannot answer yet. It suspends the
  *     calling script, lets the pool carry on, and answers the script once the task it was handed
  *     completes.
- *   - A script gains `vc.coroutine_create`, `vc.coroutine_adopt` and `vc.coroutine_spawn`, plus
- *     `start` and `wait` on a coroutine object.
+ *   - A script gains `vc.coroutine_create` and `vc.coroutine_spawn`, plus `start` and the typed
+ *     waits on a coroutine object.
  *   - `VC_TYPE_LUA_CORO` is registered here, so a coroutine can also be named in a config under
  *     `m_type: vc::lua_coro_t`.
  *
@@ -56,7 +56,7 @@ VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_LUA_CORO);
  *     call. Calling it while the script is still suspended is refused.
  *   - A call set after a failed one is taken: `set_call()` closes an errored thread itself, so a
  *     caller never has to know that it must.
- *   - While a script is in flight the object holds a reference to itself, so scheduling a run and
+ *   - A run holds a reference to the object for as long as it lasts, so scheduling one and
  *     forgetting the handle is safe.
  *   - `close()` kills a suspended script, runs its to-be-closed variables and makes the thread fit
  *     to be called again. It is also what the destructor does.
@@ -79,11 +79,14 @@ VIRT_COMPOSER_REGISTER_TYPE(VC_TYPE_LUA_CORO);
 struct lua_coro_t : public vc::object_t {
     lua_State              *thread = nullptr;  /* the coroutine itself */
     vc::ref_t<lua_object_t> held;              /* holds `thread` against the collector */
-    vc::ref_t<lua_coro_t>   self;              /* held while a script is in flight */
     co::sem_p               done;              /* signal_all'd when a script ends */
     int                     status = LUA_OK;   /* what the last resume answered */
     int                     nres   = 0;        /* results the script left on the thread */
     std::string             wait_err;          /* set by a wrapper that cannot answer a wait */
+
+    /* Kills the wrapper of the wait this script is suspended on, and null when it is not
+     * suspended on one. A script waits at one point at a time, so one is enough. 2026-09-22 */
+    std::function<co::error_e(void)> wait_killer;
 
     lua_coro_t(vc::object_t::Private priv) : vc::object_t(priv) {}
     virtual ~lua_coro_t() { close(); }
@@ -91,12 +94,6 @@ struct lua_coro_t : public vc::object_t {
     /*! Makes a thread on `vs`, holds it against the collector and answers it with no call set on
      * it yet. @date 2026-09-21 20:49 */
     static vc::ref_t<lua_coro_t> create(virt_state_t *vs);
-
-    /*! Takes a thread Lua already made and drives it from here on: holds it, marks it and gives it
-     * a completion semaphore. `idx` is where the thread sits on `L`. Sound only while nothing else
-     * resumes that thread, since two resumers would each believe they own it.
-     * @date 2026-09-21 20:49 */
-    static vc::ref_t<lua_coro_t> adopt(virt_state_t *vs, lua_State *L, int idx);
 
     virtual vc::object_type_e type_id() const override { return VC_TYPE_LUA_CORO; }
     static vc::object_type_e type_id_static() { return VC_TYPE_LUA_CORO; }
@@ -114,8 +111,11 @@ struct lua_coro_t : public vc::object_t {
      * @date 2026-09-21 20:49 */
     bool is_running() const { return status == LUA_YIELD; }
 
-    /*! Clears the thread and sets a global function and its arguments as the next call. Refused
-     * while a script is in flight. @date 2026-09-21 20:49 */
+    /*! Clears the thread and sets a global function and its arguments as the next call.
+     *
+     * Passing no arguments leaves the callee alone on the thread, which is how a caller builds
+     * them by hand through `get_L()` instead: `run()` counts what it finds there. Refused while a
+     * script is in flight. @date 2026-09-22 08:40 */
     template <typename ...Args>
     err_e set_call(const char *fn_name, Args ...args);
 
@@ -123,10 +123,6 @@ struct lua_coro_t : public vc::object_t {
      * @date 2026-09-21 20:49 */
     template <typename ...Args>
     err_e set_call(vc::ref_t<lua_object_t> fn, Args ...args);
-
-    /*! Clears the thread and puts only the callee on it, the arguments being the caller's own
-     * business through `get_L()`. @date 2026-09-21 20:49 */
-    err_e push_call(vc::ref_t<lua_object_t> fn);
 
     /*! **Coroutine** that runs what `set_call()` left and ends when the script ends, however many
      * times it waited in between. @date 2026-09-21 20:49 */
@@ -149,20 +145,31 @@ struct lua_coro_t : public vc::object_t {
     co::task<std::pair<R, err_e>> wait_result();
 
     /*! Kills whatever is on the thread, runs its to-be-closed variables and leaves the thread fit
-     * to be called again. @date 2026-09-21 20:49 */
+     * to be called again.
+     *
+     * A script killed while it was waiting counts as a call that failed, not one that finished:
+     * whoever was waiting for it is woken and told so. The wait's own wrapper is killed first,
+     * since it holds this thread and would otherwise push onto one that is about to be reset.
+     * @date 2026-09-22 08:20 */
     void close();
 
-    /*! [INTERNAL] Clears what the last call left and answers whether the thread may take a new
-     * one. The three call setters share it. @date 2026-09-21 20:49 */
-    err_e ready_thread();
+
+private:
+    /*! Clears the thread and puts the callee on it, which is what both `set_call()` overloads do
+     * before pushing anything. @date 2026-09-22 08:40 */
+    err_e _push_call(vc::ref_t<lua_object_t> fn);
+
+    /*! Clears what the last call left and answers whether the thread may take a new one. Both
+     * call setters share it. @date 2026-09-22 09:00 */
+    err_e _ready_thread();
 };
 
 /*!
  * @brief Registers everything this file brings onto a fresh virt-state.
  *
  * Core:
- *   - Adds `vc.coroutine_create`, `vc.coroutine_adopt` and `vc.coroutine_spawn`, the `start` and
- *     `wait` members of a coroutine object, and the `vc::lua_coro_t` builder a config names.
+ *   - Adds `vc.coroutine_create` and `vc.coroutine_spawn`, the `start` and `wait_result_*`
+ *     members of a coroutine object, and the `vc::lua_coro_t` builder a config names.
  *   - Must be called before any script runs on the state, since a script cannot name what has
  *     not been registered yet.
  *   - The caller registers it, right after create_state(). Nothing inside the library can:
@@ -280,7 +287,7 @@ err_e luaw_coro_push_args(lua_State *thread, Args &...args) {
 
 template <typename ...Args>
 err_e lua_coro_t::set_call(const char *fn_name, Args ...args) {
-    if (err_e err = ready_thread(); err != VC_ERROR_OK)
+    if (err_e err = _ready_thread(); err != VC_ERROR_OK)
         return err;
     lua_getglobal(thread, fn_name);
     if (!lua_isfunction(thread, -1)) {
@@ -293,17 +300,17 @@ err_e lua_coro_t::set_call(const char *fn_name, Args ...args) {
 
 template <typename ...Args>
 err_e lua_coro_t::set_call(vc::ref_t<lua_object_t> fn, Args ...args) {
-    if (err_e err = push_call(fn); err != VC_ERROR_OK)
+    if (err_e err = _push_call(fn); err != VC_ERROR_OK)
         return err;
     return luaw_coro_push_args(thread, args...);
 }
 
-inline err_e lua_coro_t::push_call(vc::ref_t<lua_object_t> fn) {
+inline err_e lua_coro_t::_push_call(vc::ref_t<lua_object_t> fn) {
     if (!fn) {
         DBG("No callee given");
         return VC_ERROR_FAILED_CALL;
     }
-    if (err_e err = ready_thread(); err != VC_ERROR_OK)
+    if (err_e err = _ready_thread(); err != VC_ERROR_OK)
         return err;
     fn->push(thread);
     if (!lua_isfunction(thread, -1)) {
@@ -391,6 +398,11 @@ co::task_t luaw_await_wrapper(lua_State *thread, co::task<T> task,
             co->wait_err = e.what();
         n = 0;
     }
+    /* This wait is over, so its killer is stale - and it has to go before the resume rather than
+    after, because the script may wait again on the way and install a new one. 2026-09-22 08:20 */
+    if (lua_coro_t *co = luaw_get_coro(thread))
+        co->wait_killer = nullptr;
+
     luaw_resume_coro(thread, n);
     co_return VC_ERROR_OK;
 }
@@ -418,9 +430,17 @@ int lua_await(lua_State *L, co::task<T> task, std::function<int(lua_State *, T &
 
     lua_KContext top = (lua_KContext)lua_gettop(L);
 
+    /* The wrapper is scheduled with a killer and the coroutine keeps the handle. That is what
+    lets close() end a script that is waiting: the wrapper holds this thread and a way back to the
+    object driving it, so it has to be destroyed before either is taken away, and killing it takes
+    its whole call stack - the awaited work included - with it. 2026-09-22 08:20 */
+    auto pool = luaw_get_pool(vs);
+    auto [kill_pack, killer] = co::create_killer(pool.get(), co::ERROR_WAKEUP);
+    luaw_get_coro(L)->wait_killer = killer;
+
     /* Scheduling only queues the wrapper; the pool gets its turn once this resume has answered, so
     the yield below always happens before the wrapper's first step. 2026-09-21 20:49 */
-    luaw_get_pool(vs)->sched(luaw_await_wrapper<T>(L, std::move(task), std::move(push)));
+    pool->sched(luaw_await_wrapper<T>(L, std::move(task), std::move(push)), kill_pack);
     return lua_yieldk(L, 0, top, luaw_await_k);
 }
 

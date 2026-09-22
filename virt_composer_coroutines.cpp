@@ -48,28 +48,10 @@ vc::ref_t<lua_coro_t> lua_coro_t::create(virt_state_t *vs) {
     return ret;
 }
 
-/* Everything create() does except making the thread, since Lua already made this one. The status
-is taken from the thread rather than assumed: an adopted coroutine may be freshly made or already
-part-way through. 2026-09-21 20:49 */
-vc::ref_t<lua_coro_t> lua_coro_t::adopt(virt_state_t *vs, lua_State *L, int idx) {
-    auto ret = std::make_shared<lua_coro_t>(vc::object_t::Private{type_id_static()});
-
-    ret->thread = lua_tothread(L, idx);
-    ret->held   = lua_object_t::create();
-    lua_pushvalue(L, idx);
-    ret->held->capture_ref(L);              /* pops the copy into the reference table */
-    ret->done   = co::create_sem(luaw_get_pool(vs), 0);
-    ret->status = lua_status(ret->thread);
-
-    *(lua_coro_t **)lua_getextraspace(ret->thread) = ret.get();
-
-    return ret;
-}
-
-/* See lua_coro_t::ready_thread()'s declaration in virt_composer_coroutines.h for its doc comment.
+/* See lua_coro_t::_ready_thread()'s declaration in virt_composer_coroutines.h for its doc comment.
 The reset belongs here, and not in run(), because close() truncates the stack: a thread cleared at
 the start of a run would lose the call the caller had just set on it. 2026-09-21 20:49 */
-err_e lua_coro_t::ready_thread() {
+err_e lua_coro_t::_ready_thread() {
     if (is_running()) {
         DBG("This coroutine is in the middle of a call");
         return VC_ERROR_FAILED_CALL;
@@ -96,8 +78,12 @@ co::task<err_e> lua_coro_t::run() {
         co_return VC_ERROR_FAILED_CALL;
     }
 
-    self = to_related<lua_coro_t>();        /* alive until the script ends */
-    co::FnScope let_go([this]{ self = nullptr; });
+    /* A local, not a member: a coroutine's locals live in its frame, so this reference is held
+    for exactly as long as the run lasts and is let go however the frame ends - normally, or torn
+    down by a killer or by pool->clear(). run() is a member, so its frame carries `this` and not a
+    reference of its own; without this, a script whose handle nobody kept could be collected while
+    it was still parked. 2026-09-22 09:00 */
+    auto keep_alive = to_related<lua_coro_t>();
 
     luaw_resume_coro(thread, lua_gettop(thread) - 1);
     if (status == LUA_YIELD)
@@ -114,6 +100,17 @@ co::task<err_e> lua_coro_t::run() {
 void lua_coro_t::close() {
     if (!thread)
         return;
+
+    /* The wrapper of a wait in flight goes first. It holds this thread and reaches back here
+    through the thread's extra space, so it has to stop existing before the thread is reset or the
+    object it points at is let go of. Killing it takes its whole call stack with it, the awaited
+    work included: abandoning a wait abandons what was being waited for. 2026-09-22 08:20 */
+    if (wait_killer) {
+        wait_killer();
+        wait_killer = nullptr;
+    }
+
+    bool was_waiting = is_running();
     auto *vs = luaw_get_virt_state(thread);
 
     lua_closethread(thread, vs ? luaw_get_lua_state(vs) : nullptr);
@@ -124,6 +121,15 @@ void lua_coro_t::close() {
     status   = LUA_OK;
     nres     = 0;
     wait_err = {};
+
+    /* A script killed part-way did not finish, and anyone waiting for its result is owed that
+    answer rather than silence. LUA_ERRRUN is written by hand because no resume produced it: the
+    thread itself is clean, and this says the call it was on did not come to an end.
+    2026-09-22 08:20 */
+    if (was_waiting) {
+        status = LUA_ERRRUN;
+        done->signal_all();
+    }
 }
 
 /* See luaw_resume_coro()'s declaration in virt_composer_coroutines.h for its doc comment.
@@ -143,18 +149,6 @@ void luaw_resume_coro(lua_State *thread, int n) {
 /* ------------------------------------------------------------------------------------------- */
 /* The Lua-visible side                                                                         */
 /* ------------------------------------------------------------------------------------------- */
-
-/* [INTERNAL] Answers the coroutine object a Lua argument holds, or null with the error already
-raised. The cast is done by hand rather than through to_related<T>(), which throws on a mismatch,
-because a script passing the wrong object is an ordinary Lua error and not an exception.
-2026-09-21 20:49 */
-static vc::ref_t<lua_coro_t> luaw_coro_arg(lua_State *L, int idx) {
-    auto *obj = vc::get_object_from_lua(L, idx);
-    auto  co  = obj ? std::dynamic_pointer_cast<lua_coro_t>(obj->shared_this()) : nullptr;
-    if (!co)
-        vc::luaw_push_error(L, "expected a vc coroutine");
-    return co;
-}
 
 /* vc.coroutine_create(f, ...) -- makes a coroutine and sets `f` and its arguments as its next
 call. The callee and the arguments are moved rather than copied: this function is about to return
@@ -183,55 +177,14 @@ static int luaw_coroutine_create(lua_State *L) {
     return 1;
 }
 
-/* vc.coroutine_adopt(co) -- takes a thread Lua made and drives it from here on. The guards catch
-what can be caught: the main state, a thread already driven, one that is dead, and the one running
-this very call. What cannot be caught is somebody else resuming it later, which is the whole of the
-risk. 2026-09-22 04:30 */
-static int luaw_coroutine_adopt(lua_State *L) {
-    auto *vs = vc::luaw_get_virt_state(L);
-    if (!vs) {
-        vc::luaw_push_error(L, "vc.coroutine_adopt: no virt state behind this lua state");
-        return 0;
-    }
-    if (!lua_isthread(L, 1)) {
-        vc::luaw_push_error(L, "vc.coroutine_adopt: expects a coroutine");
-        return 0;
-    }
-
-    lua_State *th = lua_tothread(L, 1);
-    if (th == L || th == vc::luaw_get_lua_state(vs)) {
-        vc::luaw_push_error(L, "vc.coroutine_adopt: a coroutine cannot adopt itself or the "
-                "main state");
-        return 0;
-    }
-    if (luaw_get_coro(th)) {
-        vc::luaw_push_error(L, "vc.coroutine_adopt: this coroutine is already driven by the actor");
-        return 0;
-    }
-    int st = lua_status(th);
-    if (st != LUA_OK && st != LUA_YIELD) {
-        vc::luaw_push_error(L, "vc.coroutine_adopt: this coroutine is dead");
-        return 0;
-    }
-
-    auto co = lua_coro_t::adopt(vs, L, 1);
-    if (vc::push_vc_object(L, co->to_related<vc::object_t>()) < 0) {
-        vc::luaw_push_error(L, "vc.coroutine_adopt: could not answer the coroutine");
-        return 0;
-    }
-    return 1;
-}
-
 /* vc.coroutine_spawn(f, ...) -- the two common ones together. coroutine_create() moves the callee
-and the arguments away, so the coroutine it answers is the only thing left on this stack.
-2026-09-22 04:30 */
+and the arguments away and leaves the coroutine as the only thing on this stack, so this reads it
+back only to get hold of it in C++: it is the object create() just made and pushed, not something
+a script handed over, so neither the lookup nor the cast can fail. 2026-09-22 07:50 */
 static int luaw_coroutine_spawn(lua_State *L) {
     if (luaw_coroutine_create(L) != 1)
         return 0;
-    auto co = luaw_coro_arg(L, 1);  /* the only thing create left on this stack */
-    if (!co)
-        return 0;
-    co->start();
+    vc::get_object_from_lua(L, -1)->to_related<lua_coro_t>()->start();
     return 1;
 }
 
@@ -244,7 +197,6 @@ comment. */
 err_e coroutines_register_meta(virt_state_t *vs) {
     if (err_e err = add_lua_tab_funcs(vs, {
             {"coroutine_create", luaw_coroutine_create},
-            {"coroutine_adopt",  luaw_coroutine_adopt},
             {"coroutine_spawn",  luaw_coroutine_spawn},
         }); err != VC_ERROR_OK)
     {
