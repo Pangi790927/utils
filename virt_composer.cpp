@@ -296,6 +296,10 @@ std::shared_ptr<virt_state_t> create_state() {
     VC_REGISTER_MEMBER_FUNCTION(vs.get(), lua_object_t, capture, vc::ref_t<lua_object_t>);
     VC_REGISTER_MEMBER_FUNCTION(vs.get(), lua_object_t, release);
 
+    /* The library's own error names, so a script can say vc.VC_ERROR_OK rather than -0.
+    2026-09-22 06:50 */
+    add_lua_flag_mapping(vs.get(), err_e_from_str);
+
     return vs;
 }
 
@@ -887,8 +891,6 @@ std::string new_anon_name(virt_state_t *vs) {
     return "__" + std::to_string(vs->anonymous_increment++);
 }
 
-const char *get_version() { return VIRT_COMPOSER_ABI; }
-
 /* [INTERNAL] Builds every top-level entry of a parsed YAML document (`root` must be a mapping) -
 dispatches each one to build_object() (has `m_type`) or build_pseudo_object() (doesn't), scheduling
 both as coroutines via co::sched() so they can suspend/resume on each other's dependencies rather
@@ -1277,6 +1279,18 @@ static lua_State *luaw_init(vc::virt_state_t *vs) {
     lua_pushstring(L, "virt_state");
     lua_pushlightuserdata(L, vs);
     lua_settable(L, LUA_REGISTRYINDEX);
+
+    /* Every thread Lua makes for itself inherits this slot from the state that made it, so holding
+    it null here is what lets a thread nobody drives be told apart from one that is driven. The
+    slot belongs to the library and not to whoever reads it, which is why it is set here and as a
+    void * -- this file need not know what the readers keep in it. 2026-09-22 04:30
+    TODO: investigate keeping `vs` here instead. A thread could then tell the main state from a
+    coroutine by what its extra space holds, and a coroutine's own object carries the vs. The slot
+    is one pointer wide, so it holds one or the other and never both; LUA_RIDX_MAINTHREAD
+    (minilua.h:975) answers the main thread from any thread, so luaw_get_virt_state() would become
+    a rawgeti plus a pointer read rather than the string-keyed gettable it does now. See STATUS.md,
+    open question of 21-09-2026. */
+    *(void **)lua_getextraspace(L) = nullptr;
 
     luaL_requiref(L, "virt_composer", luaopen_vc, 1);      lua_pop(L, 1);
     luaL_requiref(L, LUA_GNAME, luaopen_base, 1);          lua_pop(L, 1);

@@ -67,8 +67,9 @@ using ssize_t = ptrdiff_t;
  * @brief Identifies the build of virt_composer a translation unit was compiled against.
  *
  * Core:
- *   - A plugin bakes this in when it is compiled and reports it back through `get_version()`. The
- *     host compares it with its own and refuses a plugin whose value differs.
+ *   - A plugin bakes this in when it is compiled and reports it back through its own
+ *     `plugin_get_version()`. The host compares it with its own and refuses a plugin whose value
+ *     differs.
  *   - It is written by hand and raised by hand. Anything that changes what crosses between a host
  *     and a plugin - `object_t`'s layout, a signature, the meaning of a type id - wants it raised
  *     in the same edit, because nothing else will notice.
@@ -88,12 +89,12 @@ using ssize_t = ptrdiff_t;
  *       translation unit's main file rather than for the header, so it compared two unrelated
  *       source files and refused every honest plugin.
  *
- * @see get_version, load_plugin
+ * @see load_plugin
  *
  * @date 2026-09-20 18:45
  */
 #ifndef VIRT_COMPOSER_ABI
-# define VIRT_COMPOSER_ABI  "0.3-9164ffa4"
+# define VIRT_COMPOSER_ABI  "0.3-71696559"
 #endif
 
 /*!
@@ -994,8 +995,8 @@ std::shared_ptr<virt_state_t> create_state();
  *     lets it register. Afterwards its types are constructible from YAML and usable from Lua like
  *     any other.
  *   - The plugin must export `plugin_get_version`, `plugin_type_cnt` and `plugin_register_meta`,
- *     answering its own VIRT_COMPOSER_ABI rather than calling `get_version()`, which resolves to
- *     the host's copy and would agree with the host whatever the plugin was built against. It must
+ *     answering its own VIRT_COMPOSER_ABI and never the host's, which would agree with the host
+ *     whatever the plugin was built against. It must
  *     have been built against this same virt_composer. A plugin built against another is refused.
  *   - A plugin that has taken a range keeps it for the life of the process, and every state that
  *     loads it afterwards places its types at that same range. So a plugin may serve any number of
@@ -1121,7 +1122,10 @@ inline T get_enum_val(fkyaml::node &node, const std::unordered_map<std::string, 
 template <typename T>
 inline T get_enum_val(fkyaml::node &n);
 
-const char *get_version();
+/*! The names of @ref err_e, so an error can be written as one in a config and compared against
+ * one from Lua. @date 2026-09-22 06:50 */
+extern inline std::unordered_map<std::string, err_e> err_e_from_str;
+template <> inline err_e get_enum_val<err_e>(fkyaml::node &n);
 
 /* Virt Composer - YAML Parser API
 ------------------------------------------------------------------------------------------------- */
@@ -2240,9 +2244,33 @@ err_e add_lua_flag_mapping(virt_state_t *vs, const std::unordered_map<std::strin
  *
  * @date 2026-09-08 06:54
  */
-template <typename Param, ssize_t index>
-struct luaw_param_t{
-    void luaw_single_param(lua_State *L) {
+/*!
+ * [INTERNAL]
+ * @brief What every @ref luaw_param_t does when it cannot convert what it was handed.
+ *
+ * Core:
+ *   - It raises by default, because the usual caller is a `lua_CFunction` converting its own
+ *     arguments: that runs inside the Lua call which passed them, so raising is safe and is how a
+ *     script is told what it got wrong.
+ *   - A caller converting a *result* replaces it with something that throws. A result is
+ *     converted after the Lua call that produced it has returned, and there no protected call is
+ *     left for a raise to land in - `luaD_throw` ends the process instead of unwinding.
+ *
+ * Detail:
+ *   - It lives on a base rather than on each specialization so that a conversion written later
+ *     inherits the policy instead of quietly defaulting to raising, which is how the result path
+ *     came to abort in the first place.
+ *
+ * @date 2026-09-22 07:30
+ */
+struct luaw_param_base_t {
+    std::function<void (lua_State *, const std::string&, const std::source_location)> throw_error =
+            luaw_push_error;
+};
+
+template <typename Param>
+struct luaw_param_t : luaw_param_base_t {
+    void luaw_single_param(lua_State *L, ssize_t index) {
         DBG("FAILURE at index: %zd", index);
         /* What a parameter can be:
         1. vc::ref_t of some object
@@ -2258,9 +2286,9 @@ struct luaw_param_t{
 };
 
 /* This resolves userdata(void *) received from lua to an vc parameter */
-template <ssize_t index>
-struct luaw_param_t<void *, index> {
-    void *luaw_single_param(lua_State *L) {
+template <>
+struct luaw_param_t<void *> : luaw_param_base_t {
+    void *luaw_single_param(lua_State *L, ssize_t index) {
         // DBG("void* at index: %zd", index);
         if (lua_isnil(L, index))
             return NULL;
@@ -2269,9 +2297,9 @@ struct luaw_param_t<void *, index> {
 };
 
 /* This resolves userdata(vc::ref) received from lua to an vc parameter */
-template <typename T, ssize_t index>
-struct luaw_param_t<vc::ref_t<T>, index> {
-    vc::ref_t<T> luaw_single_param(lua_State *L) {
+template <typename T>
+struct luaw_param_t<vc::ref_t<T>> : luaw_param_base_t {
+    vc::ref_t<T> luaw_single_param(lua_State *L, ssize_t index) {
         // DBG("Ref at index: %zd", index);
         if constexpr (std::is_same_v<T, lua_object_t>) {
             if (auto obj = get_object_from_lua(L, index);
@@ -2287,19 +2315,17 @@ struct luaw_param_t<vc::ref_t<T>, index> {
                 return vc::ref_t<T>{}; /* if the user intended to pass a nill, we give it as a nullptr */
             auto obj = get_object_from_lua(L, index);
             if (!obj)
-                luaw_push_error(L, std::format("Expected userdata at index {}", index));
+                throw_error(L, std::format("Expected userdata at index {}", index),
+                        std::source_location::current());
             return obj->to_related<T>();
         }
     }
 };
 
 /* This resolves bitmasks received from lua to an vc parameter */
-template <typename T, ssize_t index>
-struct luaw_param_t<bm_t<T>, index> {
-    std::function<void (lua_State *, const std::string&, const std::source_location)> throw_error =
-            luaw_push_error;
-
-    T luaw_single_param(lua_State *L) {
+template <typename T>
+struct luaw_param_t<bm_t<T>> : luaw_param_base_t {
+    T luaw_single_param(lua_State *L, ssize_t index) {
         // DBG("BitMap at index: %zd", index);
         /* There are 2 options here (maybe later we will also add numbers, but not for now):
             1. This is a string that converts to the respective type bitmask
@@ -2363,49 +2389,51 @@ struct luaw_param_t<bm_t<T>, index> {
 };
 
 /* This resolves bool received from lua to an vc parameter */
-template <ssize_t index>
-struct luaw_param_t<bool, index> {
-    bool luaw_single_param(lua_State *L) {
+template <>
+struct luaw_param_t<bool> : luaw_param_base_t {
+    bool luaw_single_param(lua_State *L, ssize_t index) {
         return lua_toboolean(L, index);
     }
 };
 
 /* This resolves integers received from lua to an vc parameter */
-template <std::integral Integer, ssize_t index>
-struct luaw_param_t<Integer, index> {
-    Integer luaw_single_param(lua_State *L) {
+template <std::integral Integer>
+struct luaw_param_t<Integer> : luaw_param_base_t {
+    Integer luaw_single_param(lua_State *L, ssize_t index) {
         return lua_tointeger(L, index);
     }
 };
 
 /* This resolves floats received from lua to an vc parameter */
-template <std::floating_point Float, ssize_t index>
-struct luaw_param_t<Float, index> {
-    Float luaw_single_param(lua_State *L) {
+template <std::floating_point Float>
+struct luaw_param_t<Float> : luaw_param_base_t {
+    Float luaw_single_param(lua_State *L, ssize_t index) {
         // DBG("Float at index: %zd", index);
         int valid = 0;
         Float ret = lua_tonumberx(L, index, &valid);
         if (!valid) {
-            luaw_push_error(L,
+            throw_error(L,
                     std::format("Invalid parameter at index {}, failed conversion to float from "
                     "[{}]",
-                    index, lua_typename(L, lua_type(L, index))));
+                    index, lua_typename(L, lua_type(L, index))),
+                    std::source_location::current());
         }
         return ret;
     }
 };
 
 /* This resolves strings received from lua to an vc parameter */
-template <ssize_t index>
-struct luaw_param_t<const char *, index> {
-    const char *luaw_single_param(lua_State *L) {
+template <>
+struct luaw_param_t<const char *> : luaw_param_base_t {
+    const char *luaw_single_param(lua_State *L, ssize_t index) {
         // DBG("char* at index: %zd", index);
         const char *ret = lua_tostring(L, index);
         if (!ret) {
-            luaw_push_error(L,
+            throw_error(L,
                     std::format("Invalid parameter at index {}, failed conversion to string from "
                     "[{}]",
-                    index, lua_typename(L, lua_type(L, index))));
+                    index, lua_typename(L, lua_type(L, index))),
+                    std::source_location::current());
         }
         return ret;
     }
@@ -2417,17 +2445,18 @@ convention used by vector/tuple above); any other value Lua can't convert to a s
 luaw_push_error()/lua_error(), unlike the old inline std::string branch this replaces, which
 silently degraded any such value to "". A number at `index` still converts via lua_tostring's own
 number-to-string coercion, same as it always has. */
-template <ssize_t index>
-struct luaw_param_t<std::string, index> {
-    std::string luaw_single_param(lua_State *L) {
+template <>
+struct luaw_param_t<std::string> : luaw_param_base_t {
+    std::string luaw_single_param(lua_State *L, ssize_t index) {
         if (lua_isnil(L, index))
             return {};
         const char *ret = lua_tostring(L, index);
         if (!ret) {
-            luaw_push_error(L,
+            throw_error(L,
                     std::format("Invalid parameter at index {}, failed conversion to string from "
                     "[{}]",
-                    index, lua_typename(L, lua_type(L, index))));
+                    index, lua_typename(L, lua_type(L, index))),
+                    std::source_location::current());
         }
         return ret;
     }
@@ -2474,17 +2503,18 @@ default" unpack convention); any slots beyond that stay default-constructed (a s
 any extra table elements past sizeof...(Args) are simply never read (a long table). Pushed in
 reverse (count down to 1) so the stack top ends up holding element 0, matching the per-slot
 negative-index reads below. */
-template <typename ...Args, ssize_t index>
-struct luaw_param_t<std::tuple<Args...>, index> {
+template <typename ...Args>
+struct luaw_param_t<std::tuple<Args...>> : luaw_param_base_t {
     template <size_t ...I>
-    auto _luaw_single_param_impl(lua_State *L, std::index_sequence<I...>) {
+    auto _luaw_single_param_impl(lua_State *L, ssize_t index, std::index_sequence<I...>) {
         using Ret = typename de_bitmaptizize<std::tuple<Args...>>::Type;
         Ret ret;
         if (lua_isnil(L, index))
             return ret;
         if (!lua_istable(L, index)) {
-            luaw_push_error(L, std::format("Invalid object of type: {} at index {}",
-                    lua_typename(L, lua_type(L, index)), index));
+            throw_error(L, std::format("Invalid object of type: {} at index {}",
+                    lua_typename(L, lua_type(L, index)), index),
+                    std::source_location::current());
         }
         int abs_idx = lua_absindex(L, index);
         int len = lua_rawlen(L, index);
@@ -2493,26 +2523,26 @@ struct luaw_param_t<std::tuple<Args...>, index> {
             lua_rawgeti(L, abs_idx, i);
         ([&] {
             if (I < count)
-                std::get<I>(ret) = luaw_param_t<Args, -ssize_t(I)-1>{}.luaw_single_param(L);
+                std::get<I>(ret) = luaw_param_t<Args>{}.luaw_single_param(L, -ssize_t(I) - 1);
         }(), ...);
         lua_pop(L, (int)count);
         return ret;
     }
 
-    auto luaw_single_param(lua_State *L) {
+    auto luaw_single_param(lua_State *L, ssize_t index) {
         // DBG("Tuple at index: %zd", index);
-        return _luaw_single_param_impl(L, std::index_sequence_for<Args...>{});
+        return _luaw_single_param_impl(L, index, std::index_sequence_for<Args...>{});
     }
 };
 
 /* Delegates to the tuple specialization above (reads the same 2-element table as
 std::tuple<Arg1,Arg2>) and unpacks the result into a pair, rather than duplicating its stack
 handling. */
-template <typename Arg1, typename Arg2, ssize_t index>
-struct luaw_param_t<std::pair<Arg1, Arg2>, index> {
-    auto luaw_single_param(lua_State *L) {
+template <typename Arg1, typename Arg2>
+struct luaw_param_t<std::pair<Arg1, Arg2>> : luaw_param_base_t {
+    auto luaw_single_param(lua_State *L, ssize_t index) {
         // DBG("Pair at index: %zd", index);
-        auto tuple = luaw_param_t<std::tuple<Arg1, Arg2>, index>{}.luaw_single_param(L);
+        auto tuple = luaw_param_t<std::tuple<Arg1, Arg2>>{}.luaw_single_param(L, index);
         typename de_bitmaptizize<std::pair<Arg1, Arg2>>::Type ret =
                 {std::get<0>(tuple), std::get<1>(tuple)};
         return ret;
@@ -2523,22 +2553,23 @@ struct luaw_param_t<std::pair<Arg1, Arg2>, index> {
 (unlike the tuple specialization above) converts one element at a time - push, convert, pop - since
 the element count isn't known at compile time so there's no single pack-expansion construction to
 build. */
-template <typename T, ssize_t index>
-struct luaw_param_t<std::vector<T>, index> {
-    auto luaw_single_param(lua_State *L) {
+template <typename T>
+struct luaw_param_t<std::vector<T>> : luaw_param_base_t {
+    auto luaw_single_param(lua_State *L, ssize_t index) {
         // DBG("Vector at index: %zd", index);
         using Ret = typename de_bitmaptizize<std::vector<T>>::Type;
         if (lua_isnil(L, index))
             return Ret{};
         if (!lua_istable(L, index)) {
-            luaw_push_error(L, std::format("Invalid object of type: {} at index {}",
-                    lua_typename(L, lua_type(L, index)), index));
+            throw_error(L, std::format("Invalid object of type: {} at index {}",
+                    lua_typename(L, lua_type(L, index)), index),
+                    std::source_location::current());
         }
         int len = lua_rawlen(L, index);
         Ret ret(len);
         for (int i = 1; i <= len; i++) {
             lua_rawgeti(L, index, i);
-            ret[i-1] = luaw_param_t<T, -1>{}.luaw_single_param(L);
+            ret[i-1] = luaw_param_t<T>{}.luaw_single_param(L, -1);
             lua_pop(L, 1);
         }
         return ret;
@@ -2731,7 +2762,7 @@ values (0 or 1), matching the lua_CFunction contract. */
 template <auto function, typename ...Params, size_t ...I>
 inline int luaw_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     using RetType = decltype(function(
-            luaw_param_t<Params, I + 1>{}.luaw_single_param(L)...));
+            luaw_param_t<Params>{}.luaw_single_param(L, I + 1)...));
 
     // ([L]{
     //     DBG("Index: %zu -> (%s, %s)", I + 1, demangle<Params>().c_str(),
@@ -2739,12 +2770,12 @@ inline int luaw_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     // }(), ...);
 
     if constexpr (std::is_void_v<RetType>) {
-        function(luaw_param_t<Params, I + 1>{}.luaw_single_param(L)...);
+        function(luaw_param_t<Params>{}.luaw_single_param(L, I + 1)...);
         return 0;
     }
     else {
         luaw_returner_t<RetType>{}.luaw_ret_push(L, function(
-                luaw_param_t<Params, I + 1>{}.luaw_single_param(L)...));
+                luaw_param_t<Params>{}.luaw_single_param(L, I + 1)...));
         return 1;
     }
 }
@@ -2759,15 +2790,15 @@ int luaw_member_function_wrapper_impl(lua_State *L, std::index_sequence<I...>) {
     auto obj = o->to_related<T>();
 
     using RetType = decltype((obj.get()->*member_ptr)(
-            luaw_param_t<Params, I + 2>{}.luaw_single_param(L)...));
+            luaw_param_t<Params>{}.luaw_single_param(L, I + 2)...));
 
     if constexpr (std::is_void_v<RetType>) {
-        (obj.get()->*member_ptr)(luaw_param_t<Params, I + 2>{}.luaw_single_param(L)...);
+        (obj.get()->*member_ptr)(luaw_param_t<Params>{}.luaw_single_param(L, I + 2)...);
         return 0;
     }
     else {
         luaw_returner_t<RetType>{}.luaw_ret_push(L, (obj.get()->*member_ptr)(
-                luaw_param_t<Params, I + 2>{}.luaw_single_param(L)...));
+                luaw_param_t<Params>{}.luaw_single_param(L, I + 2)...));
         return 1;
     }    
 }
@@ -2900,26 +2931,30 @@ int luaw_lua_to_cpp_object(lua_State *L, int index, T &object) {
                 " - Is blacklisted from member-object setters (see luaw_setter_blacklist_t)");
         return -1;
     }
-    else if constexpr (is_vc_enum<Type>) {
+    else {
+        /* An enum is parsed through bm_t<T>'s single-value path; a bare enum was never meant to be
+        Lua-parseable without that wrapper. Everything else converts as itself. 2026-09-22 07:30 */
+        using ParamT = std::conditional_t<is_vc_enum<Type>, bm_t<Type>, Type>;
+        luaw_param_t<ParamT> param{};
+
+        /* This is the one caller that must report rather than raise, which is what this
+        function's -1 has always claimed it does. A result is converted after the Lua call that
+        produced it is over, so no protected call is left for a lua_error to land in and luaD_throw
+        ends the process instead of unwinding. Raising stays the default everywhere else, because
+        an argument is converted inside the call that passed it. 2026-09-22 07:30 */
+        param.throw_error = [](lua_State *, const std::string& str,
+                const std::source_location) -> void
+        {
+            throw std::runtime_error(str);
+        };
+
         try {
-            object = luaw_param_t<bm_t<T>, -1>{
-                .throw_error = [](lua_State *, const std::string& str,
-                        const std::source_location) -> void
-                {
-                    throw std::runtime_error(str);
-                }
-            }.luaw_single_param(L);
+            object = param.luaw_single_param(L, index);
         }
-        catch(std::exception &e) {
-            DBG("Failed to parse enum object: %s", e.what());
+        catch (std::exception &e) {
+            DBG("Failed to convert object at index %d: %s", index, e.what());
             return -1;
         }
-        return 0;
-    }
-    else {
-        /* index hardcoded -1 because every current caller of luaw_lua_to_cpp_object already
-        passes -1 (see luaw_setter_blacklist_t's doc comment for the same assumption). */
-        object = luaw_param_t<Type, -1>{}.luaw_single_param(L);
         return 0;
     }
 }
@@ -3045,7 +3080,16 @@ call_on_stack(virt_state_t *vs, Args&& ...args)
             lua_pop(L, 1);
             return {result, VC_ERROR_FAILED_CALL};
         }
-        luaw_lua_to_cpp_object(L, -1, result);
+        /* The conversion answers rather than raises, so a script that returned a shape this R
+        cannot take is a failed call and not a dead process. Until 22-09-2026 this return was
+        dropped on the floor and the raise underneath it ended the actor. 2026-09-22 06:50 */
+        if (luaw_lua_to_cpp_object(L, -1, result) < 0) {
+            DBG("LUA call_on_stack([%d]): the result does not convert to the type asked for",
+                    argc);
+            lua_pop(L, 1);
+            return {R{}, VC_ERROR_FAILED_CALL};
+        }
+        lua_pop(L, 1);
         return {result, VC_ERROR_OK};
     }
 }
@@ -3084,6 +3128,23 @@ inline T get_enum_val(fkyaml::node &node, const std::unordered_map<std::string, 
 /* See get_enum_val(node)'s declaration above for its doc comment. */
 template <typename T>
 inline T get_enum_val(fkyaml::node &n) = delete;
+
+/* See err_e_from_str's declaration above for its doc comment. Every other enum that reaches Lua is
+registered this way; the library's own never was, which is why a script that received one saw a
+bare number and had nothing to compare it against. 2026-09-22 06:50 */
+inline std::unordered_map<std::string, err_e> err_e_from_str = {
+    {"VC_ERROR_OK",          VC_ERROR_OK},
+    {"VC_ERROR_GENERIC",     VC_ERROR_GENERIC},
+    {"VC_ERROR_PARSE_YAML",  VC_ERROR_PARSE_YAML},
+    {"VC_ERROR_FAILED_CALL", VC_ERROR_FAILED_CALL},
+    {"VC_ERROR_REDEFINED",   VC_ERROR_REDEFINED},
+};
+
+/* This is what makes is_vc_enum<err_e> true, so the enum returner already in this file carries an
+err_e across and no specialization of its own is needed. 2026-09-22 06:50 */
+template <> inline err_e get_enum_val<err_e>(fkyaml::node &n) {
+    return get_enum_val(n, err_e_from_str);
+}
 
 /* Definitions - see the three to_string() overloads' declarations above for their doc comments. */
 inline std::string to_string(object_type_e type) {

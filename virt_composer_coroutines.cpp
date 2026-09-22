@@ -110,13 +110,6 @@ co::task<err_e> lua_coro_t::run() {
     co_return VC_ERROR_OK;
 }
 
-/* See lua_coro_t::wait_done()'s declaration in virt_composer_coroutines.h for its doc comment. */
-co::task<err_e> lua_coro_t::wait_done() {
-    if (is_running())
-        co_await done->wait();
-    co_return status == LUA_OK ? VC_ERROR_OK : VC_ERROR_FAILED_CALL;
-}
-
 /* See lua_coro_t::close()'s declaration in virt_composer_coroutines.h for its doc comment. */
 void lua_coro_t::close() {
     if (!thread)
@@ -163,17 +156,17 @@ static vc::ref_t<lua_coro_t> luaw_coro_arg(lua_State *L, int idx) {
     return co;
 }
 
-/* vc.coro_create(f, ...) -- makes a coroutine and sets `f` and its arguments as its next call. The
-callee and the arguments are moved rather than copied: this function is about to return and its own
-stack goes with it. 2026-09-21 20:49 */
-static int luaw_coro_create(lua_State *L) {
+/* vc.coroutine_create(f, ...) -- makes a coroutine and sets `f` and its arguments as its next
+call. The callee and the arguments are moved rather than copied: this function is about to return
+and its own stack goes with it. 2026-09-22 04:30 */
+static int luaw_coroutine_create(lua_State *L) {
     auto *vs = vc::luaw_get_virt_state(L);
     if (!vs) {
-        vc::luaw_push_error(L, "vc.coro_create: no virt state behind this lua state");
+        vc::luaw_push_error(L, "vc.coroutine_create: no virt state behind this lua state");
         return 0;
     }
     if (!lua_isfunction(L, 1)) {
-        vc::luaw_push_error(L, "vc.coro_create: expects a function");
+        vc::luaw_push_error(L, "vc.coroutine_create: expects a function");
         return 0;
     }
 
@@ -184,109 +177,61 @@ static int luaw_coro_create(lua_State *L) {
     lua_xmove(L, co->thread, n);            /* off this stack, onto the coroutine's, in order */
 
     if (vc::push_vc_object(L, co->to_related<vc::object_t>()) < 0) {
-        vc::luaw_push_error(L, "vc.coro_create: could not answer the coroutine");
+        vc::luaw_push_error(L, "vc.coroutine_create: could not answer the coroutine");
         return 0;
     }
     return 1;
 }
 
-/* vc.coro_adopt(co) -- takes a thread Lua made and drives it from here on. The guards catch what
-can be caught: the main state, a thread already driven, one that is dead, and the one running this
-very call. What cannot be caught is somebody else resuming it later, which is the whole of the
-risk. 2026-09-21 20:49 */
-static int luaw_coro_adopt(lua_State *L) {
+/* vc.coroutine_adopt(co) -- takes a thread Lua made and drives it from here on. The guards catch
+what can be caught: the main state, a thread already driven, one that is dead, and the one running
+this very call. What cannot be caught is somebody else resuming it later, which is the whole of the
+risk. 2026-09-22 04:30 */
+static int luaw_coroutine_adopt(lua_State *L) {
     auto *vs = vc::luaw_get_virt_state(L);
     if (!vs) {
-        vc::luaw_push_error(L, "vc.coro_adopt: no virt state behind this lua state");
+        vc::luaw_push_error(L, "vc.coroutine_adopt: no virt state behind this lua state");
         return 0;
     }
     if (!lua_isthread(L, 1)) {
-        vc::luaw_push_error(L, "vc.coro_adopt: expects a coroutine");
+        vc::luaw_push_error(L, "vc.coroutine_adopt: expects a coroutine");
         return 0;
     }
 
     lua_State *th = lua_tothread(L, 1);
     if (th == L || th == vc::luaw_get_lua_state(vs)) {
-        vc::luaw_push_error(L, "vc.coro_adopt: a coroutine cannot adopt itself or the main state");
+        vc::luaw_push_error(L, "vc.coroutine_adopt: a coroutine cannot adopt itself or the "
+                "main state");
         return 0;
     }
     if (luaw_get_coro(th)) {
-        vc::luaw_push_error(L, "vc.coro_adopt: this coroutine is already driven by the actor");
+        vc::luaw_push_error(L, "vc.coroutine_adopt: this coroutine is already driven by the actor");
         return 0;
     }
     int st = lua_status(th);
     if (st != LUA_OK && st != LUA_YIELD) {
-        vc::luaw_push_error(L, "vc.coro_adopt: this coroutine is dead");
+        vc::luaw_push_error(L, "vc.coroutine_adopt: this coroutine is dead");
         return 0;
     }
 
     auto co = lua_coro_t::adopt(vs, L, 1);
     if (vc::push_vc_object(L, co->to_related<vc::object_t>()) < 0) {
-        vc::luaw_push_error(L, "vc.coro_adopt: could not answer the coroutine");
+        vc::luaw_push_error(L, "vc.coroutine_adopt: could not answer the coroutine");
         return 0;
     }
     return 1;
 }
 
-/* co:start() -- schedules the call and answers at once. 2026-09-21 20:49 */
-static int luaw_coro_start(lua_State *L) {
-    auto co = luaw_coro_arg(L, 1);
+/* vc.coroutine_spawn(f, ...) -- the two common ones together. coroutine_create() moves the callee
+and the arguments away, so the coroutine it answers is the only thing left on this stack.
+2026-09-22 04:30 */
+static int luaw_coroutine_spawn(lua_State *L) {
+    if (luaw_coroutine_create(L) != 1)
+        return 0;
+    auto co = luaw_coro_arg(L, 1);  /* the only thing create left on this stack */
     if (!co)
         return 0;
-
-    auto *vs = vc::luaw_get_virt_state(L);
-    vc::luaw_get_pool(vs)->sched(co->run());
-    return 0;
-}
-
-/* [INTERNAL] Copies onto `L` the results the ended script left on its own thread. They are copied
-and not moved, because every waiter is woken and every one of them takes its own.
-2026-09-21 20:49 */
-static int luaw_coro_push_results(lua_State *L, vc::ref_t<lua_coro_t> co) {
-    lua_State *src  = co->thread;
-    int        base = lua_gettop(src) - co->nres;
-
-    for (int i = 1; i <= co->nres; i++) {
-        lua_pushvalue(src, base + i);
-        lua_xmove(src, L, 1);
-    }
-    return co->nres;
-}
-
-/* [INTERNAL] Pushes the error table the actors speak, `{errid, errstr}`. 2026-09-21 20:49 */
-static int luaw_coro_push_err(lua_State *L, err_e err, const char *what) {
-    lua_newtable(L);
-    lua_pushinteger(L, err);
-    lua_setfield(L, -2, "errid");
-    lua_pushstring(L, what);
-    lua_setfield(L, -2, "errstr");
-    return 1;
-}
-
-/* co:wait() -- waits for another script to end and answers what it returned, or the standard error
-table. The callback holds the coroutine by ref_t, so the one being waited on cannot die while
-somebody waits for it, whatever else drops its handle meanwhile. 2026-09-21 20:49 */
-static int luaw_coro_wait(lua_State *L) {
-    auto co = luaw_coro_arg(L, 1);
-    if (!co)
-        return 0;
-
-    return vc::lua_await(L, co->wait_done(),
-            std::function<int(lua_State *, err_e &)>(
-                [co](lua_State *L, err_e &err) -> int {
-                    if (err != vc::VC_ERROR_OK)
-                        return luaw_coro_push_err(L, err, "the script failed");
-                    return luaw_coro_push_results(L, co);
-                }));
-}
-
-/* vc.spawn(f, ...) -- the two common ones together. coro_create() moves the callee and the
-arguments away, so the coroutine it answers is the only thing left on this stack and is exactly the
-argument start() reads. 2026-09-21 20:49 */
-static int luaw_coro_spawn(lua_State *L) {
-    if (luaw_coro_create(L) != 1)
-        return 0;
-    luaw_coro_start(L);             /* raises rather than answering, if it fails at all */
+    co->start();
     return 1;
 }
 
@@ -294,45 +239,46 @@ static int luaw_coro_spawn(lua_State *L) {
 /* Registration                                                                                 */
 /* ------------------------------------------------------------------------------------------- */
 
-/* [INTERNAL] The `vc::lua_coro_t` builder a config names. What it builds has a thread and no
-callee, which is the state a fresh vc::lua_object_t is in as well: something gives it one later.
-2026-09-21 20:49 */
-static co::task<vc::ref_t<vc::object_t>> build_lua_coro(vc::virt_state_t *vs,
-        const std::string& name, fkyaml::node& node)
-{
-    (void)node;
-    auto obj = lua_coro_t::create(vs);
-    vc::mark_dependency_solved(vs, name, obj->to_related<vc::object_t>());
-    co_return obj->to_related<vc::object_t>();
-}
-
 /* See coroutines_register_meta()'s declaration in virt_composer_coroutines.h for its doc
 comment. */
 err_e coroutines_register_meta(virt_state_t *vs) {
-    /* Every thread Lua makes for itself inherits this, so a thread nobody drives answers null and
-    lua_await refuses it. 2026-09-21 20:49 */
-    *(lua_coro_t **)lua_getextraspace(luaw_get_lua_state(vs)) = nullptr;
-
     if (err_e err = add_lua_tab_funcs(vs, {
-            {"coro_create", luaw_coro_create},
-            {"coro_adopt",  luaw_coro_adopt},
-            {"spawn",       luaw_coro_spawn},
+            {"coroutine_create", luaw_coroutine_create},
+            {"coroutine_adopt",  luaw_coroutine_adopt},
+            {"coroutine_spawn",  luaw_coroutine_spawn},
         }); err != VC_ERROR_OK)
     {
         DBG("Failed to add the coroutine functions to the vc table");
         return err;
     }
 
-    /* Registered as raw lua_CFunctions rather than through VC_REGISTER_MEMBER_FUNCTION, for the
-    reason lua_object_t::push already is: they need the real calling L. For `wait` that is not a
-    detail - the L it must suspend is the waiting script's thread, and the one it reads results
-    from is the other one. 2026-09-21 20:49 */
-    set_lua_class_member(vs, lua_coro_t::type_id_static(), "start",
-            luaw_coro_start, LUAW_MEMBER_FUNCTION);
-    set_lua_class_member(vs, lua_coro_t::type_id_static(), "wait",
-            luaw_coro_wait, LUAW_MEMBER_FUNCTION);
+    VC_REGISTER_MEMBER_FUNCTION(vs, lua_coro_t, start);
 
-    return add_named_builder_callback(vs, "vc::lua_coro_t", build_lua_coro);
+    /* The typed waits. wait_result is a template, so each is registered by hand rather than
+    through VC_REGISTER_MEMBER_FUNCTION, which would name them after the template-id. Each answers
+    a coroutine, so luaw_returner_t<co::task<T>> suspends the calling script on it and pushes the
+    pair it ends with - a script reads the value at [1] and the code at [2], and the code compares
+    against vc.VC_ERROR_OK. A script wanting a type not listed here registers its own; nothing
+    about these three is privileged. 2026-09-22 06:50 */
+    luaw_register_member_function<lua_coro_t, &lua_coro_t::wait_result<int64_t>>(
+            vs, "wait_result_i64");
+    luaw_register_member_function<lua_coro_t, &lua_coro_t::wait_result<double>>(
+            vs, "wait_result_f64");
+    luaw_register_member_function<lua_coro_t, &lua_coro_t::wait_result<std::string>>(
+            vs, "wait_result_str");
+
+    /* Inline, so the registration says what it builds where it registers it. A coroutine built
+    from a config has a thread and no callee, which is the state a fresh vc::lua_object_t is in as
+    well: something gives it one later. 2026-09-22 04:30 */
+    return add_named_builder_callback(vs, "vc::lua_coro_t",
+            [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
+                -> co::task<vc::ref_t<vc::object_t>>
+            {
+                (void)node;
+                auto obj = lua_coro_t::create(vs);
+                vc::mark_dependency_solved(vs, node_name, obj->to_related<vc::object_t>());
+                co_return obj->to_related<vc::object_t>();
+            });
 }
 
 }; /* namespace virt_composer */

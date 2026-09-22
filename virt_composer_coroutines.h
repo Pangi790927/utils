@@ -12,8 +12,8 @@
  *   - @ref lua_await is what a `lua_CFunction` returns when it cannot answer yet. It suspends the
  *     calling script, lets the pool carry on, and answers the script once the task it was handed
  *     completes.
- *   - A script gains `vc.coro_create`, `vc.coro_adopt` and `vc.spawn`, plus `start` and `wait` on
- *     a coroutine object.
+ *   - A script gains `vc.coroutine_create`, `vc.coroutine_adopt` and `vc.coroutine_spawn`, plus
+ *     `start` and `wait` on a coroutine object.
  *   - `VC_TYPE_LUA_CORO` is registered here, so a coroutine can also be named in a config under
  *     `m_type: vc::lua_coro_t`.
  *
@@ -132,9 +132,14 @@ struct lua_coro_t : public vc::object_t {
      * times it waited in between. @date 2026-09-21 20:49 */
     co::task<err_e> run();
 
-    /*! Converts the first result the script left. Fails if a script is still in flight, if the
-     * last one errored, if it left nothing, or if what it left will not become an `R`.
-     * @date 2026-09-21 20:49 */
+    /*! Schedules `run()` on the state's pool and answers at once, leaving the script to get on
+     * with it. @date 2026-09-22 04:30 */
+    void start() { luaw_get_pool(luaw_get_virt_state(thread))->sched(run()); }
+
+    /*! Converts the result the script left. A coroutine answers one value, so a script that
+     * returned more has only its first taken here and the rest are reached through `get_L()`.
+     * Fails if a script is still in flight, if the last one errored, if it left nothing, or if
+     * what it left will not become an `R`. @date 2026-09-22 04:30 */
     template <typename R>
     std::pair<R, err_e> result();
 
@@ -142,11 +147,6 @@ struct lua_coro_t : public vc::object_t {
      * waiter is woken and every waiter converts its own copy. @date 2026-09-21 20:49 */
     template <typename R>
     co::task<std::pair<R, err_e>> wait_result();
-
-    /*! **Coroutine** that waits for the script to end and answers only whether it succeeded. What
-     * it left is read afterwards, off the thread, which is what the Lua-visible `wait` does since
-     * it has no C++ type to convert to. @date 2026-09-21 20:49 */
-    co::task<err_e> wait_done();
 
     /*! Kills whatever is on the thread, runs its to-be-closed variables and leaves the thread fit
      * to be called again. @date 2026-09-21 20:49 */
@@ -161,11 +161,10 @@ struct lua_coro_t : public vc::object_t {
  * @brief Registers everything this file brings onto a fresh virt-state.
  *
  * Core:
- *   - Adds `vc.coro_create`, `vc.coro_adopt` and `vc.spawn`, the `start` and `wait` members of a
- *     coroutine object, and the `vc::lua_coro_t` builder a config names.
- *   - Must be called before any Lua code runs on the state, because it also marks the main state
- *     as driven by nobody, and a thread made before that mark would inherit a value that means
- *     nothing.
+ *   - Adds `vc.coroutine_create`, `vc.coroutine_adopt` and `vc.coroutine_spawn`, the `start` and
+ *     `wait` members of a coroutine object, and the `vc::lua_coro_t` builder a config names.
+ *   - Must be called before any script runs on the state, since a script cannot name what has
+ *     not been registered yet.
  *   - The caller registers it, right after create_state(). Nothing inside the library can:
  *     virt_composer.h does not include this file yet, so create_state() cannot name this
  *     function. Once the component is collected there, this becomes one line of virt_composer's
@@ -315,20 +314,6 @@ inline err_e lua_coro_t::push_call(vc::ref_t<lua_object_t> fn) {
     return VC_ERROR_OK;
 }
 
-/* [INTERNAL] Converts the value on top of `L` into the `R` that the light userdata upvalue points
-at. It exists to be pcall'd: luaw_lua_to_cpp_object() raises a Lua error on a shape it cannot take,
-and a raise outside a protected call ends the process rather than the conversion.
-2026-09-21 20:49 */
-template <typename R>
-int luaw_coro_convert_result(lua_State *L) {
-    try {
-        R *out = (R *)lua_touserdata(L, lua_upvalueindex(1));
-        luaw_lua_to_cpp_object(L, -1, *out);
-        return 0;
-    }
-    catch (...) { return luaw_catch_exception(L); }
-}
-
 template <typename R>
 std::pair<R, err_e> lua_coro_t::result() {
     if (is_running()) {
@@ -345,15 +330,15 @@ std::pair<R, err_e> lua_coro_t::result() {
     }
 
     R ret{};
-    /* The conversion reads the top of the stack whatever index it is given, so the first result is
-    copied up there rather than pointed at. 2026-09-21 20:49 */
-    int first = lua_gettop(thread) - nres + 1;
-    lua_pushlightuserdata(thread, &ret);
-    lua_pushcclosure(thread, luaw_coro_convert_result<R>, 1);
-    lua_pushvalue(thread, first);
-    if (lua_pcall(thread, 1, 0, 0) != LUA_OK) {
-        DBG("Could not convert the result: %s", lua_tostring(thread, -1));
-        lua_pop(thread, 1);
+    /* The conversion reads the top of the stack whatever index it is given, so the result is
+    copied up there rather than pointed at. It answers rather than raising, which is what lets
+    this run here at all: nothing protected is active on this thread once the script has ended.
+    2026-09-22 06:50 */
+    lua_pushvalue(thread, lua_gettop(thread) - nres + 1);
+    int conv = luaw_lua_to_cpp_object(thread, -1, ret);
+    lua_pop(thread, 1);
+    if (conv < 0) {
+        DBG("The result does not convert to the type asked for");
         return {R{}, VC_ERROR_FAILED_CALL};
     }
     return {ret, VC_ERROR_OK};
@@ -389,17 +374,21 @@ template <typename T>
 co::task_t luaw_await_wrapper(lua_State *thread, co::task<T> task,
         std::function<int(lua_State *, T &)> push)
 {
-    T res = co_await task;
     int n = 0;
 
+    /* The await is inside the guard as well as the push. A task that throws is a call that failed,
+    and whoever waited on it hears about it the way they hear about any other failed call: raised
+    at the point of the wait. Left outside, the throw would leave this frame for the pool and the
+    script would stay suspended for good. 2026-09-22 06:50 */
     try {
+        T res = co_await task;
         if (push)
             n = push(thread, res);
     }
     catch (std::exception &e) {
-        DBG("The push callback threw: %s", e.what());
+        DBG("The awaited work or its push threw: %s", e.what());
         if (lua_coro_t *co = luaw_get_coro(thread))
-            co->wait_err = std::format("the push callback threw: {}", e.what());
+            co->wait_err = e.what();
         n = 0;
     }
     luaw_resume_coro(thread, n);
@@ -434,6 +423,39 @@ int lua_await(lua_State *L, co::task<T> task, std::function<int(lua_State *, T &
     luaw_get_pool(vs)->sched(luaw_await_wrapper<T>(L, std::move(task), std::move(push)));
     return lua_yieldk(L, 0, top, luaw_await_k);
 }
+
+/*!
+ * [INTERNAL]
+ * @brief Makes a function that answers a coroutine into a Lua function that suspends.
+ *
+ * Core:
+ *   - A registered function whose return type is a `co::task<T>` does not return to its caller.
+ *     The task is awaited, the calling script waits, and `T`'s own returner pushes the result
+ *     when it completes.
+ *   - It needs nothing of the wrappers: they already end by handing a return value to a returner,
+ *     and this is a return value like another. Members and free functions get it alike.
+ *   - A task that throws raises at the point of the call, the way a failed call does.
+ *
+ * Detail:
+ *   - Pushing nothing here is not an oversight. `lua_await` leaves by throwing out of
+ *     `lua_yieldk`, so nothing after it runs and the wrapper's own `return 1` is never reached -
+ *     the result count comes from the continuation when the script is resumed.
+ *   - A translation unit that has not read this file answers the primary template instead, whose
+ *     static assert says the return type is not a valid one. That is the truth: a waiting
+ *     function cannot be registered without this component.
+ *
+ * @date 2026-09-22 06:50
+ */
+template <typename T>
+struct luaw_returner_t<co::task<T>> {
+    void luaw_ret_push(lua_State *L, co::task<T> task) {
+        lua_await(L, std::move(task), std::function<int(lua_State *, T &)>(
+                [](lua_State *L, T &val) -> int {
+                    luaw_returner_t<T>{}.luaw_ret_push(L, val);
+                    return 1;
+                }));
+    }
+};
 
 }; /* namespace virt_composer */
 
