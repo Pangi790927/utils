@@ -147,11 +147,15 @@ struct lua_coro_t : public vc::object_t {
     /*! Kills whatever is on the thread, runs its to-be-closed variables and leaves the thread fit
      * to be called again.
      *
+     * Refused, as a failed call, while this coroutine is executing or is sitting below one it
+     * resumed: closing then would reset a call stack something is standing on. A suspended, fresh
+     * or dead coroutine closes fine, which is the case worth having.
+     *
      * A script killed while it was waiting counts as a call that failed, not one that finished:
      * whoever was waiting for it is woken and told so. The wait's own wrapper is killed first,
      * since it holds this thread and would otherwise push onto one that is about to be reset.
-     * @date 2026-09-22 08:20 */
-    void close();
+     * @date 2026-09-22 10:20 */
+    err_e close();
 
 
 private:

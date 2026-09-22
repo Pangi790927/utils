@@ -56,8 +56,13 @@ err_e lua_coro_t::_ready_thread() {
         DBG("This coroutine is in the middle of a call");
         return VC_ERROR_FAILED_CALL;
     }
-    if (status != LUA_OK)
-        close();                            /* an errored thread is dead until it is closed */
+    if (status != LUA_OK) {
+        /* An errored thread is dead until it is closed. The refusal cannot fire here - an errored
+        thread is not a LUA_OK one - but the answer is carried rather than dropped, because that
+        stops being obvious the moment close() learns another reason to say no. 2026-09-22 10:20 */
+        if (err_e err = close(); err != VC_ERROR_OK)
+            return err;
+    }
     else
         lua_settop(thread, 0);              /* the previous call's results */
     return VC_ERROR_OK;
@@ -97,9 +102,21 @@ co::task<err_e> lua_coro_t::run() {
 }
 
 /* See lua_coro_t::close()'s declaration in virt_composer_coroutines.h for its doc comment. */
-void lua_coro_t::close() {
+err_e lua_coro_t::close() {
     if (!thread)
-        return;
+        return VC_ERROR_OK;
+
+    /* Lua's own rule, from coroutine.close (minilua.h, luaB_close through auxstatus): a coroutine
+    may be closed while it is suspended or dead, never while it is running or below one it
+    resumed. Both of those are a LUA_OK thread that still has frames - Lua tells them apart only
+    so that coroutine.status can name them, and refuses either - so one test covers both and the
+    calling state is not needed here. `status` cannot answer this: it is written once lua_resume
+    returns, so it says nothing about a script that is running now. 2026-09-22 10:20 */
+    lua_Debug ar;
+    if (lua_status(thread) == LUA_OK && lua_getstack(thread, 0, &ar)) {
+        DBG("This coroutine is running, or sits below one it resumed: it cannot be closed");
+        return VC_ERROR_FAILED_CALL;
+    }
 
     /* The wrapper of a wait in flight goes first. It holds this thread and reaches back here
     through the thread's extra space, so it has to stop existing before the thread is reset or the
@@ -130,6 +147,7 @@ void lua_coro_t::close() {
         status = LUA_ERRRUN;
         done->signal_all();
     }
+    return VC_ERROR_OK;
 }
 
 /* See luaw_resume_coro()'s declaration in virt_composer_coroutines.h for its doc comment.
@@ -218,6 +236,10 @@ err_e coroutines_register_meta(virt_state_t *vs) {
             vs, "wait_result_f64");
     luaw_register_member_function<lua_coro_t, &lua_coro_t::wait_result<std::string>>(
             vs, "wait_result_str");
+
+    /* co:close() -- ends whatever is on this coroutine, and answers vc.VC_ERROR_FAILED_CALL
+    rather than obeying when it is one that must not be reset. 2026-09-22 10:20 */
+    VC_REGISTER_MEMBER_FUNCTION(vs, lua_coro_t, close);
 
     /* Inline, so the registration says what it builds where it registers it. A coroutine built
     from a config has a thread and no callee, which is the state a fresh vc::lua_object_t is in as
