@@ -218,8 +218,13 @@ struct virt_state_t {
         awaiting, and a Lua coroutine's resumer holds a thread of the state below; clear() destroys
         every one of them, so none is left to resume a thread that lua_close has already taken
         away. 2026-09-22 03:32 */
-        if (pool)
-            pool->clear();
+        /* It is moved out of the member first, so luaw_get_pool() answers null while lua_close
+        runs the finalizers: an object dying there can tell the pool has ended and do no pool work.
+        `ending` keeps the pool object itself alive until after them, so nothing holding its raw
+        pointer is left dangling. 2026-09-23 00:37 */
+        auto ending = std::move(pool);
+        if (ending)
+            ending->clear();
         if (L) {
             lua_close(L);
             L = nullptr;

@@ -150,17 +150,21 @@ err_e lua_coro_t::close() {
         return VC_ERROR_FAILED_CALL;
     }
 
+    /* A state being destroyed has already cleared its pool, and luaw_get_pool() answers null for
+    it from then on. The wrapper and every waiter went with the pool, so there is nothing left to
+    kill and nobody left to tell: only the thread is reset below. 2026-09-23 00:37 */
+    auto *vs = luaw_get_virt_state(thread);
+    bool pool_live = vs && luaw_get_pool(vs);
+
     /* The wrapper of a wait in flight goes first. It holds this thread and reaches back here
     through the thread's extra space, so it has to stop existing before the thread is reset or the
     object it points at is let go of. Killing it takes its whole call stack with it, the awaited
     work included: abandoning a wait abandons what was being waited for. 2026-09-22 08:20 */
-    if (wait_killer) {
+    if (wait_killer && pool_live)
         wait_killer();
-        wait_killer = nullptr;
-    }
+    wait_killer = nullptr;
 
     bool was_waiting = is_running();
-    auto *vs = luaw_get_virt_state(thread);
 
     lua_closethread(thread, vs ? luaw_get_lua_state(vs) : nullptr);
     /* A thread closed after an error keeps that error on its stack, since that is what
@@ -177,7 +181,8 @@ err_e lua_coro_t::close() {
     2026-09-22 08:20 */
     if (was_waiting) {
         resume_status = LUA_ERRRUN;
-        done->signal_all();
+        if (pool_live)
+            done->signal_all();
     }
     return VC_ERROR_OK;
 }
