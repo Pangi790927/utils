@@ -80,7 +80,7 @@ struct lua_coro_t : public vc::object_t {
     lua_State              *thread = nullptr;  /* the coroutine itself */
     vc::ref_t<lua_object_t> held;              /* holds `thread` against the collector */
     co::sem_p               done;              /* signal_all'd when a script ends */
-    int                     status = LUA_OK;   /* what the last resume answered */
+    int                     resume_status = LUA_OK;  /* what the last resume answered */
     int                     nres   = 0;        /* results the script left on the thread */
     std::string             wait_err;          /* set by a wrapper that cannot answer a wait */
 
@@ -99,8 +99,8 @@ struct lua_coro_t : public vc::object_t {
     static vc::object_type_e type_id_static() { return VC_TYPE_LUA_CORO; }
 
     inline std::string to_string() const override {
-        return std::format("vc::lua_coro_t[{}]: thread={} status={} nres={}",
-                (const void *)this, (void *)thread, status, nres);
+        return std::format("vc::lua_coro_t[{}]: thread={} resume_status={} nres={}",
+                (const void *)this, (void *)thread, resume_status, nres);
     }
 
     /*! Answers the thread itself, for stack work the templates do not cover.
@@ -109,7 +109,16 @@ struct lua_coro_t : public vc::object_t {
 
     /*! Answers whether a script is on the thread right now, suspended or running.
      * @date 2026-09-21 20:49 */
-    bool is_running() const { return status == LUA_YIELD; }
+    bool is_running() const { return resume_status == LUA_YIELD; }
+
+    /*! Answers what the thread is doing, as one of `"suspended"`, `"running"` or `"dead"`.
+     *
+     * This is `coroutine.status`'s vocabulary with its "normal" folded into `"running"`: both mean
+     * the thread sits on a call stack somebody is standing on, which is the only thing a caller
+     * can act on, and telling them apart would need the calling state. A coroutine that has a
+     * call set but has not run yet answers `"suspended"`, as Lua's does.
+     * @date 2026-09-22 10:50 */
+    std::string status() const;
 
     /*! Clears the thread and sets a global function and its arguments as the next call.
      *
@@ -331,7 +340,7 @@ std::pair<R, err_e> lua_coro_t::result() {
         DBG("This coroutine is still in the middle of a call");
         return {R{}, VC_ERROR_FAILED_CALL};
     }
-    if (status != LUA_OK) {
+    if (resume_status != LUA_OK) {
         DBG("The last call errored, there is no result to read");
         return {R{}, VC_ERROR_FAILED_CALL};
     }
@@ -366,8 +375,8 @@ co::task<std::pair<R, err_e>> lua_coro_t::wait_result() {
 a bare resume cannot do: raise inside the script. `ctx` carries the thread's stack top as it stood
 at the yield, so the difference is how many values the wrapper pushed, and that is what the waiting
 function answers to Lua. 2026-09-21 20:49 */
-inline int luaw_await_k(lua_State *L, int status, lua_KContext ctx) {
-    (void)status;
+inline int luaw_await_k(lua_State *L, int resume_answer, lua_KContext ctx) {
+    (void)resume_answer;
 
     lua_coro_t *co = luaw_get_coro(L);
     if (co && !co->wait_err.empty()) {
