@@ -27,7 +27,17 @@ TEST_TARGETS := $(patsubst %.cpp,%$(EXE_EXT),$(TEST_FILES))
 PLUGIN_FILES   := $(wildcard plugins/*.cpp)
 PLUGIN_TARGETS := $(patsubst %.cpp,%.so,$(PLUGIN_FILES))
 
-all: $(PLUGIN_TARGETS) $(TEST_TARGETS)
+# abi-sync runs first, in a make of its own, and the build in a second one. make judges every
+# target before it runs any recipe, so a header rewritten during the same make was judged stale
+# too late: the plugins kept the old VIRT_COMPOSER_ABI and the five plugin tests failed until the
+# next run. The second make judges against the header as abi-sync left it, plugins included.
+# 23-09-2026-04:48
+.PHONY: all run
+all:
+	@$(MAKE) --no-print-directory abi-sync
+	@$(MAKE) --no-print-directory run
+
+run: $(PLUGIN_TARGETS) $(TEST_TARGETS)
 	@python3 run_tests.py $(TEST_TARGETS)
 
 # It carries no copy of virt_composer and must not: it rewrites the header, so it cannot also be
