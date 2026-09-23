@@ -20,6 +20,7 @@
 # include <windows.h> /* MoveFileExA/GetLastError - logger_swap_files()'s active/old rotation. */
 #elif defined(UTILS_OS_LINUX)
 # include <fcntl.h>
+# include <stdio.h>  /* renameat2 and RENAME_EXCHANGE, where the C library has them */
 # include <unistd.h>
 # if __GLIBC__ == 2 && __GLIBC_MINOR__ <= 28
 #  include <sys/syscall.h>
@@ -99,7 +100,11 @@ inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
 		actually on disk; the CRT's default text mode would translate '\n' -> "\r\n" on write,
 		silently growing every line past what curr_sz accounts for. perm/pmode here mirrors the
 		POSIX branch's mode_t argument - _S_IREAD|_S_IWRITE is as close as Windows gets to 0666. */
-		int flags = _O_CREAT | _O_RDWR | _O_TRUNC | _O_BINARY;
+		/* No _O_TRUNC: a new run goes on after the last one, which is what a process restarted
+		after a crash needs to find out why. The size already there counts toward maxsz, so the
+		cap holds across runs. _O_APPEND on both, since the two trade places at every rotation.
+		2026-09-23 02:49 */
+		int flags = _O_CREAT | _O_RDWR | _O_BINARY | _O_APPEND;
 		_logger_data.active_fd = _open(_logger_data.active_file.c_str(), flags, _S_IREAD | _S_IWRITE);
 		if (_logger_data.active_fd < 0) {
 			printf("Couldn't open logfile[%s], strerror[errno]: %s[%d]\n",
@@ -135,7 +140,12 @@ inline int logger_init(const char *logfile_path, uint64_t maxsz, int perm) {
 		_logger_data.old_file = std::string(logfile_relpath) + ".old.log";
 		_logger_data.maxsz = maxsz / 2; /* half for active and half for old */
 
-		int flags = O_CREAT | O_RDWR | O_CLOEXEC | O_TRUNC;
+		/* No O_TRUNC: a new run goes on after the last one, which is what a process restarted
+		after a crash needs to find out why. The size already there counts toward maxsz, so the
+		cap holds across runs. O_APPEND on both, since the two trade places at every rotation,
+		and so a write lands at the end even if something outside truncated the file.
+		2026-09-23 02:49 */
+		int flags = O_CREAT | O_RDWR | O_CLOEXEC | O_APPEND;
 		_logger_data.active_fd = open(_logger_data.active_file.c_str(), flags, perm);
 		if (_logger_data.active_fd < 0) {
 			printf("Couldn't open logfile[%s], strerror[errno]: %s[%d]\n",
@@ -208,9 +218,10 @@ inline int logger_swap_files() {
 		return -1;
 	}
 
-	int flags = _O_CREAT | _O_RDWR | _O_TRUNC | _O_BINARY;
+	int flags = _O_CREAT | _O_RDWR | _O_TRUNC | _O_BINARY | _O_APPEND;
 	_logger_data.active_fd = _open(_logger_data.active_file.c_str(), flags, _S_IREAD | _S_IWRITE);
-	_logger_data.old_fd = _open(_logger_data.old_file.c_str(), _O_RDWR | _O_BINARY, _S_IREAD | _S_IWRITE);
+	_logger_data.old_fd = _open(_logger_data.old_file.c_str(), _O_RDWR | _O_BINARY | _O_APPEND,
+			_S_IREAD | _S_IWRITE);
 	if (_logger_data.active_fd < 0 || _logger_data.old_fd < 0) {
 		printf("Couldn't reopen log files after swap, strerror[errno]: %s[%d]\n", strerror(errno), errno);
 		return -1;
@@ -220,6 +231,7 @@ inline int logger_swap_files() {
 
 	return 0;
 #elif defined(UTILS_OS_LINUX)
+# ifdef RENAME_EXCHANGE
 	/* atomically moves active file to old file */
 	int ret = renameat2(AT_FDCWD, _logger_data.active_file.c_str(),
 			AT_FDCWD, _logger_data.old_file.c_str(), RENAME_EXCHANGE);
@@ -229,6 +241,20 @@ inline int logger_swap_files() {
 				strerror(errno), errno);
 		return -1;
 	}
+# else
+	/* A C library without RENAME_EXCHANGE - musl, for one - gets the same exchange from three
+	renames through a temporary name. It is not atomic, but the logger is already serialized
+	behind logger_sl, and the fds follow the files, so what they point at ends as above.
+	2026-09-23 02:49 */
+	std::string tmp_file = _logger_data.active_file + ".swap";
+	if (rename(_logger_data.active_file.c_str(), tmp_file.c_str()) < 0
+			|| rename(_logger_data.old_file.c_str(), _logger_data.active_file.c_str()) < 0
+			|| rename(tmp_file.c_str(), _logger_data.old_file.c_str()) < 0) {
+		printf("Couldn't exchange old and active files, strerror[errno]: %s[%d]\n",
+				strerror(errno), errno);
+		return -1;
+	}
+# endif
 
 	std::swap(_logger_data.old_fd, _logger_data.active_fd);
 	if (ftruncate(_logger_data.active_fd, 0) < 0) {
@@ -256,10 +282,11 @@ inline int logger_log(const char *msg) {
 	int active_fd = 0;
 	{
 		std::lock_guard guard(_logger_data.logger_sl);
+		/* The line that makes the swap is the new file's first, so it is counted there.
+		2026-09-23 02:49 */
 		if (len + _logger_data.curr_sz > _logger_data.maxsz)
 			logger_swap_files();
-		else
-			_logger_data.curr_sz += len;
+		_logger_data.curr_sz += len;
 		active_fd = _logger_data.active_fd;
 	}
 
@@ -281,10 +308,11 @@ inline int logger_log(const char *msg) {
 	int active_fd = 0;
 	{
 		std::lock_guard guard(_logger_data.logger_sl);
+		/* The line that makes the swap is the new file's first, so it is counted there.
+		2026-09-23 02:49 */
 		if (len + _logger_data.curr_sz > _logger_data.maxsz)
 			logger_swap_files();
-		else
-			_logger_data.curr_sz += len;
+		_logger_data.curr_sz += len;
 		active_fd = _logger_data.active_fd;
 	}
 

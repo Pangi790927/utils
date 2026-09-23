@@ -1322,8 +1322,12 @@ static lua_State *luaw_init(vc::virt_state_t *vs) {
 int luaw_catch_exception(lua_State *L) {
     /* We don't let errors get out of the call because we don't want to break lua. As such, we catch
     any error and propagate it as a lua error. */
+    /* TODO: offer the user a way to catch their own exceptions here and decide whether they are
+    rethrown to Lua or handled -- a callback per exception type, say -- rather than every C++
+    exception becoming a Lua error. The log line that stood here fired on every exception passing
+    through, Lua's own yields included, and is gone; the branches below that turn a C++ exception
+    into a Lua error log it themselves, through luaw_push_error. 2026-09-23 04:42 */
     try {
-        DBG("Rethrow");
         throw ; // re-throw the current exception
     }
     catch (vc::except_t &err) {

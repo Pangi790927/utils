@@ -94,7 +94,7 @@ using ssize_t = ptrdiff_t;
  * @date 2026-09-20 18:45
  */
 #ifndef VIRT_COMPOSER_ABI
-# define VIRT_COMPOSER_ABI  "0.3-a4ec9626"
+# define VIRT_COMPOSER_ABI  "0.3-2c113946"
 #endif
 
 /*!
@@ -2445,12 +2445,15 @@ convention used by vector/tuple above); any other value Lua can't convert to a s
 luaw_push_error()/lua_error(), unlike the old inline std::string branch this replaces, which
 silently degraded any such value to "". A number at `index` still converts via lua_tostring's own
 number-to-string coercion, same as it always has. */
+/* Every byte of the Lua string is kept, zeros included: a std::string carries its size, so it
+holds bytes as well as text. 2026-09-23 04:42 */
 template <>
 struct luaw_param_t<std::string> : luaw_param_base_t {
     std::string luaw_single_param(lua_State *L, ssize_t index) {
         if (lua_isnil(L, index))
             return {};
-        const char *ret = lua_tostring(L, index);
+        size_t len = 0;
+        const char *ret = lua_tolstring(L, index, &len);
         if (!ret) {
             throw_error(L,
                     std::format("Invalid parameter at index {}, failed conversion to string from "
@@ -2458,7 +2461,7 @@ struct luaw_param_t<std::string> : luaw_param_base_t {
                     index, lua_typename(L, lua_type(L, index))),
                     std::source_location::current());
         }
-        return ret;
+        return std::string(ret, len);
     }
 };
 
@@ -2672,10 +2675,11 @@ struct luaw_returner_t<const char *> {
     }
 };
 
+/* Pushed with its size, so every byte reaches Lua, zeros included. 2026-09-23 04:42 */
 template <>
 struct luaw_returner_t<std::string> {
     void luaw_ret_push(lua_State *L, const std::string& x) {
-        lua_pushstring(L, x.c_str());
+        lua_pushlstring(L, x.data(), x.size());
     }
 };
 
