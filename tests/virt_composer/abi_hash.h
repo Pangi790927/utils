@@ -27,7 +27,11 @@ virt_composer_end.h closes its registrations; virt_composer.cpp is code a plugin
 compiles, so a change there moves the behaviour under it without moving a declaration. The
 coroutine component is watched on both grounds: its header carries lua_coro_t's layout and
 lua_await, a template a plugin compiles into itself, and its .cpp is behaviour a plugin calls.
-22-09-2026-12:40 */
+22-09-2026-12:40
+colib.h, minilua.h and yaml.h are compiled into every module too, and their types cross between
+host and plugin -- co::task and co::pool_t, lua_State and every TValue, fkyaml::node -- so a
+plugin built against another version of any of them disagrees with its host on a layout no
+virt_composer file declares. 28-09-2026-11:30 */
 static const char *ABI_FILES[] = {
     "../../virt_object.h",
     "../../virt_composer.h",
@@ -35,6 +39,9 @@ static const char *ABI_FILES[] = {
     "../../virt_composer.cpp",
     "../../virt_composer_coroutines.h",
     "../../virt_composer_coroutines.cpp",
+    "../../colib.h",
+    "../../minilua.h",
+    "../../yaml.h",
 };
 
 /*! The file the value is written into and read back from. @date 22-09-2026-12:40 */

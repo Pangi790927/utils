@@ -2,16 +2,23 @@ CXX        := g++
 CXX_FLAGS  := -std=c++2a -O0 -g -Wno-format-security -I../..
 CXX_OUT    := -o
 EXE_EXT    := .bin
-# -export-dynamic puts the test binary's own symbols in the dynamic table, which is how a loaded
-# plugin reaches virt_composer: the plugin links against nothing and resolves every one of those
-# symbols from whoever loaded it. Without it a plugin opens with undefined symbols. It costs the
-# other tests nothing, so it is set once here rather than for one target. 2026-09-20 16:07
-LIBS       := -lpthread -ldl -export-dynamic
+LIBS       := -lpthread -ldl
+
+# Every module carries its own copy of virt_composer: each test links it, and each plugin links a
+# copy of its own. A test is a host, and shows the one symbol a plugin must reach in its host,
+# vc_host_name_owner, and nothing else: see VC_API in virt_composer.h. 28-09-2026-12:00
+HOST_LINK  := -Wl,--export-dynamic-symbol=vc_host_name_owner
 
 # virt_composer.cpp (not just virt_composer.h) must be compiled and linked into every test binary
 # - it's not header-only. Built once here and relinked into every test .bin, same rationale as
 # windows.makefile's CORE_OBJ.
 CORE_OBJ   := virt_composer_core.o
+
+# A plugin's copy is built apart: position-independent, and hidden, so that nothing of it but what
+# the plugin marks for export is seen from outside, and nothing of it is confused with another
+# module's. 28-09-2026-12:00
+PLUGIN_OBJ   := virt_composer_plugin.o
+PLUGIN_FLAGS := -fPIC -fvisibility=hidden -fvisibility-inlines-hidden
 
 # The tool that keeps VIRT_COMPOSER_ABI's hash current. It is not a test - it has a main() and no
 # print_test_result - so it is taken out of the wildcard the way the plugins are kept out of it by
@@ -57,12 +64,12 @@ abi-sync: $(ABI_TOOL)
 $(CORE_OBJ): ../../virt_composer.cpp ../../virt_composer.h ../../virt_object.h | abi-sync
 	${CXX} ${CXX_FLAGS} -c ../../virt_composer.cpp ${CXX_OUT} $(CORE_OBJ)
 
-$(TEST_TARGETS): %$(EXE_EXT): %.cpp $(CORE_OBJ) tests_common.h ../../virt_composer.h ../../virt_composer_end.h | abi-sync
-	${CXX} ${CXX_FLAGS} $< $(CORE_OBJ) ${CXX_OUT} $@ ${LIBS}
+$(PLUGIN_OBJ): ../../virt_composer.cpp ../../virt_composer.h ../../virt_object.h | abi-sync
+	${CXX} ${CXX_FLAGS} ${PLUGIN_FLAGS} -c ../../virt_composer.cpp ${CXX_OUT} $(PLUGIN_OBJ)
 
-# No CORE_OBJ here, and that is the whole point: a plugin carries no copy of virt_composer and
-# takes the host's at load time, so one library state serves the process. The undefined symbols
-# that leaves are resolved then, not now. 2026-09-20 16:07
+$(TEST_TARGETS): %$(EXE_EXT): %.cpp $(CORE_OBJ) tests_common.h ../../virt_composer.h ../../virt_composer_end.h | abi-sync
+	${CXX} ${CXX_FLAGS} $< $(CORE_OBJ) ${CXX_OUT} $@ ${LIBS} ${HOST_LINK}
+
 # The one plugin built claiming a virt_composer it was not built against, so that load_plugin's
 # version refusal can be reached at all. VIRT_COMPOSER_ABI is guarded in virt_composer.h for this
 # and for nothing else - see its doc comment. 2026-09-20 18:45
@@ -74,8 +81,8 @@ PLUGIN_DEPS := $(wildcard plugins/*.h) $(wildcard plugins/*/*.h)
 # plugin bakes VIRT_COMPOSER_ABI in, and a host that carries a different one refuses to load it.
 # A plugin built before the sync and a test built after it disagree, which is the refusal working
 # on a mismatch nobody meant. 22-09-2026-12:50
-$(PLUGIN_TARGETS): %.so: %.cpp $(PLUGIN_DEPS) ../../virt_composer.h ../../virt_composer_end.h | abi-sync
-	${CXX} ${CXX_FLAGS} -fPIC -shared $< ${CXX_OUT} $@
+$(PLUGIN_TARGETS): %.so: %.cpp $(PLUGIN_OBJ) $(PLUGIN_DEPS) ../../virt_composer.h ../../virt_composer_end.h | abi-sync
+	${CXX} ${CXX_FLAGS} ${PLUGIN_FLAGS} -shared $< $(PLUGIN_OBJ) ${CXX_OUT} $@ ${LIBS}
 
 clean:
 	rm -f $(TEST_TARGETS)

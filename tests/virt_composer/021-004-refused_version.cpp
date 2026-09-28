@@ -15,8 +15,8 @@
 #include "tests_common.h"
 #include "../../virt_composer_end.h"
 
-static const char *STALE_PLUGIN     = "plugins/mock_plugin_stale.so";
-static const char *REFERENCE_PLUGIN = "plugins/reference_plugin.so";
+static const char *STALE_PLUGIN     = "plugins/mock_plugin_stale" PLUGIN_EXT;
+static const char *REFERENCE_PLUGIN = "plugins/reference_plugin" PLUGIN_EXT;
 
 static int test21_a_plugin_from_another_build_is_refused() {
     auto vs = vc::create_state();

@@ -1,22 +1,15 @@
 #ifndef PATH_UTILS_H
 #define PATH_UTILS_H
 
+/* Which system this is, and its headers: os_compile_utils.h, where the detection that stood here
+moved. 28-09-2026-10:30 */
+#include "os_compile_utils.h"
+
 #include <stdio.h>
 #include <string>
 #include <vector>
 
-/* move this in the root-most file, as needed */
-#if defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__NT__)
-# define UTILS_OS_WINDOWS
-#elif defined(__linux__)
-# define UTILS_OS_LINUX
-#endif
-
 #if defined(UTILS_OS_WINDOWS)
-# include <winsock2.h>
-# include <mswsock.h>
-# include <windows.h>
-# include <psapi.h>
 # include <filesystem>
 #elif defined(UTILS_OS_LINUX)
 # include <dirent.h>

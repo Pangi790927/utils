@@ -64,6 +64,8 @@ inline void logger_uninit();
 
 inline int logger_log(const char *log_line);
 
+/* One logger per module: a plugin keeps its own and logs where it is told, apart from its host.
+28-09-2026-12:00 */
 inline logger_data_t _logger_data;
 
 /* IMPLEMENTATION:

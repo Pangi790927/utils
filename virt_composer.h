@@ -50,6 +50,48 @@ costs a config that refuses to load rather than one that loads wrongly. Until a 
 it depends on, the way around it is to load plugins in a pass of their own, before the config that
 uses them is parsed. 2026-09-20 18:40 */
 
+/* debug.h first: it brings UTILS_OS_WINDOWS, which everything below asks. 28-09-2026-12:00 */
+#include "debug.h"
+
+/*!
+ * @def VC_API
+ * @brief Marks what a module shows the rest of the process: the rare function the host owns and
+ * every plugin must reach the host's copy of, rather than its own.
+ *
+ * Core:
+ *   - Every module -- the host and each plugin -- carries its own copy of virt_composer, and the
+ *     ABI hash is what keeps them in agreement. Almost nothing needs more than that; what does is
+ *     marked with this, and is looked up in the main program when it is needed (see
+ *     `name_owner()`), so a plugin finds the host's copy whatever the program is called.
+ *   - It exports: `dllexport` on Windows, and on Linux default visibility, which a host also has to
+ *     name at link time with `-Wl,--export-dynamic-symbol`, since an executable shows nothing by
+ *     default.
+ *
+ * @date 28-09-2026-12:00
+ */
+#if defined(UTILS_OS_WINDOWS)
+# define VC_API __declspec(dllexport)
+#else
+# define VC_API __attribute__((visibility("default")))
+#endif
+
+/*!
+ * @def VIRT_COMPOSER_PLUGIN_EXPORT
+ * @brief Marks the three functions a plugin puts on the outside for the host to find by name:
+ * `plugin_get_version`, `plugin_type_cnt` and `plugin_register_meta`.
+ *
+ * Core:
+ *   - It is `extern "C"` and exported: on Windows a DLL shows nothing it was not told to show, and
+ *     on Linux it stays visible however the plugin is compiled.
+ *
+ * @date 28-09-2026-10:00
+ */
+#if defined(UTILS_OS_WINDOWS)
+# define VIRT_COMPOSER_PLUGIN_EXPORT extern "C" __declspec(dllexport)
+#else
+# define VIRT_COMPOSER_PLUGIN_EXPORT extern "C" __attribute__((visibility("default")))
+#endif
+
 #include  <typeindex>
 
 #include "virt_object.h"
@@ -94,7 +136,7 @@ using ssize_t = ptrdiff_t;
  * @date 2026-09-20 18:45
  */
 #ifndef VIRT_COMPOSER_ABI
-# define VIRT_COMPOSER_ABI  "0.3-2c113946"
+# define VIRT_COMPOSER_ABI  "0.3-11ba4534"
 #endif
 
 /*!
@@ -113,18 +155,14 @@ using ssize_t = ptrdiff_t;
  *     this header is included.
  *
  * Detail:
- *   - Both published variables are `inline`, so a plugin resolving this library's symbols from its
- *     host resolves those two as well - they are the host's, not copies. A plugin that published
- *     its own count would therefore overwrite the host's while it loads, which happens before the
- *     host can check anything about the plugin, its version included. Publishing nothing is what
- *     avoids that.
- *   - Publishing nothing rather than hiding the host's symbols from the plugin: a hidden symbol
- *     would give the plugin a second, zero-valued copy, and a read would quietly answer 0 instead
- *     of the host's count.
+ *   - Each module carries its own copy of this library, the counters included, and only the
+ *     host's are ever read: by the host's `create_state()` and by `load_plugin()`, which places a
+ *     plugin's range after the host's types. A plugin's own copies stay unread, so its count
+ *     travels through `plugin_type_cnt()` alone.
  *
  * @see load_plugin, VIRT_COMPOSER_REGISTER_PLUGIN_TYPE
  *
- * @date 2026-09-20 17:14
+ * @date 28-09-2026-12:00
  */
 #ifndef VIRT_COMPOSER_PLUGIN_COUNTERS
 // Nothing here, this is only for documentation purposes
@@ -796,33 +834,27 @@ struct c_function_t : public vc::object_t {
 
     /*! Registers a callback under a name, for a `[INTERNAL]` c_function_t to bind later.
      *
-     * This one fills the table belonging to the module it is called from, which is what the host
-     * wants: it may be called before any state exists. A plugin wants
-     * @ref add_plugin_internal_func instead. @date 2026-09-20 19:10 */
-    static void add_internal_func(std::string name, std::function<int(lua_State *L)> fn) {
-        c_function_t::internal_funcs[name] = fn;
-    }
+     * It fills the table of the module it is called from, which is what the host wants: the
+     * states the host makes bind from it, and it may be called before any state exists. A plugin
+     * wants @ref add_plugin_internal_func instead. @date 28-09-2026-12:00 */
+    static void add_internal_func(std::string name, std::function<int(lua_State *L)> fn);
 
     /*! Registers a callback into the table the given state binds its `[INTERNAL]` names from.
      *
      * Core:
      *   - The same as @ref add_internal_func except for which table it fills, and a plugin must
      *     use this one.
-     *   - The table add_internal_func() fills is a static of this header. A plugin carrying its
-     *     own copy of this library therefore fills a table its host never reads, and every
-     *     `[INTERNAL]` name the plugin meant to serve goes missing. Where the two share one copy
-     *     the calls are the same, which is what makes the mistake invisible until it is ported.
+     *   - A plugin carries its own copy of this library, and add_internal_func() would fill that
+     *     copy's table, which no state reads. Naming the state reaches the table the state binds
+     *     from, the host's.
      *
-     * @date 2026-09-20 19:10 */
+     * @date 28-09-2026-12:00 */
     static void add_plugin_internal_func(virt_state_t *vs, std::string name,
             std::function<int(lua_State *L)> fn);
 
-    /*! [INTERNAL] Answers the internal-function table belonging to the module this is compiled
-     * into, which is the one a state made by that module is created pointing at.
-     * @date 2026-09-20 19:10 */
-    static std::map<std::string, std::function<int(lua_State *L)>> *own_internal_funcs() {
-        return &internal_funcs;
-    }
+    /*! [INTERNAL] Answers the internal-function table of the module this is called from, the one a
+     * state that module makes is created pointing at. @date 28-09-2026-12:00 */
+    static std::map<std::string, std::function<int(lua_State *L)>> *own_internal_funcs();
 
 private:
     std::function<int(lua_State *L)> _fn;
@@ -838,7 +870,6 @@ private:
     vc::ret_t uninit() { return VC_ERROR_OK; }
 };
 
-inline std::map<std::string, std::function<int(lua_State *L)>>  c_function_t::internal_funcs;
 inline std::map<std::string, std::function<int(lua_State *L)>>  c_function_t::dll_funcs;
 inline std::map<std::string, void *>                            c_function_t::dll_handles;
 
@@ -1029,6 +1060,12 @@ std::shared_ptr<virt_state_t> create_state();
  * @date 2026-09-20 08:35
  */
 int load_plugin(virt_state_t *vs, const char *path);
+
+/*! Answers who owns each registered name -- an `[INTERNAL]` function's, a named builder
+ * callback's -- by name, with the empty string for the host. There is one table for the whole
+ * program, the host's, and the host and every plugin answer that one, so a plugin cannot take a
+ * name the host or another plugin already holds. @date 28-09-2026-12:00 */
+std::map<std::string, std::string> &name_owner();
 
 /*! [INTERNAL] Answers the internal-function table the given state binds its `[INTERNAL]` names
  * from. It exists because virt_state_t is only declared in this header, so the inline bodies below
@@ -1763,9 +1800,10 @@ call_lua(virt_state_t *vs, const char *function_name,
 translation unit has run: VIRT_TYPE_CNT becomes the total distinct type count (so every per-type
 array in virt_state_t can be sized/indexed safely) and VIRT_TYPES_INITIALIZED flips to true.
 create_state() checks VIRT_TYPES_INITIALIZED first and refuses to run if virt_composer_end.h was
-never included. */
-inline bool VIRT_TYPES_INITIALIZED;
-inline size_t VIRT_TYPE_CNT;
+never included. Both are defined in virt_composer.cpp, a pair in every module, and only the host's
+are read. 28-09-2026-12:00 */
+extern bool VIRT_TYPES_INITIALIZED;
+extern size_t VIRT_TYPE_CNT;
 
 /* [INTERNAL] Differentiates between a member function and a member object. */
 enum luaw_member_e {

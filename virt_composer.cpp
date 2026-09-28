@@ -29,6 +29,15 @@ namespace vc = virt_composer;
 or elsewhere in the repo references it. */
 static constexpr const int MAX_NUMBER_OF_OBJECTS = 16384;
 
+/* Declared in virt_composer.h, where their comment is. The host's virt_composer_end.h writes them.
+28-09-2026-12:00 */
+bool   VIRT_TYPES_INITIALIZED = false;
+size_t VIRT_TYPE_CNT = 0;
+
+/* The table add_internal_func() fills and a state this module makes binds its `[INTERNAL]` names
+from, one per module. 28-09-2026-12:00 */
+std::map<std::string, std::function<int(lua_State *L)>> c_function_t::internal_funcs;
+
 /*! Holds information of a member, either a member function or a member object */
 struct luaw_member_t {
     lua_CFunction fn;
@@ -308,21 +317,24 @@ std::shared_ptr<virt_state_t> create_state() {
     return vs;
 }
 
-/* [INTERNAL] The one platform difference in loading a plugin, kept to three lines so load_plugin
+/* [INTERNAL] The one platform difference in loading a plugin, kept to a few lines so load_plugin
 below reads the same everywhere. RTLD_LOCAL is not incidental: it is what keeps each plugin's
 _type_offset its own, since two plugins both define that symbol and RTLD_GLOBAL would let the first
-one's satisfy the second's lookups. The plugin still sees the host's symbols, but that comes from
-the host being linked -export-dynamic, not from here. 2026-09-20 08:35 */
+one's satisfy the second's lookups. A plugin carries its own copy of this library and reaches
+nothing of its host's but what VC_API marks, which it finds through plugin_main(), the main program
+as a handle. 28-09-2026-12:00 */
 #if defined(UTILS_OS_WINDOWS)
 using plugin_handle_t = HMODULE;
 static plugin_handle_t plugin_open(const char *p)         { return LoadLibraryA(p); }
 static void *plugin_sym(plugin_handle_t h, const char *n) { return (void *)GetProcAddress(h, n); }
 static void plugin_close(plugin_handle_t h)               { FreeLibrary(h); }
+static plugin_handle_t plugin_main()                      { return GetModuleHandleA(nullptr); }
 #else
 using plugin_handle_t = void *;
 static plugin_handle_t plugin_open(const char *p)         { return dlopen(p, RTLD_NOW|RTLD_LOCAL); }
 static void *plugin_sym(plugin_handle_t h, const char *n) { return dlsym(h, n); }
 static void plugin_close(plugin_handle_t h)               { dlclose(h); }
+static plugin_handle_t plugin_main()                      { return dlopen(nullptr, RTLD_NOW); }
 #endif
 
 /* [INTERNAL] The range of type ids a plugin owns, by real path, and where the next plugin's range
@@ -483,8 +495,31 @@ has one owner and keeps it for the life of the process.
 Process-wide, and it has to be, because the tables it guards are: the internal-function table
 belongs to the module, not to any one state, so an owner map that died with a state would let the
 next state hand a name to someone else and change what the first state answers. Checked
-20-09-2026: a per-state map let exactly that through. 2026-09-20 19:45 */
-static std::map<std::string, std::string> name_owner;
+20-09-2026: a per-state map let exactly that through. 2026-09-20 19:45
+It is the host's: exported under a C name, so that a plugin, which registers through its own copy of
+this library, finds the host's table and not its own. 28-09-2026-12:00 */
+extern "C" VC_API void *vc_host_name_owner() {
+    static std::map<std::string, std::string> owners;
+    return &owners;
+}
+
+/* See name_owner()'s declaration in virt_composer.h for its doc comment. Every module defines
+vc_host_name_owner, the host and each plugin alike, and every module asks the main program for
+its: so all of them answer the host's table. A host that does not show the symbol -- a Linux one
+linked without naming it -- answers each module its own, and says so once. 28-09-2026-12:00 */
+std::map<std::string, std::string> &name_owner() {
+    using owners_t = std::map<std::string, std::string>;
+    static owners_t *owners = [] {
+        auto fn = (void *(*)())plugin_sym(plugin_main(), "vc_host_name_owner");
+        if (!fn) {
+            DBG("The main program does not show vc_host_name_owner: names are checked against "
+                    "this module's own registrations only");
+            return (owners_t *)vc_host_name_owner();
+        }
+        return (owners_t *)fn();
+    }();
+    return *owners;
+}
 
 /* [INTERNAL] Answers whether `name` may be registered by whoever is registering now, and says so
 when it may not. The first claimant keeps the name: a second is turned away, because letting it
@@ -493,9 +528,9 @@ through would mean a call written against one plugin running another's code with
 static bool may_claim_name(virt_state_t *vs, const std::string& name) {
     std::string owner = vs->registering_plugin ? *vs->registering_plugin : "";
 
-    auto it = name_owner.find(name);
-    if (it == name_owner.end()) {
-        name_owner[name] = owner;
+    auto it = name_owner().find(name);
+    if (it == name_owner().end()) {
+        name_owner()[name] = owner;
         return true;
     }
     if (it->second == owner)
@@ -511,6 +546,16 @@ static bool may_claim_name(virt_state_t *vs, const std::string& name) {
 /* See state_internal_funcs()'s declaration in virt_composer.h for its doc comment. */
 std::map<std::string, std::function<int(lua_State *L)>> *state_internal_funcs(virt_state_t *vs) {
     return vs->internal_funcs;
+}
+
+/* See add_internal_func()'s declaration in virt_composer.h for its doc comment. */
+void c_function_t::add_internal_func(std::string name, std::function<int(lua_State *L)> fn) {
+    internal_funcs[name] = fn;
+}
+
+/* See own_internal_funcs()'s declaration in virt_composer.h for its doc comment. */
+std::map<std::string, std::function<int(lua_State *L)>> *c_function_t::own_internal_funcs() {
+    return &internal_funcs;
 }
 
 /* See add_plugin_internal_func()'s declaration in virt_composer.h for its doc comment. */

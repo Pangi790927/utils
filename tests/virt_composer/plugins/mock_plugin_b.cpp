@@ -39,15 +39,15 @@ static int b_ping(lua_State *L) {
 /* Its own VIRT_COMPOSER_ABI, baked in when this file was compiled. Not vc::get_version(), which
 resolves to the host's copy and would therefore agree with the host no matter how stale this
 plugin is. 2026-09-20 17:14 */
-extern "C" const char *plugin_get_version() {
+VIRT_COMPOSER_PLUGIN_EXPORT const char *plugin_get_version() {
     return VIRT_COMPOSER_ABI;
 }
 
-extern "C" int plugin_type_cnt() {
+VIRT_COMPOSER_PLUGIN_EXPORT int plugin_type_cnt() {
     return vo::compile_max_id<vc::plugin_tag_t>() + 1;
 }
 
-extern "C" int plugin_register_meta(vc::virt_state_t *vs, int type_offset) {
+VIRT_COMPOSER_PLUGIN_EXPORT int plugin_register_meta(vc::virt_state_t *vs, int type_offset) {
     _type_offset = type_offset;
 
     MOCK_REGISTER_TYPE(vs, b_one_t);
@@ -61,7 +61,7 @@ extern "C" int plugin_register_meta(vc::virt_state_t *vs, int type_offset) {
 
 /*! Answers the id this plugin's nth type ended up with, counting from 1, which is the one thing
  * about the relocation a host cannot ask about on its own. 2026-09-20 17:14 */
-extern "C" int plugin_type_id(int n) {
+VIRT_COMPOSER_PLUGIN_EXPORT int plugin_type_id(int n) {
     switch (n) {
         case 1:  return b_one_t_TYPE().value();
         case 2:  return b_two_t_TYPE().value();

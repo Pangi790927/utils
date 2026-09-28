@@ -19,11 +19,53 @@ also the thing that pulls in virt_composer.h itself. */
 /* DBG/ASSERT_FN/ASSERT_COFN/CHK_BOOL/CHK_PTR already come transitively from debug.h/co_utils.h
 (via virt_composer.h) - no need to redefine them here. */
 
+#include <filesystem>
+#if !defined(UTILS_OS_WINDOWS)
+# include <dlfcn.h>
+#endif
+
 namespace vc = virt_composer;
+
+/* What a plugin's file ends in: the makefiles build plugins/<name>.so on Linux and
+plugins/<name>.dll on Windows. 28-09-2026-10:00 */
+#if defined(UTILS_OS_WINDOWS)
+# define PLUGIN_EXT ".dll"
+#else
+# define PLUGIN_EXT ".so"
+#endif
+
+/*! Answers the function `name` a loaded plugin exports, or nullptr.
+ *
+ * load_plugin() keeps a plugin's symbols to itself, so a handle of the test's own is the only way
+ * to reach them. Opening the same path again answers the module already loaded rather than a
+ * second copy, on Linux and on Windows. 28-09-2026-10:00 */
+inline void *plugin_symbol(const char *path, const char *name) {
+#if defined(UTILS_OS_WINDOWS)
+    /* LoadLibraryA takes backslashes only, and load_plugin() opened the plugin by its full path.
+    28-09-2026-10:00 */
+    std::string full = std::filesystem::canonical(path).make_preferred().string();
+    HMODULE h = LoadLibraryA(full.c_str());
+    if (!h) {
+        DBG("the test could not open %s itself: %lu", path, GetLastError());
+        return nullptr;
+    }
+    void *fn = (void *)GetProcAddress(h, name);
+#else
+    void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!h) {
+        DBG("the test could not open %s itself: %s", path, dlerror());
+        return nullptr;
+    }
+    void *fn = dlsym(h, name);
+#endif
+    if (!fn)
+        DBG("%s is missing from %s", name, path);
+    return fn;
+}
 
 /* Test result output with colors, mirrors co-lib/tests/tests_common.h's print_test_result. */
 inline void print_test_result(const char* filename, bool passed) {
-#if defined(_WIN32)
+#if defined(UTILS_OS_WINDOWS)
     HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     if (passed) {
         SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);

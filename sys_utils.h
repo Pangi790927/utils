@@ -5,14 +5,26 @@
 #include <fstream>
 #include <fcntl.h>
 #include <fstream>
-#include <sys/select.h>
+
+/* debug.h first: it brings UTILS_OS_WINDOWS, and on Windows winsock through os_compile_utils.h.
+Windows has no systemd, and its sockets come from winsock rather than the POSIX headers. The
+functions over fds and systemctl stay Linux's; the address helpers below serve both.
+28-09-2026-10:30 */
+#include "debug.h"
+
+#if defined(UTILS_OS_WINDOWS)
+# ifndef NO_SD_BUS
+#  define NO_SD_BUS
+# endif
+#else
+# include <sys/select.h>
+# include <arpa/inet.h>
+#endif
 
 #ifndef NO_SD_BUS
 # include <systemd/sd-bus.h>
 #endif
-#include <arpa/inet.h>
 
-#include "debug.h"
 #include "misc_utils.h"
 
 struct select_wrap_ret_t {
@@ -123,7 +135,7 @@ inline int read_sz(int fd, void *dst, size_t len) {
     /* reads the exact len into buffer */
     auto buff = (char *)dst;
     while (true) {
-#ifdef WINDOWS_BUILD
+#if defined(WINDOWS_BUILD) || defined(UTILS_OS_WINDOWS)
         int sent = _read(fd, buff, (int)len);
 #else
         int sent = read(fd, buff, (int)len);
@@ -147,7 +159,7 @@ inline int write_sz(int fd, const void *src, size_t len) {
     /* writes the exact len into buffer */
     auto buff = (const char *)src;
     while (true) {
-#ifdef WINDOWS_BUILD
+#if defined(WINDOWS_BUILD) || defined(UTILS_OS_WINDOWS)
         int sent = _write(fd, buff, (int)len);
 #else
         int sent = write(fd, buff, (int)len);

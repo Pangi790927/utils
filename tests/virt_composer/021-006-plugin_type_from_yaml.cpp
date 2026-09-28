@@ -15,7 +15,7 @@
 #include "tests_common.h"
 #include "../../virt_composer_end.h"
 
-static const char *REFERENCE_PLUGIN = "plugins/reference_plugin.so";
+static const char *REFERENCE_PLUGIN = "plugins/reference_plugin" PLUGIN_EXT;
 
 /*! Builds a state holding the reference plugin and a config that names one of its types.
  * 2026-09-20 20:00 */

@@ -21,15 +21,15 @@ int _type_offset = 0;
 
 #include "../../../virt_composer_end.h"
 
-extern "C" const char *plugin_get_version() {
+VIRT_COMPOSER_PLUGIN_EXPORT const char *plugin_get_version() {
     return VIRT_COMPOSER_ABI;
 }
 
-extern "C" int plugin_type_cnt() {
+VIRT_COMPOSER_PLUGIN_EXPORT int plugin_type_cnt() {
     return vo::compile_max_id<vc::plugin_tag_t>() + 1;
 }
 
-extern "C" int plugin_register_meta(vc::virt_state_t *vs, int type_offset) {
+VIRT_COMPOSER_PLUGIN_EXPORT int plugin_register_meta(vc::virt_state_t *vs, int type_offset) {
     _type_offset = type_offset;
     return 0;
 }

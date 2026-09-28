@@ -14,8 +14,8 @@
 #include "tests_common.h"
 #include "../../virt_composer_end.h"
 
-static const char *PLUGIN_A     = "plugins/mock_plugin_a.so";
-static const char *PLUGIN_CLASH = "plugins/mock_plugin_clash.so";
+static const char *PLUGIN_A     = "plugins/mock_plugin_a" PLUGIN_EXT;
+static const char *PLUGIN_CLASH = "plugins/mock_plugin_clash" PLUGIN_EXT;
 
 /*! Binds `a_make` and reaches it, so the test can ask which plugin is answering to the name.
  * 2026-09-20 19:30 */

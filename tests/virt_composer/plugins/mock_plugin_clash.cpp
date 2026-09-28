@@ -27,15 +27,15 @@ static int a_make(lua_State *L) {
     return 1;
 }
 
-extern "C" const char *plugin_get_version() {
+VIRT_COMPOSER_PLUGIN_EXPORT const char *plugin_get_version() {
     return VIRT_COMPOSER_ABI;
 }
 
-extern "C" int plugin_type_cnt() {
+VIRT_COMPOSER_PLUGIN_EXPORT int plugin_type_cnt() {
     return vo::compile_max_id<vc::plugin_tag_t>() + 1;
 }
 
-extern "C" int plugin_register_meta(vc::virt_state_t *vs, int type_offset) {
+VIRT_COMPOSER_PLUGIN_EXPORT int plugin_register_meta(vc::virt_state_t *vs, int type_offset) {
     _type_offset = type_offset;
 
     /* The name mock_plugin_a owns. Answering 0 here is deliberate: the plugin believes it

@@ -20,28 +20,14 @@
 #include "tests_common.h"
 #include "../../virt_composer_end.h"
 
-#include <dlfcn.h>
-
-static const char *PLUGIN_A = "plugins/mock_plugin_a.so";
-static const char *PLUGIN_B = "plugins/mock_plugin_b.so";
+static const char *PLUGIN_A = "plugins/mock_plugin_a" PLUGIN_EXT;
+static const char *PLUGIN_B = "plugins/mock_plugin_b" PLUGIN_EXT;
 
 /*! Answers the id a loaded plugin gave its nth type, counting from 1, or -1 if it cannot be asked.
- *
- * load_plugin() opens a plugin RTLD_LOCAL, so its symbols are not in the global namespace and a
- * handle of our own is the only way to reach them. Opening the same path again answers with the
- * handle that is already there rather than loading a second copy. 2026-09-20 17:14 */
+ * 28-09-2026-10:00 */
 static int ask_plugin_type_id(const char *path, int n) {
-    void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
-    if (!h) {
-        DBG("the test could not open %s itself: %s", path, dlerror());
-        return -1;
-    }
-    auto fn = (int (*)(int))dlsym(h, "plugin_type_id");
-    if (!fn) {
-        DBG("plugin_type_id is missing from %s", path);
-        return -1;
-    }
-    return fn(n);
+    auto fn = (int (*)(int))plugin_symbol(path, "plugin_type_id");
+    return fn ? fn(n) : -1;
 }
 
 /*! Writes the config both plugins' functions are bound through, and a script that reaches each of
@@ -96,7 +82,7 @@ static int test21_refuses_what_it_cannot_use() {
     auto vs = vc::create_state();
     ASSERT_FN(CHK_PTR(vs.get()));
 
-    if (vc::load_plugin(vs.get(), "plugins/there_is_no_such_plugin.so") >= 0) {
+    if (vc::load_plugin(vs.get(), "plugins/there_is_no_such_plugin" PLUGIN_EXT) >= 0) {
         DBG("a plugin that does not exist was accepted");
         return -1;
     }

@@ -18,7 +18,7 @@
 #include "tests_common.h"
 #include "../../virt_composer_end.h"
 
-static const char *REFERENCE_PLUGIN = "plugins/reference_plugin.so";
+static const char *REFERENCE_PLUGIN = "plugins/reference_plugin" PLUGIN_EXT;
 
 /*! Loads the reference plugin and parses a config that binds its three functions and drives them.
  *

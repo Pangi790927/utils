@@ -47,13 +47,14 @@ type to one that already exists is neither. 2026-09-20 18:12 */
 /* 4. */
 #include "../../../virt_composer_end.h"
 
-/* 5. The three exports the host looks for by name, which is why they are extern "C". */
+/* 5. The three exports the host looks for by name, which is why they are marked
+VIRT_COMPOSER_PLUGIN_EXPORT: extern "C", and on Windows exported. 27-09-2026-09:40 */
 
 /*! Answers the virt_composer this plugin was compiled against.
  *
  * It must be this plugin's own VIRT_COMPOSER_ABI and not vc::get_version(), which resolves to the
  * host's copy and would agree with the host however stale this plugin is. 2026-09-20 18:12 */
-extern "C" const char *plugin_get_version() {
+VIRT_COMPOSER_PLUGIN_EXPORT const char *plugin_get_version() {
     return VIRT_COMPOSER_ABI;
 }
 
@@ -61,7 +62,7 @@ extern "C" const char *plugin_get_version() {
  *
  * Counted rather than written down, so it cannot drift from the composers above: a count too small
  * and the host reserves too little room for them. 2026-09-20 18:12 */
-extern "C" int plugin_type_cnt() {
+VIRT_COMPOSER_PLUGIN_EXPORT int plugin_type_cnt() {
     return vo::compile_max_id<vc::plugin_tag_t>() + 1;
 }
 
@@ -70,7 +71,7 @@ extern "C" int plugin_type_cnt() {
  * Runs once per state rather than once per process, so everything reached from here is about the
  * state it is handed. Registering the same thing twice is harmless - each step is an assignment -
  * but allocating or opening something would happen again for the next state. 2026-09-20 18:12 */
-extern "C" int plugin_register_meta(vc::virt_state_t *vs, int type_offset) {
+VIRT_COMPOSER_PLUGIN_EXPORT int plugin_register_meta(vc::virt_state_t *vs, int type_offset) {
     _type_offset = type_offset;
 
     ASSERT_FN(vec2_composer::register_meta(vs));
