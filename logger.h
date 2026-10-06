@@ -61,6 +61,7 @@ inline int logger_init(const char *logfile_path = LOGGER_DEFAULT_NAME,
 		uint64_t maxsz = LOGGER_DEFAULT_MAXSZ, int perm = LOGGER_DEFAULT_PERM);
 inline bool logger_is_init();
 inline void logger_uninit();
+inline std::string logger_stem();
 
 inline int logger_log(const char *log_line);
 
@@ -175,7 +176,8 @@ inline bool logger_is_init() {
 	return _logger_data.is_init;
 }
 
-/* does this function have any use? */
+/* Closes the log. A plugin's plugin_uninit calls it; a line logged afterwards opens the default
+log again, through logger_log_autoinit. 05-10-2026-22:33 */
 inline void logger_uninit() {
 #ifdef UTILS_OS_WINDOWS
 	if (!_logger_data.is_init)
@@ -190,6 +192,16 @@ inline void logger_uninit() {
 	close(_logger_data.active_fd);
 	_logger_data.is_init = false;
 #endif
+}
+
+/* Answers where the logger writes, without the ".log": the path it was opened with, resolved, or,
+before it is opened, where logger_log_autoinit would open it. 05-10-2026-22:33 */
+inline std::string logger_stem() {
+	std::lock_guard guard(_logger_data.logger_sl);
+	if (!_logger_data.is_init)
+		return path_get_relative(LOGGER_DEFAULT_NAME);
+	const std::string& f = _logger_data.active_file;
+	return f.substr(0, f.size() - strlen(".log"));
 }
 
 #ifdef UTILS_OS_LINUX

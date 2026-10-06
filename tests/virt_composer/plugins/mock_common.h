@@ -18,6 +18,9 @@ translation unit counts its types but publishes no count, leaving the host's alo
 #define VIRT_COMPOSER_PLUGIN_COUNTERS
 
 #include "../../../virt_composer.h"
+/* The plugin component, right after virt_composer.h: the export macro, the type macro and the
+tag. 06-10-2026-00:40 */
+#include "../../../virt_composer_plugins.h"
 
 namespace vc = virt_composer;
 namespace vo = virt_object;
@@ -68,5 +71,17 @@ int _type_offset = 0;
         VC_REGISTER_MEMBER_FUNCTION(vs, sname, tag);                                          \
         MOCK_REGISTER_MEMBER(vs, sname, MOCK_OWN_MEMBER);                                     \
     } while (0)
+
+/*! Opens the mock's own log, `<logfile>.log`, at the path the host resolved. 05-10-2026-22:33 */
+VIRT_COMPOSER_PLUGIN_EXPORT int plugin_init(const char *logfile) {
+    return logger_init(logfile);
+}
+
+/*! Says it is closing, which 021-008 looks for in the mock's log, and closes it.
+ * 05-10-2026-22:33 */
+VIRT_COMPOSER_PLUGIN_EXPORT void plugin_uninit() {
+    DBG("mock plugin log closing");
+    logger_uninit();
+}
 
 #endif /* MOCK_COMMON_H */

@@ -145,8 +145,8 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_OBJECT(vs, circle_t, r);
     VC_REGISTER_MEMBER_FUNCTION(vs, circle_t, area_x100);
 
-    vc::c_function_t::add_plugin_internal_func(vs, "ref_rect", lua_make_rect);
-    vc::c_function_t::add_plugin_internal_func(vs, "ref_circle", lua_make_circle);
+    vc::add_plugin_internal_func(vs, "ref_rect", lua_make_rect);
+    vc::add_plugin_internal_func(vs, "ref_circle", lua_make_circle);
 
     /* What lets a config say `m_type: shapes::rect_t`. The name is this plugin's from here on,
     and another plugin asking for it is refused. 2026-09-20 20:00 */

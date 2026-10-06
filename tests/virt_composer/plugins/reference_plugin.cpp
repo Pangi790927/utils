@@ -16,14 +16,15 @@
  *
  *   1. VIRT_COMPOSER_PLUGIN_COUNTERS, before virt_composer.h. It says this unit counts its types
  *      but publishes no count, leaving the host's alone. Each composer header refuses to compile
- *      without it, so the order cannot be got wrong quietly.
+ *      without it, so the order cannot be got wrong quietly. virt_composer_plugins.h follows
+ *      virt_composer.h at once, with the macros the steps below use (06-10-2026-00:40).
  *   2. `_type_offset`, this plugin's own, before any composer. The host writes it while loading
  *      and every type id in every composer is read through it.
  *   3. The composers, one include each.
  *   4. virt_composer_end.h, after the last of them. It closes the registrations: a type declared
  *      below this line would not compile.
- *   5. plugin_get_version, plugin_type_cnt and plugin_register_meta, exported "C" so the host
- *      finds them by name.
+ *   5. plugin_get_version, plugin_type_cnt, plugin_register_meta, plugin_init and
+ *      plugin_uninit, marked VIRT_COMPOSER_PLUGIN_EXPORT so the host finds them by name.
  *
  * 2026-09-20 18:12 */
 
@@ -31,6 +32,9 @@
 #define VIRT_COMPOSER_PLUGIN_COUNTERS
 
 #include "../../../virt_composer.h"
+/* The plugin component, right after virt_composer.h: the export macro, the type macro and the
+tag. 06-10-2026-00:40 */
+#include "../../../virt_composer_plugins.h"
 
 namespace vc = virt_composer;
 namespace vo = virt_object;
@@ -47,13 +51,15 @@ type to one that already exists is neither. 2026-09-20 18:12 */
 /* 4. */
 #include "../../../virt_composer_end.h"
 
-/* 5. The three exports the host looks for by name, which is why they are marked
-VIRT_COMPOSER_PLUGIN_EXPORT: extern "C", and on Windows exported. 27-09-2026-09:40 */
+/* 5. The five exports the host looks for by name, which is why they are marked
+VIRT_COMPOSER_PLUGIN_EXPORT: extern "C", and on Windows exported. 27-09-2026-09:40
+Five since plugin_init and plugin_uninit, 05-10-2026-22:33. */
 
 /*! Answers the virt_composer this plugin was compiled against.
  *
- * It must be this plugin's own VIRT_COMPOSER_ABI and not vc::get_version(), which resolves to the
- * host's copy and would agree with the host however stale this plugin is. 2026-09-20 18:12 */
+ * It must be this plugin's own VIRT_COMPOSER_ABI, the header it was compiled against, and not
+ * anything its host could answer: the host's value would agree with the host however stale this
+ * plugin is. 30-09-2026-16:00 */
 VIRT_COMPOSER_PLUGIN_EXPORT const char *plugin_get_version() {
     return VIRT_COMPOSER_ABI;
 }
@@ -77,4 +83,18 @@ VIRT_COMPOSER_PLUGIN_EXPORT int plugin_register_meta(vc::virt_state_t *vs, int t
     ASSERT_FN(vec2_composer::register_meta(vs));
     ASSERT_FN(shapes_composer::register_meta(vs));
     return 0;
+}
+
+/*! Opens this plugin's own log, `<logfile>.log`, at the path the host resolved.
+ *
+ * The host calls it once per process, from load_plugin(), before any state asks the plugin to
+ * register. What a plugin must do once, not once per state, belongs here. 05-10-2026-22:33 */
+VIRT_COMPOSER_PLUGIN_EXPORT int plugin_init(const char *logfile) {
+    return logger_init(logfile);
+}
+
+/*! Closes this plugin's log. The host calls it through uninit_plugins(), when no state will use
+ * the plugin again. 05-10-2026-22:33 */
+VIRT_COMPOSER_PLUGIN_EXPORT void plugin_uninit() {
+    logger_uninit();
 }

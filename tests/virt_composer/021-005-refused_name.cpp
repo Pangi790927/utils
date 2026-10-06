@@ -35,9 +35,9 @@ static int test21_a_taken_name_is_refused() {
     auto vs = vc::create_state();
     ASSERT_FN(CHK_PTR(vs.get()));
 
-    ASSERT_FN(vc::load_plugin(vs.get(), PLUGIN_A));
+    ASSERT_FN(plugin_into(vs.get(), PLUGIN_A, "021-005-a.tmp"));
 
-    if (vc::load_plugin(vs.get(), PLUGIN_CLASH) >= 0) {
+    if (plugin_into(vs.get(), PLUGIN_CLASH, "021-005-clash.tmp") >= 0) {
         DBG("a plugin claiming a name another owns was accepted");
         return -1;
     }
@@ -48,8 +48,8 @@ static int test21_the_first_claimant_keeps_the_name() {
     auto vs = vc::create_state();
     ASSERT_FN(CHK_PTR(vs.get()));
 
-    ASSERT_FN(vc::load_plugin(vs.get(), PLUGIN_A));
-    ASSERT_FN(CHK_BOOL(vc::load_plugin(vs.get(), PLUGIN_CLASH) < 0));
+    ASSERT_FN(plugin_into(vs.get(), PLUGIN_A, "021-005-a.tmp"));
+    ASSERT_FN(CHK_BOOL(plugin_into(vs.get(), PLUGIN_CLASH, "021-005-clash.tmp") < 0));
 
     auto path = write_clash_config();
     ASSERT_FN(CHK_BOOL(vc::parse_config(vs.get(), path.c_str()) == vc::VC_ERROR_OK));
@@ -72,11 +72,11 @@ static int test21_the_first_claimant_keeps_the_name() {
 static int test21_a_plugin_may_keep_its_own_name() {
     auto first = vc::create_state();
     ASSERT_FN(CHK_PTR(first.get()));
-    ASSERT_FN(vc::load_plugin(first.get(), PLUGIN_A));
+    ASSERT_FN(plugin_into(first.get(), PLUGIN_A, "021-005-a.tmp"));
 
     auto second = vc::create_state();
     ASSERT_FN(CHK_PTR(second.get()));
-    ASSERT_FN(vc::load_plugin(second.get(), PLUGIN_A));
+    ASSERT_FN(plugin_into(second.get(), PLUGIN_A, "021-005-a.tmp"));
     return 0;
 }
 
@@ -89,11 +89,11 @@ static int test21_a_plugin_may_keep_its_own_name() {
 static int test21_a_second_state_cannot_take_the_name() {
     auto first = vc::create_state();
     ASSERT_FN(CHK_PTR(first.get()));
-    ASSERT_FN(vc::load_plugin(first.get(), PLUGIN_A));
+    ASSERT_FN(plugin_into(first.get(), PLUGIN_A, "021-005-a.tmp"));
 
     auto second = vc::create_state();
     ASSERT_FN(CHK_PTR(second.get()));
-    if (vc::load_plugin(second.get(), PLUGIN_CLASH) >= 0) {
+    if (plugin_into(second.get(), PLUGIN_CLASH, "021-005-clash.tmp") >= 0) {
         DBG("a fresh state let a plugin take a name another plugin already owned");
         return -1;
     }

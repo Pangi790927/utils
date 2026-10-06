@@ -70,8 +70,8 @@ static int start_with_both_plugins(std::shared_ptr<vc::virt_state_t>& out) {
     out = vc::create_state();
     ASSERT_FN(CHK_PTR(out.get()));
 
-    ASSERT_FN(vc::load_plugin(out.get(), PLUGIN_A));
-    ASSERT_FN(vc::load_plugin(out.get(), PLUGIN_B));
+    ASSERT_FN(plugin_into(out.get(), PLUGIN_A, "021-002-a.tmp"));
+    ASSERT_FN(plugin_into(out.get(), PLUGIN_B, "021-002-b.tmp"));
 
     auto path = write_plugin_config();
     ASSERT_FN(CHK_BOOL(vc::parse_config(out.get(), path.c_str()) == vc::VC_ERROR_OK));
@@ -82,13 +82,14 @@ static int test21_refuses_what_it_cannot_use() {
     auto vs = vc::create_state();
     ASSERT_FN(CHK_PTR(vs.get()));
 
-    if (vc::load_plugin(vs.get(), "plugins/there_is_no_such_plugin" PLUGIN_EXT) >= 0) {
+    if (plugin_into(vs.get(), "plugins/there_is_no_such_plugin" PLUGIN_EXT,
+            "021-002-none.tmp") >= 0) {
         DBG("a plugin that does not exist was accepted");
         return -1;
     }
     /* A real file that resolves and opens as nothing. It must be refused for missing exports
     rather than crashing on them. 2026-09-20 17:14 */
-    if (vc::load_plugin(vs.get(), "021-002-load_plugin.cpp") >= 0) {
+    if (plugin_into(vs.get(), "021-002-load_plugin.cpp", "021-002-none.tmp") >= 0) {
         DBG("a file that is not a shared object was accepted");
         return -1;
     }
@@ -185,7 +186,7 @@ static int test21_a_plugin_serves_many_states() {
 
     auto second = vc::create_state();
     ASSERT_FN(CHK_PTR(second.get()));
-    ASSERT_FN(vc::load_plugin(second.get(), PLUGIN_A));
+    ASSERT_FN(plugin_into(second.get(), PLUGIN_A, "021-002-a.tmp"));
 
     if (ask_plugin_type_id(PLUGIN_A, 1) != want) {
         DBG("A's first type moved when a second state loaded it");
@@ -200,7 +201,7 @@ static int test21_a_plugin_serves_many_states() {
 
     auto third = vc::create_state();
     ASSERT_FN(CHK_PTR(third.get()));
-    ASSERT_FN(vc::load_plugin(third.get(), PLUGIN_B));
+    ASSERT_FN(plugin_into(third.get(), PLUGIN_B, "021-002-b.tmp"));
 
     if (ask_plugin_type_id(PLUGIN_B, 1) != want_b) {
         DBG("B's first type moved when a state loaded it without A");
@@ -210,7 +211,7 @@ static int test21_a_plugin_serves_many_states() {
     /* Asking a state for a plugin it already has does nothing and answers success. Nothing here
     can watch it do nothing, but the state would grow a second time if it did, so B's id moving
     would say so. 2026-09-20 18:55 */
-    ASSERT_FN(vc::load_plugin(third.get(), PLUGIN_B));
+    ASSERT_FN(plugin_into(third.get(), PLUGIN_B, "021-002-b.tmp"));
     if (ask_plugin_type_id(PLUGIN_B, 1) != want_b) {
         DBG("B's first type moved when its own state was asked for it twice");
         return -1;

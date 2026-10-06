@@ -23,7 +23,7 @@ static int start_with_a_rect_in_the_config(std::shared_ptr<vc::virt_state_t>& ou
     out = vc::create_state();
     ASSERT_FN(CHK_PTR(out.get()));
 
-    ASSERT_FN(vc::load_plugin(out.get(), REFERENCE_PLUGIN));
+    ASSERT_FN(plugin_into(out.get(), REFERENCE_PLUGIN, "021-006-ref.tmp"));
 
     auto path = write_temp_yaml("021-006-rect",
         "table_top:\n"
@@ -77,7 +77,7 @@ static int test21_a_type_without_a_builder_is_refused() {
     auto vs = vc::create_state();
     ASSERT_FN(CHK_PTR(vs.get()));
 
-    ASSERT_FN(vc::load_plugin(vs.get(), REFERENCE_PLUGIN));
+    ASSERT_FN(plugin_into(vs.get(), REFERENCE_PLUGIN, "021-006-ref.tmp"));
 
     /* vec2_composer registers no builder, so this type exists and is usable from Lua but has no
     way into a config. 2026-09-20 20:00 */

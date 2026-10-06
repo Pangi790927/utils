@@ -11,6 +11,9 @@ also the thing that pulls in virt_composer.h itself. */
 #endif
 
 #include "../../virt_composer.h"
+/* The plugin component, right after virt_composer.h, for load_plugin and register_plugin.
+06-10-2026-00:40 */
+#include "../../virt_composer_plugins.h"
 
 #include <string.h>
 #include <fstream>
@@ -61,6 +64,15 @@ inline void *plugin_symbol(const char *path, const char *name) {
     if (!fn)
         DBG("%s is missing from %s", name, path);
     return fn;
+}
+
+/*! Loads a plugin for the process, logging to `logfile`, and registers it into `vs`: what most
+ * tests want of a plugin, in one step. 021-008 calls the two apart. Answers -1 when either step
+ * does. 05-10-2026-22:33 */
+inline int plugin_into(vc::virt_state_t *vs, const char *path, const char *logfile) {
+    if (vc::load_plugin(path, logfile) < 0)
+        return -1;
+    return vc::register_plugin(vs, path);
 }
 
 /* Test result output with colors, mirrors co-lib/tests/tests_common.h's print_test_result. */

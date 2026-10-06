@@ -31,14 +31,21 @@ lua_await, a template a plugin compiles into itself, and its .cpp is behaviour a
 colib.h, minilua.h and yaml.h are compiled into every module too, and their types cross between
 host and plugin -- co::task and co::pool_t, lua_State and every TValue, fkyaml::node -- so a
 plugin built against another version of any of them disagrees with its host on a layout no
-virt_composer file declares. 28-09-2026-11:30 */
+virt_composer file declares. 28-09-2026-11:30
+virt_composer_internal.h holds virt_state_t, whose layout a plugin's copy of the library reads on a
+state its host made. The plugin component is watched as the coroutine one is: its header carries
+the macros and the tag a plugin compiles against, and its .cpp is code every module runs: the
+owners of names and the loader. 06-10-2026-00:40, 06-10-2026-02:45 */
 static const char *ABI_FILES[] = {
     "../../virt_object.h",
     "../../virt_composer.h",
     "../../virt_composer_end.h",
     "../../virt_composer.cpp",
+    "../../virt_composer_internal.h",
     "../../virt_composer_coroutines.h",
     "../../virt_composer_coroutines.cpp",
+    "../../virt_composer_plugins.h",
+    "../../virt_composer_plugins.cpp",
     "../../colib.h",
     "../../minilua.h",
     "../../yaml.h",

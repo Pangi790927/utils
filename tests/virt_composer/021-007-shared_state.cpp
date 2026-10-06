@@ -20,7 +20,7 @@ int main() {
     bool passed = true;
     auto vs = vc::create_state();
     ASSERT_FN(CHK_PTR(vs));
-    ASSERT_FN(vc::load_plugin(vs.get(), PLUGIN_A));
+    ASSERT_FN(plugin_into(vs.get(), PLUGIN_A, "021-007-a.tmp"));
 
     auto where = (const void *(*)(int))plugin_symbol(PLUGIN_A, "plugin_state");
     ASSERT_FN(CHK_PTR((void *)where));

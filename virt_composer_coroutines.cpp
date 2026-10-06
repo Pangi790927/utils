@@ -2,9 +2,8 @@
  * Implements the parts of virt_composer_coroutines.h whose bodies need the virt-state, and
  * registers what this component brings onto a state and onto the `vc` Lua table.
  *
- * The state is reached only through the accessors virt_composer.h publishes, so this file compiles
- * without seeing `virt_state_t`'s members. That is what lets it be a translation unit of its own
- * while `virt_state_t` is still private to virt_composer.cpp.
+ * It is one of the library's .cpp files, so it reads `virt_state_t` whole, through
+ * virt_composer_internal.h, as virt_composer.cpp does (06-10-2026-01:30).
  *
  * LUA_IMPL is not defined here: virt_composer.cpp is the one translation unit that carries the Lua
  * implementation, and a second copy would be a second set of symbols.
@@ -16,6 +15,10 @@
 /* Included by name as well as through virt_composer.h, so this file keeps compiling while
 the split is only half done and virt_composer.h does not yet collect it. 2026-09-21 20:49 */
 #include "virt_composer_coroutines.h"
+/* virt_state_t and what the library's .cpp files share. This file is one of them.
+06-10-2026-01:30 */
+#define VIRT_COMPOSER_LIBRARY
+#include "virt_composer_internal.h"
 
 #include "co_utils.h"
 #include "yaml.h"
@@ -33,12 +36,12 @@ namespace vc = virt_composer;
 /* See lua_coro_t::create()'s declaration in virt_composer_coroutines.h for its doc comment. */
 vc::ref_t<lua_coro_t> lua_coro_t::create(virt_state_t *vs) {
     auto ret = std::make_shared<lua_coro_t>(vc::object_t::Private{type_id_static()});
-    auto L   = luaw_get_lua_state(vs);
+    auto L   = vs->L;
 
     ret->thread = lua_newthread(L);         /* pushed onto the main state */
     ret->held   = lua_object_t::create();
     ret->held->capture_ref(L);              /* pops it into the state's reference table */
-    ret->done   = co::create_sem(luaw_get_pool(vs), 0);
+    ret->done   = co::create_sem(vs->pool, 0);
 
     /* The way back, from a running thread to the object driving it. A thread Lua makes for itself
     inherits the extra space of the state that made it, which coroutines_register_meta() set to
@@ -150,11 +153,11 @@ err_e lua_coro_t::close() {
         return VC_ERROR_FAILED_CALL;
     }
 
-    /* A state being destroyed has already cleared its pool, and luaw_get_pool() answers null for
-    it from then on. The wrapper and every waiter went with the pool, so there is nothing left to
+    /* A state being destroyed has already cleared its pool, and holds a null pool from then on
+    (06-10-2026-01:30). The wrapper and every waiter went with the pool, so there is nothing left to
     kill and nobody left to tell: only the thread is reset below. 2026-09-23 00:37 */
     auto *vs = luaw_get_virt_state(thread);
-    bool pool_live = vs && luaw_get_pool(vs);
+    bool pool_live = vs && vs->pool;
 
     /* The wrapper of a wait in flight goes first. It holds this thread and reaches back here
     through the thread's extra space, so it has to stop existing before the thread is reset or the
@@ -166,7 +169,7 @@ err_e lua_coro_t::close() {
 
     bool was_waiting = is_running();
 
-    lua_closethread(thread, vs ? luaw_get_lua_state(vs) : nullptr);
+    lua_closethread(thread, vs ? vs->L : nullptr);
     /* A thread closed after an error keeps that error on its stack, since that is what
     lua_closethread answers with (minilua.h:6614). A thread about to take a new call has no use for
     it, and a callee pushed above it would not be the one resumed. 2026-09-21 20:49 */

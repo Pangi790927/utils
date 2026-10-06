@@ -36,4 +36,10 @@
 # include <io.h>
 #endif
 
+/* MSVC's C runtime has no ssize_t, the type POSIX reads and writes answer in. 28-09-2026-13:00 */
+#if defined(_MSC_VER)
+# include <cstddef>
+using ssize_t = ptrdiff_t;
+#endif
+
 #endif /* OS_COMPILE_UTILS_H */

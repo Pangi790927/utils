@@ -84,7 +84,7 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_OBJECT(vs, vec2_t, y);
     VC_REGISTER_MEMBER_FUNCTION(vs, vec2_t, len2);
 
-    vc::c_function_t::add_plugin_internal_func(vs, "ref_vec2", lua_make);
+    vc::add_plugin_internal_func(vs, "ref_vec2", lua_make);
     return 0;
 }
 

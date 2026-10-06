@@ -31,14 +31,15 @@ static int a_make(lua_State *L) {
     }
 }
 
+/* Logs a line, so 021-008 can see which log a plugin's DBG lands in. 05-10-2026-22:33 */
 static int a_ping(lua_State *L) {
+    DBG("a_ping ran");
     lua_pushinteger(L, 1000);
     return 1;
 }
 
-/* Its own VIRT_COMPOSER_ABI, baked in when this file was compiled. Not vc::get_version(), which
-resolves to the host's copy and would therefore agree with the host no matter how stale this
-plugin is. 2026-09-20 17:14 */
+/* Its own VIRT_COMPOSER_ABI, baked in when this file was compiled, and not anything its host could
+answer, which would agree with the host no matter how stale this plugin is. 30-09-2026-16:00 */
 VIRT_COMPOSER_PLUGIN_EXPORT const char *plugin_get_version() {
     return VIRT_COMPOSER_ABI;
 }
@@ -54,8 +55,8 @@ VIRT_COMPOSER_PLUGIN_EXPORT int plugin_register_meta(vc::virt_state_t *vs, int t
     MOCK_REGISTER_TYPE(vs, a_two_t);
     MOCK_REGISTER_TYPE(vs, a_three_t);
 
-    vc::c_function_t::add_plugin_internal_func(vs, "a_make", a_make);
-    vc::c_function_t::add_plugin_internal_func(vs, "a_ping", a_ping);
+    vc::add_plugin_internal_func(vs, "a_make", a_make);
+    vc::add_plugin_internal_func(vs, "a_ping", a_ping);
     return 0;
 }
 

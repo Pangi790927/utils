@@ -28,7 +28,7 @@ static int start_with_reference_plugin(std::shared_ptr<vc::virt_state_t>& out) {
     out = vc::create_state();
     ASSERT_FN(CHK_PTR(out.get()));
 
-    ASSERT_FN(vc::load_plugin(out.get(), REFERENCE_PLUGIN));
+    ASSERT_FN(plugin_into(out.get(), REFERENCE_PLUGIN, "021-001-ref.tmp"));
 
     auto path = write_temp_yaml("021-001-reference",
         "ref_vec2:\n"

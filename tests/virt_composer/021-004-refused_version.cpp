@@ -22,14 +22,14 @@ static int test21_a_plugin_from_another_build_is_refused() {
     auto vs = vc::create_state();
     ASSERT_FN(CHK_PTR(vs.get()));
 
-    if (vc::load_plugin(vs.get(), STALE_PLUGIN) >= 0) {
+    if (plugin_into(vs.get(), STALE_PLUGIN, "021-004-stale.tmp") >= 0) {
         DBG("a plugin claiming another virt_composer was accepted");
         return -1;
     }
     /* Asking again answers the same. A version mismatch is not remembered as a broken plugin -
     that is kept for one which took a range and then failed - so this goes through the check a
     second time rather than reading a verdict off a list. 2026-09-20 18:45 */
-    if (vc::load_plugin(vs.get(), STALE_PLUGIN) >= 0) {
+    if (plugin_into(vs.get(), STALE_PLUGIN, "021-004-stale.tmp") >= 0) {
         DBG("the same plugin was accepted when asked for a second time");
         return -1;
     }
@@ -40,11 +40,11 @@ static int test21_a_refusal_costs_the_state_nothing() {
     auto vs = vc::create_state();
     ASSERT_FN(CHK_PTR(vs.get()));
 
-    ASSERT_FN(CHK_BOOL(vc::load_plugin(vs.get(), STALE_PLUGIN) < 0));
+    ASSERT_FN(CHK_BOOL(plugin_into(vs.get(), STALE_PLUGIN, "021-004-stale.tmp") < 0));
 
     /* Nothing was reserved for the refused plugin, so the next one gets the first range and this
     state is indistinguishable from one that never asked. 2026-09-20 18:45 */
-    ASSERT_FN(vc::load_plugin(vs.get(), REFERENCE_PLUGIN));
+    ASSERT_FN(plugin_into(vs.get(), REFERENCE_PLUGIN, "021-004-ref.tmp"));
     return 0;
 }
 

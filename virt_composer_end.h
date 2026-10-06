@@ -12,7 +12,7 @@
  * same, and closes them just the same, but publishes nothing: the variables it would publish into
  * are the host's own, which it would overwrite while it loads. It answers for its types through
  * `plugin_type_cnt()` instead, which the host asks as it loads it. See
- * VIRT_COMPOSER_PLUGIN_COUNTERS in virt_composer.h.
+ * VIRT_COMPOSER_PLUGIN_COUNTERS in virt_composer_plugins.h.
  *
  * @date 2026-09-20 17:22
  */

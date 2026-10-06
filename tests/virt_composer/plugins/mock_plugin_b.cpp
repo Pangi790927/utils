@@ -36,9 +36,8 @@ static int b_ping(lua_State *L) {
     return 1;
 }
 
-/* Its own VIRT_COMPOSER_ABI, baked in when this file was compiled. Not vc::get_version(), which
-resolves to the host's copy and would therefore agree with the host no matter how stale this
-plugin is. 2026-09-20 17:14 */
+/* Its own VIRT_COMPOSER_ABI, baked in when this file was compiled, and not anything its host could
+answer, which would agree with the host no matter how stale this plugin is. 30-09-2026-16:00 */
 VIRT_COMPOSER_PLUGIN_EXPORT const char *plugin_get_version() {
     return VIRT_COMPOSER_ABI;
 }
@@ -54,8 +53,8 @@ VIRT_COMPOSER_PLUGIN_EXPORT int plugin_register_meta(vc::virt_state_t *vs, int t
     MOCK_REGISTER_TYPE(vs, b_two_t);
     MOCK_REGISTER_TYPE(vs, b_three_t);
 
-    vc::c_function_t::add_plugin_internal_func(vs, "b_make", b_make);
-    vc::c_function_t::add_plugin_internal_func(vs, "b_ping", b_ping);
+    vc::add_plugin_internal_func(vs, "b_make", b_make);
+    vc::add_plugin_internal_func(vs, "b_ping", b_ping);
     return 0;
 }
 

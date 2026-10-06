@@ -32,6 +32,10 @@ EXE_EXT    := .exe
 # carries its own copy of the library. 28-09-2026-12:00
 CORE_OBJ   := virt_composer_core.obj
 
+# The plugin component, which every module links beside CORE_OBJ, a test and a plugin alike, as
+# in linux.makefile; on Windows one object serves both. 06-10-2026-02:45
+PLUGINS_OBJ := virt_composer_plugins_core.obj
+
 # The tool that keeps VIRT_COMPOSER_ABI's hash current, as in linux.makefile. It is not a test.
 # 27-09-2026-09:40
 ABI_TOOL     := abi_hash_tool$(EXE_EXT)
@@ -63,13 +67,19 @@ $(ABI_TOOL): abi_hash_tool.cpp abi_hash.h
 abi-sync: $(ABI_TOOL)
 	@.\$(ABI_TOOL)
 
-$(CORE_OBJ): ..\..\virt_composer.cpp ..\..\virt_composer.h ..\..\virt_object.h | abi-sync
+$(CORE_OBJ): ..\..\virt_composer.cpp ..\..\virt_composer.h ..\..\virt_composer_internal.h \
+		..\..\virt_object.h | abi-sync
 	${CXX} ${CXX_FLAGS} /c ..\..\virt_composer.cpp /Fo:$(CORE_OBJ)
 
 # Every test target depends on tests_common.h and virt_composer.h/_end.h (not just its own .cpp)
 # so editing any of those correctly invalidates every test's stale .exe on the next `make`.
-$(TEST_TARGETS): %$(EXE_EXT): %.cpp $(CORE_OBJ) tests_common.h ..\..\virt_composer.h ..\..\virt_composer_end.h | abi-sync
-	${CXX} ${CXX_FLAGS} $< $(CORE_OBJ) ${CXX_OUT}$@ ${LINK_FLAGS}
+$(PLUGINS_OBJ): ..\..\virt_composer_plugins.cpp ..\..\virt_composer_plugins.h \
+		..\..\virt_composer_internal.h ..\..\virt_composer.h ..\..\virt_object.h | abi-sync
+	${CXX} ${CXX_FLAGS} /c ..\..\virt_composer_plugins.cpp /Fo:$(PLUGINS_OBJ)
+
+$(TEST_TARGETS): %$(EXE_EXT): %.cpp $(CORE_OBJ) $(PLUGINS_OBJ) tests_common.h ..\..\virt_composer.h \
+		..\..\virt_composer_plugins.h ..\..\virt_composer_end.h | abi-sync
+	${CXX} ${CXX_FLAGS} $< $(CORE_OBJ) $(PLUGINS_OBJ) ${CXX_OUT}$@ ${LINK_FLAGS}
 
 # The one plugin built claiming a virt_composer it was not built against, as in linux.makefile.
 # 27-09-2026-09:40
@@ -80,8 +90,9 @@ PLUGIN_DEPS := $(wildcard plugins/*.h) $(wildcard plugins/*/*.h)
 # A plugin links its own copy of the library, the same object the tests link. /Fo and /Fd keep
 # each plugin's object and debug file beside it, so two plugins never write one another's.
 # 28-09-2026-12:00
-$(PLUGIN_TARGETS): %.dll: %.cpp $(CORE_OBJ) $(PLUGIN_DEPS) ..\..\virt_composer.h ..\..\virt_composer_end.h | abi-sync
-	${CXX} ${CXX_FLAGS} /LD $< $(CORE_OBJ) /Fo:$(basename $@).obj /Fd:$(basename $@).pdb ${CXX_OUT}$@ ${LINK_FLAGS}
+$(PLUGIN_TARGETS): %.dll: %.cpp $(CORE_OBJ) $(PLUGINS_OBJ) $(PLUGIN_DEPS) ..\..\virt_composer.h \
+		..\..\virt_composer_plugins.h ..\..\virt_composer_end.h | abi-sync
+	${CXX} ${CXX_FLAGS} /LD $< $(CORE_OBJ) $(PLUGINS_OBJ) /Fo:$(basename $@).obj /Fd:$(basename $@).pdb ${CXX_OUT}$@ ${LINK_FLAGS}
 
 clean:
 	-del /F /Q *.exe 2>nul
@@ -92,4 +103,5 @@ clean:
 	-del /F /Q *.pdb 2>nul
 	-del /F /Q *.ilk 2>nul
 	-del /F /Q *.tmp.yaml 2>nul
+	-del /F /Q *.tmp.log 2>nul
 	-del /F /Q plugins\*.dll plugins\*.lib plugins\*.exp plugins\*.obj plugins\*.pdb 2>nul

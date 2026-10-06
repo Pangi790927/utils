@@ -31,7 +31,7 @@ SRCS      += $(wildcard ../ap/*.cpp)
 SRCS      += $(wildcard ../vulkan/*.cpp)
 OBJS      := $(SRCS:.cpp=.o)
 DEPS      := $(SRCS:.cpp=.d)
-CXX_FLAGS := -std=c++2a -g -export-dynamic -O3 -fPIE
+CXX_FLAGS := -std=c++2a -g -O3 -fPIE
 CXX_FLAGS += -Wall -Wextra -Wno-format-security
 
 # For when I need to debug compilation time
