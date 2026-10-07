@@ -19,11 +19,16 @@ CORE_OBJ   := virt_composer_core.o
 # as PLUGIN_OBJ is. 06-10-2026-02:45
 CORE_PLUGINS_OBJ := virt_composer_plugins_core.o
 
+# The coroutine component, virt_composer_coroutines.cpp, which every module links too, so a
+# plugin's member may answer a co::task: a test this copy, a plugin PLUGIN_CORO_OBJ. 06-10-2026-06:34
+CORE_CORO_OBJ := virt_composer_coroutines_core.o
+
 # A plugin's copy is built apart: position-independent, and hidden, so that nothing of it but what
 # the plugin marks for export is seen from outside, and nothing of it is confused with another
 # module's. 28-09-2026-12:00
 PLUGIN_OBJ   := virt_composer_plugin.o
 PLUGIN_PLUGINS_OBJ := virt_composer_plugins_plugin.o
+PLUGIN_CORO_OBJ := virt_composer_coroutines_plugin.o
 PLUGIN_FLAGS := -fPIC -fvisibility=hidden -fvisibility-inlines-hidden
 
 # The tool that keeps VIRT_COMPOSER_ABI's hash current. It is not a test - it has a main() and no
@@ -79,13 +84,24 @@ $(PLUGIN_PLUGINS_OBJ): ../../virt_composer_plugins.cpp ../../virt_composer_plugi
 		../../virt_composer_internal.h ../../virt_composer.h ../../virt_object.h | abi-sync
 	${CXX} ${CXX_FLAGS} ${PLUGIN_FLAGS} -c ../../virt_composer_plugins.cpp ${CXX_OUT} $(PLUGIN_PLUGINS_OBJ)
 
+$(CORE_CORO_OBJ): ../../virt_composer_coroutines.cpp ../../virt_composer_coroutines.h \
+		../../virt_composer_internal.h ../../virt_composer.h ../../virt_object.h | abi-sync
+	${CXX} ${CXX_FLAGS} -c ../../virt_composer_coroutines.cpp ${CXX_OUT} $(CORE_CORO_OBJ)
+
+$(PLUGIN_CORO_OBJ): ../../virt_composer_coroutines.cpp ../../virt_composer_coroutines.h \
+		../../virt_composer_internal.h ../../virt_composer.h ../../virt_object.h | abi-sync
+	${CXX} ${CXX_FLAGS} ${PLUGIN_FLAGS} -c ../../virt_composer_coroutines.cpp ${CXX_OUT} \
+		$(PLUGIN_CORO_OBJ)
+
 $(PLUGIN_OBJ): ../../virt_composer.cpp ../../virt_composer.h ../../virt_composer_internal.h \
 		../../virt_object.h | abi-sync
 	${CXX} ${CXX_FLAGS} ${PLUGIN_FLAGS} -c ../../virt_composer.cpp ${CXX_OUT} $(PLUGIN_OBJ)
 
-$(TEST_TARGETS): %$(EXE_EXT): %.cpp $(CORE_OBJ) $(CORE_PLUGINS_OBJ) tests_common.h ../../virt_composer.h \
+$(TEST_TARGETS): %$(EXE_EXT): %.cpp $(CORE_OBJ) $(CORE_PLUGINS_OBJ) $(CORE_CORO_OBJ) tests_common.h \
+		../../virt_composer.h \
 		../../virt_composer_plugins.h ../../virt_composer_end.h | abi-sync
-	${CXX} ${CXX_FLAGS} $< $(CORE_OBJ) $(CORE_PLUGINS_OBJ) ${CXX_OUT} $@ ${LIBS} ${HOST_LINK}
+	${CXX} ${CXX_FLAGS} $< $(CORE_OBJ) $(CORE_PLUGINS_OBJ) $(CORE_CORO_OBJ) ${CXX_OUT} $@ ${LIBS} \
+		${HOST_LINK}
 
 # The one plugin built claiming a virt_composer it was not built against, so that load_plugin's
 # version refusal can be reached at all. VIRT_COMPOSER_ABI is guarded in virt_composer.h for this
@@ -98,9 +114,11 @@ PLUGIN_DEPS := $(wildcard plugins/*.h) $(wildcard plugins/*/*.h)
 # plugin bakes VIRT_COMPOSER_ABI in, and a host that carries a different one refuses to load it.
 # A plugin built before the sync and a test built after it disagree, which is the refusal working
 # on a mismatch nobody meant. 22-09-2026-12:50
-$(PLUGIN_TARGETS): %.so: %.cpp $(PLUGIN_OBJ) $(PLUGIN_PLUGINS_OBJ) $(PLUGIN_DEPS) ../../virt_composer.h \
+$(PLUGIN_TARGETS): %.so: %.cpp $(PLUGIN_OBJ) $(PLUGIN_PLUGINS_OBJ) $(PLUGIN_CORO_OBJ) $(PLUGIN_DEPS) \
+		../../virt_composer.h \
 		../../virt_composer_plugins.h ../../virt_composer_end.h | abi-sync
-	${CXX} ${CXX_FLAGS} ${PLUGIN_FLAGS} -shared $< $(PLUGIN_OBJ) $(PLUGIN_PLUGINS_OBJ) ${CXX_OUT} $@ ${LIBS}
+	${CXX} ${CXX_FLAGS} ${PLUGIN_FLAGS} -shared $< $(PLUGIN_OBJ) $(PLUGIN_PLUGINS_OBJ) \
+		$(PLUGIN_CORO_OBJ) ${CXX_OUT} $@ ${LIBS}
 
 clean:
 	rm -f $(TEST_TARGETS)

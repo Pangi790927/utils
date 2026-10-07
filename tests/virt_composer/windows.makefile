@@ -36,6 +36,10 @@ CORE_OBJ   := virt_composer_core.obj
 # in linux.makefile; on Windows one object serves both. 06-10-2026-02:45
 PLUGINS_OBJ := virt_composer_plugins_core.obj
 
+# The coroutine component, which every module links too, so a plugin's member may answer a
+# co::task; on Windows one object serves a test and a plugin alike. 06-10-2026-06:34
+CORO_OBJ := virt_composer_coroutines_core.obj
+
 # The tool that keeps VIRT_COMPOSER_ABI's hash current, as in linux.makefile. It is not a test.
 # 27-09-2026-09:40
 ABI_TOOL     := abi_hash_tool$(EXE_EXT)
@@ -77,9 +81,14 @@ $(PLUGINS_OBJ): ..\..\virt_composer_plugins.cpp ..\..\virt_composer_plugins.h \
 		..\..\virt_composer_internal.h ..\..\virt_composer.h ..\..\virt_object.h | abi-sync
 	${CXX} ${CXX_FLAGS} /c ..\..\virt_composer_plugins.cpp /Fo:$(PLUGINS_OBJ)
 
-$(TEST_TARGETS): %$(EXE_EXT): %.cpp $(CORE_OBJ) $(PLUGINS_OBJ) tests_common.h ..\..\virt_composer.h \
+$(CORO_OBJ): ..\..\virt_composer_coroutines.cpp ..\..\virt_composer_coroutines.h \
+		..\..\virt_composer_internal.h ..\..\virt_composer.h ..\..\virt_object.h | abi-sync
+	${CXX} ${CXX_FLAGS} /c ..\..\virt_composer_coroutines.cpp /Fo:$(CORO_OBJ)
+
+$(TEST_TARGETS): %$(EXE_EXT): %.cpp $(CORE_OBJ) $(PLUGINS_OBJ) $(CORO_OBJ) tests_common.h \
+		..\..\virt_composer.h \
 		..\..\virt_composer_plugins.h ..\..\virt_composer_end.h | abi-sync
-	${CXX} ${CXX_FLAGS} $< $(CORE_OBJ) $(PLUGINS_OBJ) ${CXX_OUT}$@ ${LINK_FLAGS}
+	${CXX} ${CXX_FLAGS} $< $(CORE_OBJ) $(PLUGINS_OBJ) $(CORO_OBJ) ${CXX_OUT}$@ ${LINK_FLAGS}
 
 # The one plugin built claiming a virt_composer it was not built against, as in linux.makefile.
 # 27-09-2026-09:40
@@ -90,9 +99,11 @@ PLUGIN_DEPS := $(wildcard plugins/*.h) $(wildcard plugins/*/*.h)
 # A plugin links its own copy of the library, the same object the tests link. /Fo and /Fd keep
 # each plugin's object and debug file beside it, so two plugins never write one another's.
 # 28-09-2026-12:00
-$(PLUGIN_TARGETS): %.dll: %.cpp $(CORE_OBJ) $(PLUGINS_OBJ) $(PLUGIN_DEPS) ..\..\virt_composer.h \
+$(PLUGIN_TARGETS): %.dll: %.cpp $(CORE_OBJ) $(PLUGINS_OBJ) $(CORO_OBJ) $(PLUGIN_DEPS) \
+		..\..\virt_composer.h \
 		..\..\virt_composer_plugins.h ..\..\virt_composer_end.h | abi-sync
-	${CXX} ${CXX_FLAGS} /LD $< $(CORE_OBJ) $(PLUGINS_OBJ) /Fo:$(basename $@).obj /Fd:$(basename $@).pdb ${CXX_OUT}$@ ${LINK_FLAGS}
+	${CXX} ${CXX_FLAGS} /LD $< $(CORE_OBJ) $(PLUGINS_OBJ) $(CORO_OBJ) /Fo:$(basename $@).obj \
+		/Fd:$(basename $@).pdb ${CXX_OUT}$@ ${LINK_FLAGS}
 
 clean:
 	-del /F /Q *.exe 2>nul
