@@ -1,0 +1,10 @@
+#!/bin/sh
+# Launches the two-model console-RTS loop (delegates to run.ps1, since the windows are Windows
+# consoles). The orchestrator owns the live agent windows; closing the Game window stops all.
+#
+# Usage: ./run  -- all settings come from config.json.
+#
+# 09-10-2026
+here=$(cd "$(dirname "$0")" && pwd)
+win=$(cygpath -w "$here/run.ps1" 2>/dev/null || echo "$here/run.ps1")
+exec powershell -ExecutionPolicy Bypass -NoProfile -File "$win"

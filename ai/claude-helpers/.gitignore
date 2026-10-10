@@ -1,0 +1,8 @@
+# Private data: real session transcripts, summaries of them, and logs of typed text. 10-10-2026
+cst/backups/
+*.log
+curr.json
+curr.txt
+builtin_compact_example.txt
+trim_summaries.txt
+__pycache__/
