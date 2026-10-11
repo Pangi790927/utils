@@ -8,10 +8,13 @@ refuses to run without them -- it never guesses a session by file times. It then
 detached helper and returns at once. The helper:
 
   1. summarizes the older half of the session (ctxtrim's half-keep: the summarizer sees the whole
-     conversation, summarizes only above the split) while the session stays open;
+     conversation, summarizes only above the split) while the session stays open; only the part
+     resume loads counts -- from Claude Code's newest compact boundary on, the rest is dropped;
   2. waits until the session is idle, then types `/exit` into its terminal (no focus needed);
   3. once Claude has exited and closed the file, rewrites it in place, atomically:
-     [summary of the older half] + [the recent half, verbatim], under the same session id;
+     [summary of the older half] + [the recent half, verbatim], under the same session id --
+     only once it has checked that resume, walking back from the last message, reaches that
+     summary;
   4. types the original launch command, with `--resume <same id>`, into the same terminal.
 
 Do not type in that terminal while it switches. Everything is logged to cst.log beside this file.
@@ -143,10 +146,13 @@ def helper(o):
     """Does the trim and the switch, detached from the session it serves. @date 10-10-2026"""
     log(f"=== helper: session {o.sid}, claude pid {o.claude_pid}, shell pid {o.shell_pid}")
     sf = find_session(o.sid)
-    records = transcript.load_records(sf)
+    every = transcript.load_records(sf)
+    base = ctxtrim.live_start(every)            # resume loads from here; before it is dead history
+    records = every[base:]
     split = ctxtrim.split_index(records, o.keep)
     summary = ctxtrim.summarize_older(ctxtrim.render_with_marker(records, split, 500), o.model)
-    log(f"{len(records)} records, split at {split}; summary {len(summary)} chars")
+    log(f"{len(every)} records, loaded from {base} ({len(records)}), split at {base + split}; "
+        f"summary {len(summary)} chars")
 
     t0 = time.time()
     while not is_idle(sf):
@@ -169,10 +175,16 @@ def helper(o):
         backup = os.path.join(BACKUPS, f"{o.sid}.{datetime.datetime.now():%Y%m%d-%H%M%S}.jsonl")
         shutil.copy2(sf, backup)
     now = transcript.load_records(sf)
-    if [r.get("uuid") for r in now[:split]] != [r.get("uuid") for r in records[:split]]:
+    new = None
+    if (ctxtrim.live_start(now) != base or [r.get("uuid") for r in now[base:base + split]]
+            != [r.get("uuid") for r in records[:split]]):
         log("the older half changed while summarizing -- nothing changed; resuming as it was")
     else:
-        _, new = ctxtrim.build_session(now, split, summary, o.sid)
+        _, new = ctxtrim.build_session(now[base:], split, summary, o.sid)
+        if ctxtrim.chain_root(new) != 0:        # checked before writing, so no backup is needed
+            log("trim not effective: resume would not reach the summary -- nothing changed")
+            new = None
+    if new:
         tmp = sf + ".cst-tmp"                   # written whole, then swapped in by one rename,
         with open(tmp, "w", encoding="utf8") as f:      # so the session is never half-written
             for r in new:

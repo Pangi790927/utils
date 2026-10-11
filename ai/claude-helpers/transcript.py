@@ -27,14 +27,15 @@ its result (each capped by `--truncate`) and each injected-context record is sum
 one `@@#`/`///` line, the noisy ones dropped; `--no-tools` collapses a tool call and its
 result to one marker line, `--no-attachments` drops the context records, and
 `--full-attachments` dumps them raw. A `mode` change and a `system` event each render as
-one `~~~ … ~~~` divider. It only ever reads its input.
+one `~~~ … ~~~` divider. A caller that knows which records sit on abandoned branches (ctxtrim
+does) can have each run of them wrapped between two such dividers. It only ever reads its input.
 
 Usage:
     python transcript.py SESSION.jsonl
     python transcript.py curr.json -o curr.txt
     python transcript.py curr.json --keep-tools
 
-@date 08-10-2026-00:10
+@date 11-10-2026-23:39
 """
 
 import argparse
@@ -362,7 +363,7 @@ def header_lines():
     """Answers the legend that opens the render, naming what each line prefix means.
 
     @return list[str]
-    @date 08-10-2026-01:20
+    @date 11-10-2026-23:39
     """
     return [
         "~~~ legend: the third prefix char is direction -- # into the agent, > within its "
@@ -377,43 +378,64 @@ def header_lines():
         "  >>>  a tool call the agent made            (>>> [tool: NAME])",
         "  <<>  what a tool the agent called returned (<<> [tool result])",
         "  **>  a mark that the agent thought; its reasoning text is never stored",
-        "  ~~~  a divider: a mode change, a system event, or a compaction",
+        "  ~~~  a divider: a mode change, a system event, a compaction, or the bounds of an",
+        "       abandoned branch -- a part the conversation went back from, never resumed",
     ]
 
 
-def render(records, opt):
+# The dividers around a run of records on an abandoned branch: a part the conversation went
+# back from (a prompt re-sent or edited, a rewind, a reply the classifier stopped), which
+# resume never loads. 11-10-2026-23:39
+ABANDONED_OPEN = "~~~ abandoned branch: rewound, re-sent or stopped; not part of the resumed " \
+                 "conversation ~~~"
+ABANDONED_CLOSE = "~~~ end of abandoned branch ~~~"
+
+
+def render(records, opt, abandoned=frozenset()):
     """Answers the whole transcript as one string, under the options in `opt`.
 
     A legend opens it, then a dictionary of the known blocks seen, then the conversation,
-    where each known block is a `/// <id>` reference into that dictionary.
+    where each known block is a `/// <id>` reference into that dictionary. The records whose
+    uuid is in `abandoned` are wrapped, each run of them, between two `~~~` dividers naming
+    them an abandoned branch.
 
-    @param records  list - the session records
-    @param opt      argparse.Namespace - the render options
+    @param records    list - the session records
+    @param opt        argparse.Namespace - the render options
+    @param abandoned  set[str] - the uuids of the records on abandoned branches
     @return str
-    @date 08-10-2026-02:10
+    @date 11-10-2026-23:39
     """
-    body, defs, last_mode = [], {}, None
+    body, defs, last_mode, inside = [], {}, None, False
     for rec in records:
-        t = rec.get("type")
+        t, lines = rec.get("type"), []
         if t in ("user", "assistant"):
-            body += message_lines(rec, opt)
+            lines = message_lines(rec, opt)
         elif t == "system":
-            body += system_lines(rec)
+            lines = system_lines(rec)
         elif t == "mode":
             m = rec.get("mode")
             if m and m != last_mode:
-                body += [f"~~~ mode: {m} ~~~", ""]
+                lines = [f"~~~ mode: {m} ~~~", ""]
                 last_mode = m
         elif t == "attachment" and not opt.no_attachments:
             if opt.full_attachments:
-                body += prefix_lines("@@# ", clip(as_text(rec.get("rendered", "")),
+                lines = prefix_lines("@@# ", clip(as_text(rec.get("rendered", "")),
                                                   opt.truncate)) + [""]
             else:
                 s = attachment_summary(rec)
                 if s:
                     i = known_id(*s)
                     defs.setdefault(i, s[1])
-                    body += [f"/// {i}", ""]
+                    lines = [f"/// {i}", ""]
+        # Only a record that shows a line and has a uuid opens or closes a run, so a lone
+        # dropped noise record or a uuid-less bookkeeping one never makes an empty run.
+        # 11-10-2026-23:39
+        if lines and rec.get("uuid") and (rec["uuid"] in abandoned) != inside:
+            inside = not inside
+            body += [ABANDONED_OPEN if inside else ABANDONED_CLOSE, ""]
+        body += lines
+    if inside:
+        body += [ABANDONED_CLOSE, ""]
     dictionary = []
     if defs:
         dictionary = ["~~~ known blocks (/// ids below resolve here) ~~~"]

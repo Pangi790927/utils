@@ -10,8 +10,14 @@ conversation never has to end for lack of room.
 
 How it decides and summarizes:
 
+  - Only the part resume loads is trimmed: from the root of the chain the last message hangs on
+    (the host's newest compact boundary, or an earlier trim's summary). The records before it
+    are dead history, left out of the new file.
   - The split falls only at a human prompt -- a user turn the person typed, not a tool result --
-    so a tool call and its result are never split.
+    so a tool call and its result are never split; and only at one resume loads, never on a
+    branch the conversation went back from (a prompt re-sent or edited, a rewind).
+  - Such an abandoned branch stays in the summarizer's text, between two dividers naming it, so
+    the summary does not report it as having happened.
   - The WHOLE conversation is rendered to text (through transcript.py) with a MARKER at the
     split, and handed to `claude -p`: it is told to summarize only ABOVE the marker, using the
     verbatim part below only as context. So the summary of the older half is informed by what it
@@ -26,7 +32,7 @@ Usage:
     python ctxtrim.py SESSION.jsonl --keep 0.5    # keep the recent 50%, summarize the older 50%
     # then: claude --resume <printed id>
 
-@date 08-10-2026-13:30
+@date 11-10-2026-23:39
 """
 
 import argparse
@@ -79,6 +85,100 @@ def last_message_uuid(records):
     return None
 
 
+def chain_root(records):
+    """Answers the index of the record where `claude --resume` stops reading: it walks the
+    parentUuid links back from the last message to a record with no parent. None when a link
+    points at a record that is not there, or there is no message.
+
+    The host's own /compact (auto or typed) leaves the old records in the file and starts a new
+    chain at a `compact_boundary` with no parent; everything before that root is never loaded
+    again, so a trim must work only from it on.
+
+    @param records  list - the session records, in file order
+    @return int|None
+    @date 11-10-2026
+    """
+    at = {r["uuid"]: i for i, r in enumerate(records) if r.get("uuid")}
+    i = at.get(last_message_uuid(records))
+    seen = set()
+    while i is not None and i not in seen:
+        seen.add(i)
+        parent = records[i].get("parentUuid")
+        if parent is None:
+            return i
+        i = at.get(parent)
+    return None
+
+
+def live_start(records):
+    """Answers the index the loaded part of the session begins at: the root of the chain resume
+    follows (the newest compact boundary, or an earlier trim's summary), 0 when it can't be told.
+    @date 11-10-2026"""
+    return chain_root(records) or 0
+
+
+def loaded_uuids(records):
+    """Answers the uuids of the records `claude --resume` loads: the walk back from the last
+    message, and with it the parallel tool calls of each turn on it and their results, which
+    hang off that walk as side leaves. A message left out sits on an abandoned branch.
+
+    @param records  list - the session records, in file order
+    @return set[str]
+    @date 11-10-2026-23:39
+    """
+    at = {r["uuid"]: i for i, r in enumerate(records) if r.get("uuid")}
+    out, i = set(), at.get(last_message_uuid(records))
+    while i is not None and records[i]["uuid"] not in out:
+        out.add(records[i]["uuid"])
+        i = at.get(records[i].get("parentUuid"))
+    while True:
+        turns, calls = set(), set()
+        for r in records:
+            if r.get("uuid") in out and r.get("type") == "assistant":
+                turns.add(r.get("message", {}).get("id"))
+                calls |= {b.get("id") for b in content_blocks(r, "tool_use")}
+        turns.discard(None)
+        more = {r["uuid"] for r in records if r.get("uuid") and r["uuid"] not in out and (
+            r.get("type") == "assistant" and r.get("message", {}).get("id") in turns
+            or any(b.get("tool_use_id") in calls for b in content_blocks(r, "tool_result")))}
+        if not more:
+            return out
+        out |= more
+
+
+def content_blocks(rec, kind):
+    """Answers the content blocks of type `kind` in a record's message, [] when it has none.
+    @date 11-10-2026-23:39"""
+    c = rec.get("message", {}).get("content") if isinstance(rec.get("message"), dict) else None
+    return [b for b in c if isinstance(b, dict) and b.get("type") == kind] \
+        if isinstance(c, list) else []
+
+
+def abandoned_uuids(records):
+    """Answers the uuids of the records on abandoned branches -- a prompt re-sent or edited, a
+    rewind, a reply the classifier stopped: every message resume does not load, and every
+    other record whose nearest message above it is one of those. A note hanging off a loaded
+    message is not among them.
+
+    @param records  list - the session records, in file order
+    @return set[str]
+    @date 11-10-2026-23:39
+    """
+    loaded = loaded_uuids(records)
+    by_uuid = {r["uuid"]: r for r in records if r.get("uuid")}
+
+    def dead(r):
+        seen = set()
+        while r is not None and r["uuid"] not in seen:
+            if r.get("type") in ("user", "assistant"):
+                return r["uuid"] not in loaded
+            seen.add(r["uuid"])
+            r = by_uuid.get(r.get("parentUuid"))
+        return False
+
+    return {u for u, r in by_uuid.items() if u not in loaded and dead(r)}
+
+
 # -------------------------------------------------------------------------------------------------
 # The summarizer: one structured pass through headless `claude -p`
 # -------------------------------------------------------------------------------------------------
@@ -126,8 +226,10 @@ HALF_PROMPT = (
     "5. Errors and fixes.\n"
     "6. User asks.\n"
     "7. Open or pending items.\n"
-    "Keep names, paths and numbers exact, and anything the verbatim part below depends on. Output "
-    "only the summary."
+    "Keep names, paths and numbers exact, and anything the verbatim part below depends on. A "
+    "part between '~~~ abandoned branch' and '~~~ end of abandoned branch' is one the "
+    "conversation went back from: it did not happen in the conversation that continues, so "
+    "mention it only as tried and dropped, if it matters at all. Output only the summary."
 )
 
 # Opens the summary record, so the resumed model reads it as background with the recent half
@@ -161,17 +263,19 @@ def content_len(rec):
 def split_index(records, keep_fraction):
     """Answers the record index that splits the conversation so the recent `keep_fraction` (by
     characters) is kept verbatim and the older part is summarized, snapped to the first human-prompt
-    boundary at or after that point. @date 08-10-2026-13:30"""
+    boundary at or after that point that resume loads -- a prompt on an abandoned branch is
+    passed over, since the conversation does not continue from it. @date 11-10-2026-23:39"""
     total = sum(content_len(r) for r in records if r.get("type") in ("user", "assistant"))
     older_target = total * (1.0 - keep_fraction)
-    hp = set(human_prompt_indices(records))
+    loaded = loaded_uuids(records)
+    hp = {i for i in human_prompt_indices(records) if records[i].get("uuid") in loaded}
     acc = 0
     for i, r in enumerate(records):
         if r.get("type") in ("user", "assistant"):
             acc += content_len(r)
         if i in hp and acc >= older_target:
             return i
-    return max(human_prompt_indices(records) or [len(records)])
+    return max(hp or [len(records)])
 
 
 # -------------------------------------------------------------------------------------------------
@@ -245,29 +349,24 @@ def build_session(records, split, summary, sid=None):
 def render_with_marker(records, split, truncate):
     """Answers the whole conversation rendered to text with a marker at `split`: the older half,
     then MARKER, then the recent half (its legend header stripped, so there is one clean marker).
-    The summarizer sees everything but is told to summarize only above the marker.
+    The summarizer sees everything but is told to summarize only above the marker; a branch the
+    conversation went back from is shown too, between two dividers naming it abandoned.
 
     @param records   list - the session records
     @param split     int - the index where the recent half begins
     @param truncate  int - the per-tool-body cap passed to the renderer
     @return str
-    @date 08-10-2026-13:30
+    @date 11-10-2026-23:39
     """
     opt = SimpleNamespace(no_tools=False, no_attachments=False, full_attachments=False,
                           truncate=truncate)
-    older = transcript.render(records[:split], opt)
-    recent = transcript.render(records[split:], opt)
+    dead = abandoned_uuids(records)
+    older = transcript.render(records[:split], opt, dead)
+    recent = transcript.render(records[split:], opt, dead)
     key = "~~~ conversation ~~~"
     if key in recent:
         recent = recent.split(key, 1)[1]
     return older + MARKER + recent
-
-
-def projects_dir():
-    """Answers the Claude Code projects directory for the current working directory's project.
-    @return str @date 08-10-2026-03:10"""
-    slug = os.getcwd().replace("\\", "-").replace("/", "-").replace(":", "")
-    return os.path.join(os.path.expanduser("~"), ".claude", "projects", "C--" + slug.split("C-", 1)[-1])
 
 
 def parse_args(argv):
@@ -294,6 +393,7 @@ def main(argv):
     @date 09-10-2026"""
     opt = parse_args(argv)
     records = transcript.load_records(opt.input)
+    records = records[live_start(records):]         # what resume loads; the rest is dead history
     split = split_index(records, opt.keep)
     text = render_with_marker(records, split, opt.truncate)
     print(f"{len(records)} records; split at index {split} (keep recent {opt.keep:.0%}); "
@@ -307,6 +407,10 @@ def main(argv):
         return 0
 
     sid, new_records = build_session(records, split, summary, opt.sid)
+    if chain_root(new_records) != 0:
+        print("\nnot written: resume would not reach the summary from the last message",
+              file=sys.stderr)
+        return 1
     out_dir = opt.out_dir or os.path.dirname(os.path.abspath(opt.input))
     path = os.path.join(out_dir, sid + ".jsonl")
     with open(path, "w", encoding="utf8") as f:
