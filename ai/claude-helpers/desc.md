@@ -62,6 +62,34 @@ throwaway session (10-10-2026): back in about 20 seconds with a Haiku summary, e
 still known. Do not type in that terminal while it switches. Log: `cst/cst.log`. Launchers `cst`
 / `cst.cmd` also live on the PATH in `~/workspace/claude-utils/`.
 
+**On Linux** (14-10-2026) Claude Code runs a session under its daemon (`claude daemon run`), on a
+terminal of its own owned by a relay process, `claude bg-pty-host --bg-pty-host <socket>` (the
+parent of `CLAUDE_PID`). Your terminal only runs a thin client, and the relay's one client is the
+daemon, so nothing links a session to the terminal that shows it. So:
+
+- `/exit` is typed through the relay socket, as a client does: frames of
+  `[uint32 BE length][uint8 kind][payload]`, kind 0 = raw terminal bytes (typed into the session),
+  kind 1 = JSON control (`hello` with the Claude Code version, the screen so far, then `live`;
+  `ping`/`pong`, `auth`/`auth-required`, `resize`, `kill`, `exit`). No token is set up on this
+  machine, so typing is accepted. Undocumented (seen in 2.1.295): if the relay refuses
+  (`auth-required`), is missing, or the session doesn't exit, cst falls back to SIGTERM.
+- The session comes back through `cst/cst.bash`, sourced from `~/.bashrc`: it wraps `claude`, and
+  when that exits it runs `cst --take-request $PWD`. cst leaves a request in `cst/requests/`
+  ("pending" before `/exit`, "ready" after the rewrite) with the session id and the directory it
+  was started in; a request for the same directory, at most 15 s old, is consumed and `claude` is
+  started again with the same arguments and `--resume <id>` (an earlier resume or continue
+  dropped). Matching on directory and time is a heuristic: exiting another `claude` in the same
+  directory within those 15 s would take the request. Without the wrapper: `claude --resume <id>`.
+- `~/.local/bin/cst` is a link to `cst/cst`, which picks `python3` on Linux and `python` on
+  Windows.
+- Not supported: sessions hosted by Claude Code's background daemon (opened from the agents view):
+  their relay refuses typing, and a session ended from outside is renamed `.orphaned` and can't be
+  resumed by id. Run cst from a session started with plain `claude` in a terminal.
+
+A trim loses the reasoning of the half it keeps (an API-side limit, measured 14-10-2026), so it
+lands at about 0.35 x the start with `--keep 0.5` in a session that thinks a lot; the idea of adding
+Claude Code's native compact summary is in `cst/feature-compact.md`.
+
 ### transcript.py line prefixes
 
 The third prefix character is direction -- `#` into the agent from outside, `>` within the agent's
