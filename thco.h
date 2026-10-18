@@ -51,7 +51,7 @@ struct thco_t2c_queue_t {
     co::task_t pop(T &ret) {
         /* CORO space */
         uint8_t aux;
-        co_await CO_REG_INTERN(co::read(que_sig[0], &aux, 1));
+        co_await CO_REG(co::read(que_sig[0], &aux, 1));
         std::lock_guard guard(que_mu);
         ret = que.front();
         que.pop();

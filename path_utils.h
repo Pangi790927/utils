@@ -14,6 +14,7 @@ moved. 28-09-2026-10:30 */
 #elif defined(UTILS_OS_LINUX)
 # include <dirent.h>
 # include <dlfcn.h>
+# include <unistd.h>
 #endif
 
 #include "misc_utils.h"

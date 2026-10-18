@@ -33,9 +33,9 @@ The tools
 | `transcript.py`               | Renders a session `.jsonl` (or a `curr.json` array) as a         |
 |                               | readable, 100-column conversation. Reads only; never edits its   |
 |                               | input.                                                           |
-| `ctxtrim.py`                  | Trims a session the half-keep way and writes a new, shorter      |
-|                               | session that `claude --resume` continues. Never touches the      |
-|                               | original.                                                        |
+| `ctxtrim.py`                  | Trims a session the half-keep way, in place: `claude --resume`   |
+|                               | then loads a summary of the older half and the recent half       |
+|                               | verbatim; the older half's records stay in the file as a log.    |
 | `gamedev_loop.py`             | The orchestrator of the two-agent game studio (below): owns the  |
 |                               | agent windows, relays turns, trims, recovers, commits.           |
 | `game.md`                     | The seed design for the studio's game; copied into the game      |
@@ -45,22 +45,46 @@ The tools
 | `trim_summaries.txt`          | Sample trim output, kept for comparison.                         |
 | `cst/`                        | Claude self-trim: `! cst` trims the session it is run from, in   |
 |                               | place, and resumes it by itself (below).                         |
+| `cdt/`                        | Claude drop thought: drops the reasoning from a session, in      |
+|                               | place, every other word kept; `! cdt` does it to the session it  |
+|                               | is run from and resumes it (below).                              |
 | `paired/`                     | A copy of the game studio's runner, without the game, with a     |
 |                               | README on how to reinstate it.                                   |
 
 
 ### cst -- trim the session you are in
 
-Inside a session, `! cst [--model M] [--keep 0.5] [--backup]`. It reads the session's exact id
-and process from `CLAUDE_CODE_SESSION_ID` / `CLAUDE_PID` (it refuses to run without them and never
-guesses by file times), starts a detached helper, and returns. The helper summarizes the older
-half while the session stays open, waits until it is idle, types `/exit`, rewrites the file in
-place once Claude has closed it (same id; written whole, then swapped in by one rename), and
-types the original launch command with `--resume <id>` into the same terminal. No copy of the
-untrimmed session is kept unless `--backup` is given; it then goes to `cst/backups/`. Tested on a
-throwaway session (10-10-2026): back in about 20 seconds with a Haiku summary, every early fact
-still known. Do not type in that terminal while it switches. Log: `cst/cst.log`. Launchers `cst`
-/ `cst.cmd` also live on the PATH in `~/workspace/claude-utils/`.
+Inside a session, `! cst [--model M] [--keep 0.5]`. It reads the session's exact id and process
+from `CLAUDE_CODE_SESSION_ID` / `CLAUDE_PID` (it refuses to run without them and never guesses by
+file times), starts a detached helper, and returns. The helper summarizes the older half while
+the session stays open, waits until it is idle, types `/exit`, trims the file in place once Claude
+has closed it (ctxtrim's trim, under the same id), and types the original launch command with
+`--resume <id>` into the same terminal. Nothing is thrown away: the older half stays in the file
+as a log that resume no longer loads, so there is no `--backup` any more (15-10-2026). Tested on a
+throwaway session (10-10-2026, before the trim kept the log): back in about 20 seconds with a
+Haiku summary, every early fact still known. Do not type in that terminal while it switches. Log:
+`cst/cst.log`. Launchers `cst` / `cst.cmd` also live on the PATH in `~/workspace/claude-utils/`.
+
+### cdt -- drop the reasoning
+
+`cdt SESSION.jsonl|ID` drops every thinking block from what `claude --resume` loads, in place, and
+nothing else; inside a session, `! cdt` does it to that session through cst's switch (idle,
+`/exit`, drop, resume). `--dry` only reports: how many blocks, about how many tokens of context
+they hold, how much of that the API drops already, and where the next turn would start. No model
+is asked anything, so it is instant and free. On Opus 5.5 earlier thinking stays in the context,
+and at high effort it is most of it: swarm's max-effort Reviewer stood at 681K tokens, ~375K of
+them reasoning the API still counted, and `cdt --dry` put its next turn at ~307K (15-10-2026).
+
+A record holding only thinking is deleted, and what hung on it -- or named it as `leafUuid` -- is
+re-pointed onto its parent: Claude Code joins the records of one answer by message id, so a record
+merely cut out of the chain could come back. A record with thinking beside other blocks keeps the
+others. The file as it was is kept as `<session>.jsonl.cdt-bak`; putting it back is only safe
+before the next turn. The rewrite is checked before it is written: resume must reach the same root
+and load the same records, less the thinking. The estimate counts a signature's ~900-character
+floor out, then ~4 characters a token. Tested 15-10-2026 on hand-made sessions and on a real Opus
+5.5 one: the resume after the drop worked, its context fell by the thinking, and the earlier
+answers were recalled. The in-session switch is cst's own; it was checked with its typing faked,
+not live. Log: `cdt/cdt.log`. Launchers `cdt` / `cdt.cmd` also live in `~/workspace/claude-utils/`.
 
 ### transcript.py line prefixes
 
@@ -92,15 +116,20 @@ Flags: `--no-tools` collapses tool bodies to one marker, `--no-attachments` drop
    marker; the part below is context it must not summarize. `--cli claude` uses `claude -p` on
    `--model`; `--cli glm` uses `claude-glm.cmd`, so each agent's history is summarized by itself.
    For GLM the instructions travel on stdin, because cmd.exe would mangle them as an argument.
-4. Replace the older half with one `isCompactSummary` user record; copy the recent half with its
-   `message` untouched (thinking signatures must survive), re-pointing only the session id and the
-   first kept turn's parent.
-5. Write a new session file; `claude --resume <id>` continues it.
+4. Cut the older half off, keeping it: one `isCompactSummary` user record with no parent goes in
+   just before the first kept prompt, which is re-pointed onto it. Every other line stays byte for
+   byte (thinking signatures must survive), so the older half stays in the file as a log that
+   resume never loads, and a later trim starts from the newest summary. The summary keeps the
+   prompt's old parent in `trimParentUuid`, so a trim can be undone by hand. 15-10-2026
+5. Rewrite the file in place, under its own id: written whole, then swapped in by one rename, and
+   only when the records up to the split are still the ones summarized and resume, walking back
+   from the last message, reaches the summary. `claude --resume <id>` continues it.
 
-`--dry-run` prints the summary and writes nothing; `--sid` writes under a fixed id.
+`--dry-run` prints the summary and writes nothing.
 
-To trim the session you are in: run ctxtrim on its file in `~/.claude/projects/<project>/`, then
-start a new `claude --resume <printed id>`; the original file stays as it was.
+Run ctxtrim on a session no claude is writing to. To trim the session you are in, use cst: a
+running Claude works from memory, so the trim only counts once it resumes, and cst makes it exit
+first.
 
 
 The game studio (claude-glm-coop)
@@ -173,6 +202,20 @@ About session files:
   `--resume` of the same id reads the edited file, and the session's later appends chain onto it.
 - A `claude` started from inside another Claude session inherits `CLAUDE_CODE_CHILD_SESSION` and
   then saves no transcript at all. Start it with the `CLAUDE_CODE_*` variables removed.
+- Windows can refuse, for a moment, to rename a file over a session (`Access is denied`): another
+  program, most likely a virus scanner reading the file just written, holds one of them open.
+  ctxtrim's in-place write retries the rename for about six seconds. (15-10-2026)
+- After a trim, the next turn loads the CLAUDE.md files again: the first load lies in the part
+  resume no longer reads, and Claude Code adds them back when the loaded history lacks them.
+  (15-10-2026)
+
+- On Opus 5.5, as on every model from Fable 5.1 on, the API checks a thinking block sent back
+  against the history before it: when anything there changed since the block was made, that block
+  and every later one are invalid, and claude -p has them dropped (unbilled) rather than refused.
+  A trim's summary changes that history, so the kept half loses its thinking too: swarm's Reviewer
+  went from 70% to 16%, not to about half (15-10-2026). Thinking may be removed oldest first, from
+  the end, or all of it; a gap in the middle invalidates what follows it, and a removed block must
+  not come back. https://platform.claude.com/docs/en/build-with-claude/preserved-thinking
 
 About driving the agent consoles:
 
@@ -186,7 +229,8 @@ About driving the agent consoles:
 About the half-keep trim in practice (implementer, 1M window, 08-10-2026):
 
 - Two trims, at 60% then 63%, landed at ~24% and ~29%: the older half shrank to a 2-3k token
-  summary, below the ~10% the design expected, so the landing is lower than 40-50%.
+  summary, below the ~10% the design expected, so the landing is lower than 40-50%. Most of
+  the gap is the kept half's thinking, which the summary invalidates (above; 15-10-2026).
 - Continuity held both times: the first turns after each trim were on task with the build green,
   and the summary of a summary kept the role, the ground rules, the architecture and the owner's
   own directives. Old detail (build flags, early specs) dropped out but lives on disk.

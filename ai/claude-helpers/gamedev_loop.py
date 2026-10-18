@@ -480,10 +480,11 @@ _trim_after = {}
 def trim_if_big(agent, proc, pid, sid, game_dir, coop, files, cfg):
     """When session `sid` reaches cfg trim.at of the agent's context window, run ctxtrim (keep
     trim.keep_recent verbatim, summarize the older part) and, only when it produced a usable
-    summary, stop the agent and relaunch it resuming the trimmed session. A failed trim leaves the
-    agent running untouched and is retried after TRIM_RETRY_S. The summary is written by the SAME
-    bot whose session it is: the implementer's by its model through claude, GLM's by GLM through
-    claude-glm.cmd. Answers (proc, pid, sid), updated on a trim. @date 09-10-2026"""
+    summary, stop the agent and relaunch it resuming the trimmed session, which ctxtrim trims in
+    place, under the same id. A failed trim leaves the agent running untouched and is retried
+    after TRIM_RETRY_S. The summary is written by the SAME bot whose session it is: the
+    implementer's by its model through claude, GLM's by GLM through claude-glm.cmd. Answers
+    (proc, pid, sid); proc and pid are new after a trim. @date 15-10-2026-00:05"""
     a = agent_cfg(cfg, agent)
     window, at, keep = a["context_window"], cfg["trim"]["at"], cfg["trim"]["keep_recent"]
     toks = context_tokens(sid)
@@ -494,8 +495,7 @@ def trim_if_big(agent, proc, pid, sid, game_dir, coop, files, cfg):
                         f"half-keep trim, summarized by {agent} itself")
     who = (["--cli", "glm"] if agent == "glm" else
            ["--cli", "claude", "--model", a.get("model") or "fable"])
-    r = subprocess.run([sys.executable, CTXTRIM, sf, "--out-dir", os.path.dirname(sf),
-                        "--keep", str(keep)] + who,
+    r = subprocess.run([sys.executable, CTXTRIM, sf, "--keep", str(keep)] + who,
                        capture_output=True, text=True, encoding="utf8", errors="replace")
     m = re.search(r"resume ([0-9a-f-]{36})", r.stderr or "")
     if not m:

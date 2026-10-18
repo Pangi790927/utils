@@ -9,21 +9,22 @@ detached helper and returns at once. The helper:
 
   1. summarizes the older half of the session (ctxtrim's half-keep: the summarizer sees the whole
      conversation, summarizes only above the split) while the session stays open; only the part
-     resume loads counts -- from Claude Code's newest compact boundary on, the rest is dropped;
+     resume loads counts -- from Claude Code's newest compact boundary, or an earlier trim's
+     summary, on;
   2. waits until the session is idle, then types `/exit` into its terminal (no focus needed);
-  3. once Claude has exited and closed the file, rewrites it in place, atomically:
-     [summary of the older half] + [the recent half, verbatim], under the same session id --
+  3. once Claude has exited, trims the file in place with ctxtrim, under the same session id:
+     the summary goes in at the split as the new root, the older half stays in the file as a log
+     that resume no longer loads, and the turns written while the summary was made are kept --
      only once it has checked that resume, walking back from the last message, reaches that
      summary;
   4. types the original launch command, with `--resume <same id>`, into the same terminal.
 
 Do not type in that terminal while it switches. Everything is logged to cst.log beside this file.
-No copy of the untrimmed session is kept unless --backup is given (it then goes to backups/).
 
 Usage:
-    cst [--model M] [--keep 0.5] [--backup]
+    cst [--model M] [--keep 0.5]
 
-@date 10-10-2026
+@date 15-10-2026-00:05
 """
 
 import argparse
@@ -32,7 +33,6 @@ import datetime
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -41,11 +41,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 HELPERS = os.path.dirname(HERE)
 sys.path.insert(0, HELPERS)
 import ctxtrim      # noqa: E402
-import transcript   # noqa: E402
 
 INJECT = os.path.join(HELPERS, "paired", "inject.ps1")
 LOG = os.path.join(HERE, "cst.log")
-BACKUPS = os.path.join(HERE, "backups")
 DETACHED = 0x00000008 | 0x00000200      # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 QUIET_S = 8                             # seconds without a write before the session counts idle
 
@@ -143,15 +141,19 @@ def resume_command(cmdline, sid):
 
 
 def helper(o):
-    """Does the trim and the switch, detached from the session it serves. @date 10-10-2026"""
+    """Does the trim and the switch, detached from the session it serves.
+    @date 15-10-2026-00:05"""
     log(f"=== helper: session {o.sid}, claude pid {o.claude_pid}, shell pid {o.shell_pid}")
     sf = find_session(o.sid)
-    every = transcript.load_records(sf)
-    base = ctxtrim.live_start(every)            # resume loads from here; before it is dead history
-    records = every[base:]
-    split = ctxtrim.split_index(records, o.keep)
-    summary = ctxtrim.summarize_older(ctxtrim.render_with_marker(records, split, 500), o.model)
-    log(f"{len(every)} records, loaded from {base} ({len(records)}), split at {base + split}; "
+    _, every = ctxtrim.load_session(sf)
+    base = ctxtrim.live_start(every)            # resume loads from here; before it, logs
+    split = base + ctxtrim.split_index(every[base:], o.keep)
+    if split >= len(every):
+        log("no human prompt to cut at -- nothing changed")
+        return
+    summary = ctxtrim.summarize_older(ctxtrim.render_with_marker(every[base:], split - base, 500),
+                                      o.model)
+    log(f"{len(every)} records, loaded from {base} ({len(every) - base}), split at {split}; "
         f"summary {len(summary)} chars")
 
     t0 = time.time()
@@ -169,28 +171,9 @@ def helper(o):
         time.sleep(1)
     time.sleep(1)
 
-    backup = "none"
-    if o.backup:
-        os.makedirs(BACKUPS, exist_ok=True)
-        backup = os.path.join(BACKUPS, f"{o.sid}.{datetime.datetime.now():%Y%m%d-%H%M%S}.jsonl")
-        shutil.copy2(sf, backup)
-    now = transcript.load_records(sf)
-    new = None
-    if (ctxtrim.live_start(now) != base or [r.get("uuid") for r in now[base:base + split]]
-            != [r.get("uuid") for r in records[:split]]):
-        log("the older half changed while summarizing -- nothing changed; resuming as it was")
-    else:
-        _, new = ctxtrim.build_session(now[base:], split, summary, o.sid)
-        if ctxtrim.chain_root(new) != 0:        # checked before writing, so no backup is needed
-            log("trim not effective: resume would not reach the summary -- nothing changed")
-            new = None
-    if new:
-        tmp = sf + ".cst-tmp"                   # written whole, then swapped in by one rename,
-        with open(tmp, "w", encoding="utf8") as f:      # so the session is never half-written
-            for r in new:
-                f.write(json.dumps(r, ensure_ascii=False) + "\n")
-        os.replace(tmp, sf)
-        log(f"rewrote {sf}: {len(now)} -> {len(new)} records (backup: {backup})")
+    why = ctxtrim.trim_in_place(sf, every, split, summary)
+    log(f"{why} -- nothing changed; resuming as it was" if why else
+        f"trimmed {sf} in place: the summary is record {split}, the records before it a log")
     inject(o.shell_pid, resume_command(o.cmdline, o.sid))
     log("done")
 
@@ -202,8 +185,6 @@ def main(argv):
     p.add_argument("--model", default="claude-opus-5-5", help="model that writes the summary")
     p.add_argument("--keep", type=float, default=0.5,
                    help="share of the conversation kept verbatim")
-    p.add_argument("--backup", action="store_true",
-                   help="keep a copy of the untrimmed session in backups/ (off by default)")
     p.add_argument("--helper", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--sid", help=argparse.SUPPRESS)
     p.add_argument("--claude-pid", type=int, help=argparse.SUPPRESS)
@@ -230,8 +211,7 @@ def main(argv):
            if not k.startswith(("CLAUDE_CODE", "CLAUDECODE", "CLAUDE_PID"))}
     subprocess.Popen([sys.executable, os.path.abspath(__file__), "--helper", "--sid", sid,
                       "--claude-pid", cpid, "--shell-pid", str(shell_pid), "--cmdline", cmdline,
-                      "--model", o.model, "--keep", str(o.keep)]
-                     + (["--backup"] if o.backup else []),
+                      "--model", o.model, "--keep", str(o.keep)],
                      env=env, creationflags=DETACHED, close_fds=True,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL)

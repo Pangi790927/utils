@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""@file Trims a Claude Code session: summarizes the older half, keeps the recent half.
+"""@file Trims a Claude Code session in place: summarizes the older half, keeps the recent half.
 
 transcript.py reads a session; this rewrites one. It splits the conversation near the middle
 (by characters, snapped to a human-prompt boundary), summarizes only the OLDER half, keeps the
-RECENT half verbatim, and writes a NEW session file -- never touching the original -- that
-`claude --resume` can continue. Driven at ~60% context, it lands the session near ~50%, since
-the summary of the older half is itself ~10%. A later run repeats on the new older half, so a
-conversation never has to end for lack of room.
+RECENT half verbatim, and rewrites the session in place, under its own id, so that
+`claude --resume` loads the summary and the recent half only; the older half's records stay in
+the file as a log. Driven at ~60% context, it lands the session near ~50%, since the summary of
+the older half is itself ~10%. A later run repeats on the new older half, so a conversation
+never has to end for lack of room.
 
 How it decides and summarizes:
 
   - Only the part resume loads is trimmed: from the root of the chain the last message hangs on
     (the host's newest compact boundary, or an earlier trim's summary). The records before it
-    are dead history, left out of the new file.
+    are what earlier trims and compactions cut off; they are left as they are.
   - The split falls only at a human prompt -- a user turn the person typed, not a tool result --
     so a tool call and its result are never split; and only at one resume loads, never on a
     branch the conversation went back from (a prompt re-sent or edited, a rewind).
@@ -23,16 +24,22 @@ How it decides and summarizes:
     verbatim part below only as context. So the summary of the older half is informed by what it
     led to. It comes back as a compact structured block (intent, concepts, files, decisions,
     errors, asks, open items), modelled on the host's own `/compact`.
-  - The older half's records are replaced by that one `isCompactSummary` user message; the recent
-    half is copied with its `message` untouched -- an assistant turn's thinking signature must
-    survive for the resume to validate -- its first turn re-pointed onto the summary.
+  - Nothing is deleted. One `isCompactSummary` user record with no parent goes in just before
+    the first kept prompt, which is re-pointed onto it, and every other line of the file stays
+    byte for byte -- a kept assistant turn's thinking signature must survive for the resume to
+    validate. Resume, walking back from the last message, stops at the summary, so the older
+    half stays in the file as a log it never loads. The summary keeps the prompt's old parent in
+    `trimParentUuid`: pointing the prompt back at it and deleting the summary undoes the trim.
+  - The file is rewritten whole, then swapped in by one rename, and only when its records up to
+    the split are still the ones summarized and resume reaches the summary. Run it on a session
+    no claude is writing to; for the session you are in, use cst.
 
 Usage:
     python ctxtrim.py SESSION.jsonl --dry-run     # show the older-half summary; write nothing
     python ctxtrim.py SESSION.jsonl --keep 0.5    # keep the recent 50%, summarize the older 50%
-    # then: claude --resume <printed id>
+    # then: claude --resume <its id>
 
-@date 11-10-2026-23:39
+@date 15-10-2026-00:05
 """
 
 import argparse
@@ -41,6 +48,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 from types import SimpleNamespace
 
@@ -279,67 +287,124 @@ def split_index(records, keep_fraction):
 
 
 # -------------------------------------------------------------------------------------------------
-# Building the new session
+# The session file, line by line
 # -------------------------------------------------------------------------------------------------
 
-def resession(rec, sid):
-    """Answers a shallow copy of `rec` carrying the new session id, its `message` and every
-    other field untouched.
+def load_session(path):
+    """Answers (lines, records) for the session file at `path`: its lines as bytes, each with its
+    line ending, and the records its non-blank lines hold, in file order -- so a rewrite can keep
+    every line it does not change exactly as it was.
 
-    @param rec  dict - a record to keep
-    @param sid  str - the new session id
-    @return dict
-    @date 08-10-2026-03:10
+    @param path  str - a session .jsonl
+    @return tuple[list[bytes], list[dict]]
+    @date 15-10-2026-00:05
     """
-    out = dict(rec)
-    out["sessionId"] = sid
-    if "session_id" in out:
-        out["session_id"] = sid
-    return out
+    with open(path, "rb") as f:
+        lines = f.readlines()
+    return lines, [json.loads(line) for line in lines if line.strip()]
 
 
-def summary_record(text, uuid_, parent, sid, proto):
-    """Answers an `isCompactSummary` user record carrying `text`, linked under `parent`, with
-    the session fields taken from `proto` (an existing record).
+def record_line(rec):
+    """Answers `rec` as one line of a session file, in the compact form Claude Code writes.
+    @date 15-10-2026-00:05"""
+    return (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf8")
 
-    @param text    str - the summary body
-    @param uuid_   str - this record's uuid
-    @param parent  str - the uuid this record links under
-    @param sid     str - the new session id
-    @param proto   dict - a record to copy cwd/gitBranch/version from
+
+def write_lines(path, lines):
+    """Writes `lines` to `path` whole or not at all: they go to a file beside it first, which then
+    replaces it in one rename. Windows refuses the rename while another program holds either file
+    open - a virus scanner reading the file just written, say - so it is tried again for about six
+    seconds before the refusal is raised.
+
+    @param path   str - the session file
+    @param lines  list[bytes] - its lines, each with its line ending
+    @date 15-10-2026-03:05
+    """
+    tmp = path + ".trim-tmp"
+    try:
+        with open(tmp, "wb") as f:
+            f.writelines(lines)
+        for wait in (0.1, 0.2, 0.4, 0.8, 1.6, 3.2, None):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if wait is None:
+                    raise
+                time.sleep(wait)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
+# -------------------------------------------------------------------------------------------------
+# The trim: a new root at the split
+# -------------------------------------------------------------------------------------------------
+
+def summary_record(text, first):
+    """Answers the `isCompactSummary` user record that becomes the session's root: it carries
+    `text`, has no parent, and keeps in `trimParentUuid` the parent `first` -- the first kept
+    prompt -- had before the trim. Its session fields are those of `first`.
+
+    @param text   str - the summary body
+    @param first  dict - the first kept prompt, as it was
     @return dict
-    @date 08-10-2026-03:10
+    @date 15-10-2026-00:05
     """
     now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
-    return dict(parentUuid=parent, type="user", uuid=uuid_, isCompactSummary=True,
-                isSidechain=False, userType="external", sessionId=sid, timestamp=now,
-                cwd=proto.get("cwd", ""), gitBranch=proto.get("gitBranch", ""),
-                version=proto.get("version", ""),
-                message={"role": "user", "content": text})
+    return dict(parentUuid=None, trimParentUuid=first.get("parentUuid"), type="user",
+                uuid=str(uuid.uuid4()), isCompactSummary=True, isSidechain=False,
+                userType="external", sessionId=first.get("sessionId", ""), timestamp=now,
+                cwd=first.get("cwd", ""), gitBranch=first.get("gitBranch", ""),
+                version=first.get("version", ""), message={"role": "user", "content": text})
 
 
-def build_session(records, split, summary, sid=None):
-    """Answers (sid, new_records): the older half (records before `split`) replaced by the one
-    `summary` record, and the recent half (records from `split`) kept verbatim, re-chained under
-    `sid` (fresh when None, or a fixed fixture id).
+def build_session(lines, records, split, summary):
+    """Answers (lines, records) with the trim made: the summary record inserted just before
+    records[split], the first kept prompt, which is re-pointed onto it. Every other line stays
+    exactly as it was, so the records before the split remain in the file, cut off from what
+    resume loads.
 
-    @param records  list - the original session records
-    @param split    int - the index where the recent (kept) half begins
+    @param lines    list[bytes] - the session file's lines
+    @param records  list[dict] - the records they hold
+    @param split    int - the index of the first kept prompt in `records`
     @param summary  str - the structured summary of the older half
-    @param sid      str|None - the session id to write under
-    @return tuple[str, list]
-    @date 08-10-2026-13:30
+    @return tuple[list[bytes], list[dict]]
+    @date 15-10-2026-00:05
     """
-    sid = sid or str(uuid.uuid4())
-    proto = records[0]
-    recent = [resession(r, sid) for r in records[split:]]
-    s_uuid = str(uuid.uuid4())
-    s_rec = summary_record(SUMMARY_PREFIX + summary, s_uuid, None, sid, proto)
-    for r in recent:                     # re-point the first kept turn onto the summary
-        if r.get("type") in ("user", "assistant"):
-            r["parentUuid"] = s_uuid
-            break
-    return sid, [s_rec] + recent
+    first = dict(records[split])
+    root = summary_record(SUMMARY_PREFIX + summary, first)
+    first["parentUuid"] = root["uuid"]
+    at = [i for i, line in enumerate(lines) if line.strip()][split]
+    return (lines[:at] + [record_line(root), record_line(first)] + lines[at + 1:],
+            records[:split] + [root, first] + records[split + 1:])
+
+
+def trim_in_place(path, then, split, summary):
+    """Trims the session file at `path` in place with `summary`, made from `then` -- the file's
+    records when the summary was asked for -- with the first kept prompt at `split`. Records
+    written to the file since are kept. The file is left as it is when its records up to the
+    split are no longer the ones summarized, or when resume would not reach the summary from the
+    last message (the session was compacted or rewound meanwhile).
+
+    @param path     str - the session file
+    @param then     list[dict] - its records when the summary was asked for
+    @param split    int - the index of the first kept prompt in `then`
+    @param summary  str - the structured summary of the older half
+    @return str|None - why the file was left as it is, or None once it is trimmed
+    @date 15-10-2026-00:05
+    """
+    lines, now = load_session(path)
+    if [r.get("uuid") for r in now[:split + 1]] != [r.get("uuid") for r in then[:split + 1]]:
+        return "the session changed before the split while it was summarized"
+    lines, now = build_session(lines, now, split, summary)
+    if chain_root(now) != split:
+        return "resume would not reach the summary from the last message"
+    write_lines(path, lines)
+    return None
 
 
 # -------------------------------------------------------------------------------------------------
@@ -370,10 +435,10 @@ def render_with_marker(records, split, truncate):
 
 
 def parse_args(argv):
-    """Answers the parsed options for `argv`. @date 08-10-2026-03:10"""
-    p = argparse.ArgumentParser(description="Trim a Claude Code session and write a resumable "
-                                            "shorter copy.")
-    p.add_argument("input", help="a session .jsonl to trim")
+    """Answers the parsed options for `argv`. @date 15-10-2026-00:05"""
+    p = argparse.ArgumentParser(description="Trim a Claude Code session in place: summarize its "
+                                            "older half and keep that half's records as a log.")
+    p.add_argument("input", help="a session .jsonl to trim, one no claude is writing to")
     p.add_argument("--keep", type=float, default=0.5,
                    help="fraction of the conversation (by chars) to keep verbatim as the recent "
                         "half; the older part is summarized")
@@ -381,23 +446,23 @@ def parse_args(argv):
     p.add_argument("--cli", choices=("claude", "glm"), default="claude",
                    help="which agent writes the summary: claude, or glm via claude-glm.cmd")
     p.add_argument("--truncate", type=int, default=500, help="per-tool-body cap in the middle")
-    p.add_argument("--out-dir", help="where to write the new session (default: beside the input)")
-    p.add_argument("--sid", help="write under this fixed session id (overwrites that fixture "
-                                 "file), instead of a fresh uuid")
     p.add_argument("--dry-run", action="store_true", help="print the summary and write nothing")
     return p.parse_args(argv)
 
 
 def main(argv):
-    """Trims the session named on the command line: summarize the older half, keep the recent half.
-    @date 09-10-2026"""
+    """Trims the session named on the command line in place: summarizes the older half, keeps the
+    recent half. @date 15-10-2026-00:05"""
     opt = parse_args(argv)
-    records = transcript.load_records(opt.input)
-    records = records[live_start(records):]         # what resume loads; the rest is dead history
-    split = split_index(records, opt.keep)
-    text = render_with_marker(records, split, opt.truncate)
-    print(f"{len(records)} records; split at index {split} (keep recent {opt.keep:.0%}); "
-          f"summarizer input {len(text)} chars", file=sys.stderr)
+    _, every = load_session(opt.input)
+    base = live_start(every)                    # what resume loads begins here; before it, logs
+    split = base + split_index(every[base:], opt.keep)
+    if split >= len(every):
+        print("not written: there is no human prompt to cut at", file=sys.stderr)
+        return 1
+    text = render_with_marker(every[base:], split - base, opt.truncate)
+    print(f"{len(every)} records, loaded from {base}; split at {split} (keep recent "
+          f"{opt.keep:.0%}); summarizer input {len(text)} chars", file=sys.stderr)
 
     summary = summarize_older(text, opt.model, opt.cli)
     sys.stdout.buffer.write(f"=== summary (older half) ===\n{summary}\n".encode("utf8"))
@@ -406,18 +471,13 @@ def main(argv):
         print("\n[dry-run: no file written]", file=sys.stderr)
         return 0
 
-    sid, new_records = build_session(records, split, summary, opt.sid)
-    if chain_root(new_records) != 0:
-        print("\nnot written: resume would not reach the summary from the last message",
-              file=sys.stderr)
+    why = trim_in_place(opt.input, every, split, summary)
+    if why:
+        print(f"\nnot written: {why}", file=sys.stderr)
         return 1
-    out_dir = opt.out_dir or os.path.dirname(os.path.abspath(opt.input))
-    path = os.path.join(out_dir, sid + ".jsonl")
-    with open(path, "w", encoding="utf8") as f:
-        for r in new_records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    print(f"\nwrote {path}\n  {len(new_records)} records; resume with: claude --resume {sid}",
-          file=sys.stderr)
+    sid = os.path.splitext(os.path.basename(opt.input))[0]
+    print(f"\ntrimmed {opt.input} in place: the summary is record {split}, the {split} records "
+          f"before it stay as a log; resume with: claude --resume {sid}", file=sys.stderr)
     return 0
 
 
