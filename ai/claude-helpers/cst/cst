@@ -1,5 +1,9 @@
 #!/bin/sh
 # cst -- trim the Claude Code session you run it from, in place, and resume it by itself.
 # Usage, inside a session: ! cst [--model M] [--keep 0.5]
-# 10-10-2026
-exec python "$USERPROFILE/workspace/utils/ai/claude-helpers/cst/cst.py" "$@"
+# Windows (Git Bash): python from %USERPROFILE%; Linux: python3 from $HOME, linked as ~/.local/bin/cst
+# 10-10-2026, Linux 14-10-2026
+if [ -n "$USERPROFILE" ]; then
+    exec python "$USERPROFILE/workspace/utils/ai/claude-helpers/cst/cst.py" "$@"
+fi
+exec python3 "$HOME/workspace/utils/ai/claude-helpers/cst/cst.py" "$@"
