@@ -18,7 +18,6 @@
  *   - this needs to be implemented in a newer version of vulkan, tested and as such
  *      inline std::string to_string(VkPipelineStageFlagBits2 flags);
  *      inline std::string to_string(VkAccessFlagBits2 flags);
- *   - pipeline Layouts should have multiple sets that can be bound
  */
 
 #define GLM_FORCE_RADIANS
@@ -52,6 +51,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <functional>
@@ -59,6 +60,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #ifdef VULKAN_UTILS_ADD_TYPE
@@ -128,9 +130,12 @@ VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_DESCRIPTOR_POOL);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_SAMPLER_BINDING);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_BUFFER_BINDING);
 VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_DESCRIPTOR_SET_INITIALIZER);
+VIRT_COMPOSER_REGISTER_TYPE(VKU_TYPE_PIPELINE_CACHE);
 
 struct gpu_family_ids_t;
 struct spirv_t;
+struct spec_consts_t;
+struct device_features_t;
 
 struct vertex_input_desc_t;
 struct vertex_p2n0c3t2_t;
@@ -167,6 +172,7 @@ struct img_view_t;          /* uses (imag) */
 struct img_sampl_t;         /* uses (device) */
 struct desc_pool_t;         /* uses (device, ?buff?, ?pipeline?) */
 struct desc_set_t;          /* uses (desc_pool) */
+struct pipeline_cache_t;    /* uses (device) */
 
 inline vc::ret_t init();
 inline vc::ret_t uninit();
@@ -177,10 +183,16 @@ inline void reset_fences(std::vector<ref_t<fence_t>> fences);
 void wait_semaphores(const std::vector<ref_t<sem_t>> &sems, const std::vector<uint64_t> vals,
             bool wait_any = false, uint64_t timeo_ns = -1);
 
+/*! Takes the next image of `swc` that is free to draw in, writes its index to `img_idx`, and has
+ * `sem` signalled once the image is free. Throws vku::except_t on any result but VK_SUCCESS, its
+ * vk_err telling VK_SUBOPTIMAL_KHR, after which the image was taken all the same, from
+ * VK_ERROR_OUT_OF_DATE_KHR, and VK_TIMEOUT when no image came within `timeout_ns` nanoseconds;
+ * by default the wait has no limit. @date 21-10-2026-06:06 */
 inline void aquire_next_img(
         ref_t<swapchain_t> swc,
         ref_t<sem_t> sem,
-        uint32_t *img_idx);
+        uint32_t *img_idx,
+        uint64_t timeout_ns = UINT64_MAX);
 
 inline void submit_cmdbuff(
         std::vector<std::pair<ref_t<sem_t>, VkPipelineStageFlagBits>> wait_sems,
@@ -261,6 +273,127 @@ struct gpu_family_ids_t {
 struct spirv_t {
     std::vector<uint32_t> content;
     vku_shader_stage_e type;
+};
+
+/*!
+ * @brief Holds the values a pipeline gives its shaders' specialization constants when it is
+ * built.
+ *
+ * Core:
+ *   - `set(id, value)` stores a value for the constant a shader declares with
+ *     `layout(constant_id = id) const ...`; the pipeline is compiled with that value in place of
+ *     the shader's default, and every constant left unset keeps its default.
+ *   - Setting an id again replaces its value.
+ *
+ * Detail:
+ *   - A value is copied byte for byte, so its C++ type must match the shader's: int32_t, uint32_t
+ *     or float for int, uint and float, VkBool32 for bool, and 8-byte types for the 64-bit ones.
+ *     A C++ bool is taken too, and stored as the VkBool32 Vulkan reads (21-10-2026-06:06).
+ *   - An id that no shader of the pipeline declares is ignored.
+ *   - A graphics pipeline hands the same values to each of its stages.
+ *
+ * @date 21-10-2026-06:06
+ */
+struct spec_consts_t {
+    std::vector<VkSpecializationMapEntry>   m_entries;
+    std::vector<uint8_t>                    m_data;
+
+    /*! Stores `value` for the constant `constant_id` and answers this object, so calls chain.
+    @date 21-10-2026-03:56 */
+    template <typename T>
+    spec_consts_t &set(uint32_t constant_id, const T &value);
+
+    /*! Fills `info` from the stored values and answers its address, or nullptr when no value is
+    set; the answer is what a pipeline stage takes as its specialization info.
+    @date 21-10-2026-03:56 */
+    const VkSpecializationInfo *get_info(VkSpecializationInfo &info) const;
+};
+
+/*!
+ * @brief Asks device_t::create for device features a program needs, so that the device is
+ * refused rather than made without them.
+ *
+ * Core:
+ *   - `m_core` holds the Vulkan 1.0 features, such as robustBufferAccess and shaderInt64; each one
+ *     set to VK_TRUE is required.
+ *   - `add()` takes any other feature structure, such as VkPhysicalDeviceVulkan11Features,
+ *     VkPhysicalDeviceVulkan13Features or an extension's, and links it into the device's feature
+ *     chain; each of its members set to VK_TRUE is required and enabled.
+ *   - Every required feature is checked against the GPU before the device is made, and the first
+ *     one the GPU lacks is named in the exception device_t::create throws.
+ *
+ * Detail:
+ *   - The device enables every Vulkan 1.0 and 1.2 feature the GPU supports, asked or not, so for
+ *     those a request only makes the feature required.
+ *   - A structure given to `add()` has only VkBool32 members after sType and pNext, as every
+ *     Vulkan feature structure does; its pNext is overwritten when the chain is linked.
+ *   - An extension's structure needs the extension named in device_t::create's `exts` as well.
+ *   - Vulkan 1.2 features are asked through VkPhysicalDeviceVulkan12Features rather than through
+ *     the per-extension structures Vulkan 1.2 absorbed, since the device always chains its own
+ *     VkPhysicalDeviceVulkan12Features and Vulkan refuses both in one chain; device_t::create
+ *     throws, naming the structure, when one of those is given to `add()` (21-10-2026-06:06).
+ *   - Copies of this object share the structures `add()` stored.
+ *
+ * @date 21-10-2026-06:06
+ */
+struct device_features_t {
+    struct chained_t {
+        std::shared_ptr<void>   ptr;
+        size_t                  size;
+    };
+
+    VkPhysicalDeviceFeatures    m_core{};
+    std::vector<chained_t>      m_chain;
+
+    /*! Stores a copy of `feature_struct` in the chain and answers that copy, whose members may
+    still be set afterwards. @date 21-10-2026-03:56 */
+    template <typename T>
+    T &add(const T &feature_struct);
+};
+
+/*!
+ * @brief Holds the fixed-function state a graphics pipeline draws with: which faces it culls,
+ * how it tests and writes depth, and whether it blends.
+ *
+ * Core:
+ *   - The defaults are what pipeline_t drew with before this state existed: no culling,
+ *     counter-clockwise front faces, depth tested with VK_COMPARE_OP_LESS and written, and no
+ *     blending.
+ *   - `m_blend` blends a colour over what is drawn by its alpha, the source times its alpha plus
+ *     the destination times one minus that alpha, for the alpha channel as for the colour.
+ *
+ * @date 21-10-2026-04:43
+ */
+struct pipeline_state_t {
+    VkCullModeFlags     m_cull_mode   = VK_CULL_MODE_NONE;
+    VkFrontFace         m_front_face  = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    bool                m_depth_test  = true;
+    bool                m_depth_write = true;
+    VkCompareOp         m_depth_op    = VK_COMPARE_OP_LESS;
+    bool                m_blend       = false;
+};
+
+/*!
+ * @brief Holds what a program asks of a swapchain beyond vku's own choices: the format of its
+ * images, how they are presented, and what else they are used for.
+ *
+ * Core:
+ *   - `m_format` is taken when the surface offers it in the sRGB non-linear colour space; else the
+ *     surface's first format is.
+ *   - `m_present_mode` is taken when the surface offers it; else FIFO is, which every surface
+ *     offers.
+ *   - `m_extra_usage` is asked of the images beside their use as colour attachments, such as
+ *     VK_IMAGE_USAGE_TRANSFER_SRC_BIT to read a picture back; a use the surface does not offer
+ *     makes swapchain_t::create throw.
+ *   - The defaults, B8G8R8A8_SRGB and MAILBOX, are what swapchain_t chose before these options
+ *     existed.
+ *
+ * @date 21-10-2026-04:43
+ */
+struct swapchain_opts_t {
+    VkFormat            m_format       = VK_FORMAT_B8G8R8A8_SRGB;
+    VkPresentModeKHR    m_present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
+    VkImageUsageFlags   m_extra_usage  = 0;
 };
 
 struct vertex_input_desc_t {
@@ -559,23 +692,40 @@ private:
  * create buffers, images, pipelines, and other Vulkan resources.
  *
  * Members:
- * - m_surface: Reference to a surface_t object. The surface used for presentation and 
+ * - m_surface: Reference to a surface_t object. The surface used for presentation and
  *   swapchain creation.
+ * - m_features: The device features the creator asked for (see device_features_t).
+ * - vk_features: The Vulkan 1.0 features the device was made with, which are every one the GPU
+ *   supports, so a program reads here whether it may use an optional one, such as wideLines
+ *   (added 21-10-2026-06:06).
  *
- * Init: create(surface)
+ * Member functions:
+ * - wait_idle(): Waits until the device has finished all the work submitted to it
+ *   (added 21-10-2026-06:06).
+ *
+ * Init: create(instance, surface, exts, layers, features)
  *   - Parameters:
+ *     - instance: The instance_t the device is made from.
  *     - surface: A reference to a surface_t object that this device will render to.
+ *     - exts, layers: Device extensions enabled on top of vku's own; device layers, which
+ *       Vulkan ignores, are kept in m_layers and no longer sent (21-10-2026-05:07).
+ *     - features: Device features the program requires; the default asks for none.
+ *   - Throws vku::except_t naming the first required feature the GPU lacks.
  *
  * Notes:
  * - Automatically selects suitable graphics and presentation queues.
  * - Provides access to device-local and host-visible memory through buffer objects.
- * 
+ *
  * TODO:
  * - Add options for selecting the phys dev (no idea what exactly to do)
+ *
+ * @date 21-10-2026-06:06
  */
 struct device_t : public object_t {
     VkPhysicalDevice            vk_phy_dev;
-    VkDevice                    vk_dev;
+    /* Null until made, so that a creation refused part way, such as for a missing feature,
+    destroys nothing in uninit(). 21-10-2026-04:15 */
+    VkDevice                    vk_dev = VK_NULL_HANDLE;
     std::vector<VkQueue>        vk_graphics_que;
     VkQueue                     vk_present_que;
     std::set<int>               m_que_ids;
@@ -585,6 +735,8 @@ struct device_t : public object_t {
     ref_t<surface_t>            m_surface;
     std::vector<std::string>    m_extensions;
     std::vector<std::string>    m_layers;
+    device_features_t           m_features;
+    VkPhysicalDeviceFeatures    vk_features{};
 
     device_t(object_t::Private priv) : object_t(priv) {}
     virtual ~device_t() { uninit(); }
@@ -595,9 +747,15 @@ struct device_t : public object_t {
     static  object_type_e type_id_static() { return VKU_TYPE_DEVICE; }
     static ref_t<device_t> create(ref_t<instance_t> inst, ref_t<surface_t> surf = nullptr,
             std::vector<std::string> exts = {},
-            std::vector<std::string> layers = {});
+            std::vector<std::string> layers = {},
+            const device_features_t &features = {});
 
     uint32_t get_graphics_queue_cnt() { return vk_graphics_que.size(); }
+
+    /*! Waits until the device has finished all the work submitted to it, on every queue; throws
+    vku::except_t when the wait fails, as it does once the device is lost. Vulkan gives this wait
+    no time limit. @date 21-10-2026-06:06 */
+    void wait_idle();
 
 private:
     vc::ret_t init();
@@ -617,23 +775,31 @@ private:
  *   the swapchain.
  * - m_depth_imag: Reference to a depth image used for depth testing (automatically created).
  * - m_depth_view: Reference to an image view for the depth image (automatically created).
+ * - m_opts: The format, present mode and extra image use the creator asked for
+ *   (see swapchain_opts_t).
  *
- * Init: create(device)
+ * Init: create(device, surface, opts)
  *   - Parameters:
  *     - device: Reference to the device_t object.
+ *     - surface: The surface_t the images are presented to.
+ *     - opts: The format, present mode and extra use wanted; vku's own choices by default.
  *
  * Notes:
- * - Automatically chooses the surface format, present mode, and image count.
+ * - Chooses the surface format and present mode from opts, among what the surface offers, and
+ *   the image count itself.
  * - Provides access to the swapchain images and their views for rendering.
- * 
- * TODO:
- * - more init hints?
+ * - uninit() may be called more than once, and init() after it makes the swapchain again; an
+ *   init() that throws leaves nothing made (changed 21-10-2026-06:06).
+ *
+ * @date 21-10-2026-06:06
  */
 struct swapchain_t : public object_t {
     VkSurfaceFormatKHR          vk_surf_fmt;
     VkPresentModeKHR            vk_present_mode;
     VkExtent2D                  vk_extent;
-    VkSwapchainKHR              vk_swapchain;
+    /* Null until made, and again once uninit() destroyed it, so that a creation refused part
+    way, or an uninit() run twice, destroys nothing twice. 21-10-2026-06:06 */
+    VkSwapchainKHR              vk_swapchain = VK_NULL_HANDLE;
     std::vector<VkImage>        vk_sc_images;
     std::vector<VkImageView>    vk_sc_image_views;
     ref_t<image_t>              m_depth_imag;
@@ -641,6 +807,7 @@ struct swapchain_t : public object_t {
 
     ref_t<device_t>             m_device;
     ref_t<surface_t>            m_surface;
+    swapchain_opts_t            m_opts;
 
     swapchain_t(object_t::Private priv) : object_t(priv) {}
     virtual ~swapchain_t() { uninit(); }
@@ -649,7 +816,8 @@ struct swapchain_t : public object_t {
     virtual std::string to_string() const override;
 
     static  object_type_e type_id_static() { return VKU_TYPE_SWAPCHAIN; }
-    static ref_t<swapchain_t> create(ref_t<device_t> dev, ref_t<surface_t> surf);
+    static ref_t<swapchain_t> create(ref_t<device_t> dev, ref_t<surface_t> surf,
+            const swapchain_opts_t &opts = {});
 
     vc::ret_t init();
     vc::ret_t uninit();
@@ -762,21 +930,30 @@ struct renderpass_t : public object_t {
  *   pipeline stages.
  * - m_topology: Primitive topology (triangle list, line list, etc.).
  * - m_input_desc: Vertex input description (binding, attributes, stride, input rate).
- * - m_bindings_initer: Reference to a desc_set_initializer_t object. Descriptor sets used 
- *   by the pipeline.
+ * - m_pipeline_layout: The pipeline_layout_t of the descriptor sets and push constants.
+ * - m_spec_consts: The values the stages' specialization constants are built with.
+ * - m_pipeline_cache: The pipeline_cache_t used while building, or null.
+ * - m_state: The culling, depth and blending the pipeline draws with (see pipeline_state_t).
  * - m_width, m_height: Pipeline viewport dimensions.
  *
- * Init: create(width, height, renderpass, shaders, topology, input_desc, bindings)
+ * Init: create(width, height, renderpass, shaders, topology, input_desc, pipeline_layout,
+ *              spec_consts, cache, state)
  *   - Parameters:
  *     - width, height: Pipeline viewport dimensions.
  *     - renderpass: Reference to the renderpass_t object.
  *     - shaders: Vector of shader_t references for each stage.
  *     - topology: Primitive topology.
  *     - input_desc: Vertex input description.
- *     - bindings: Reference to desc_set_initializer_t describing descriptor sets.
+ *     - pipeline_layout: The pipeline_layout_t giving the descriptor sets and push constants.
+ *     - spec_consts: Values for the shaders' specialization constants, handed to every stage;
+ *       none by default.
+ *     - cache: A pipeline_cache_t the driver reuses and fills while building; none by default.
+ *     - state: The culling, depth test and blending; pipeline_state_t's defaults by default.
  *
  * TODO:
  * - maybe get rid of m_width, m_height, create new objects for viewport and stuff
+ *
+ * @date 21-10-2026-04:43
  */
 struct pipeline_t : public object_t {
     VkPipeline                      vk_pipeline;
@@ -788,6 +965,9 @@ struct pipeline_t : public object_t {
     VkPrimitiveTopology             m_topology;
     vertex_input_desc_t             m_input_desc;
     ref_t<pipeline_layout_t>        m_pipeline_layout;
+    spec_consts_t                   m_spec_consts;
+    ref_t<pipeline_cache_t>         m_pipeline_cache;
+    pipeline_state_t                m_state;
 
     pipeline_t(object_t::Private priv) : object_t(priv) {}
     virtual ~pipeline_t() { uninit(); }
@@ -802,7 +982,10 @@ struct pipeline_t : public object_t {
             const std::vector<ref_t<shader_t>>& shaders,
             VkPrimitiveTopology                 topology,
             vertex_input_desc_t                 input_desc,
-            ref_t<pipeline_layout_t>            pipeline_layout);
+            ref_t<pipeline_layout_t>            pipeline_layout,
+            const spec_consts_t&                spec_consts = {},
+            ref_t<pipeline_cache_t>             cache = nullptr,
+            const pipeline_state_t&             state = {});
     virtual std::string to_string() const override;
 
     vc::ret_t init();
@@ -820,14 +1003,19 @@ struct pipeline_t : public object_t {
  * Members:
  * - m_device: Reference to a device_t object. The device that owns this compute pipeline.
  * - m_shader: Reference to a shader_t object containing the compute shader.
- * - m_bindings_initer: Reference to a desc_set_initializer_t object describing descriptor sets 
- *   used by the shader.
+ * - m_pipeline_layout: The pipeline_layout_t of the descriptor sets and push constants.
+ * - m_spec_consts: The values the shader's specialization constants are built with.
+ * - m_pipeline_cache: The pipeline_cache_t used while building, or null.
  *
- * Init: create(device, shader, bindings)
+ * Init: create(device, shader, pipeline_layout, spec_consts, cache)
  *   - Parameters:
  *     - device: Reference to the device_t object.
  *     - shader: Reference to the compute shader (shader_t).
- *     - bindings: Reference to desc_set_initializer_t describing descriptor sets.
+ *     - pipeline_layout: The pipeline_layout_t giving the descriptor sets and push constants.
+ *     - spec_consts: Values for the shader's specialization constants; none by default.
+ *     - cache: A pipeline_cache_t the driver reuses and fills while building; none by default.
+ *
+ * @date 21-10-2026-04:25
  */
 struct compute_pipeline_t : public object_t {
     VkPipeline                      vk_pipeline;
@@ -835,6 +1023,8 @@ struct compute_pipeline_t : public object_t {
     ref_t<device_t>                 m_device;
     ref_t<shader_t>                 m_shader;
     ref_t<pipeline_layout_t>        m_pipeline_layout;
+    spec_consts_t                   m_spec_consts;
+    ref_t<pipeline_cache_t>         m_pipeline_cache;
 
     compute_pipeline_t(object_t::Private priv) : object_t(priv) {}
     virtual ~compute_pipeline_t() { uninit(); }
@@ -845,7 +1035,9 @@ struct compute_pipeline_t : public object_t {
     static ref_t<compute_pipeline_t> create(
             ref_t<device_t>                 dev,
             ref_t<shader_t>                 shader,
-            ref_t<pipeline_layout_t>        pipeline_layout);
+            ref_t<pipeline_layout_t>        pipeline_layout,
+            const spec_consts_t&            spec_consts = {},
+            ref_t<pipeline_cache_t>         cache = nullptr);
     virtual std::string to_string() const override;
 
 private:
@@ -868,6 +1060,10 @@ private:
  * Init: create(renderpass)
  *   - Parameters:
  *     - renderpass: Reference to the renderpass_t object these framebuffers will be used with.
+ *
+ * Notes:
+ * - uninit() may be called more than once, and init() after it makes the framebuffers again; an
+ *   init() that throws leaves nothing made (21-10-2026-06:06).
  */
 struct framebuffs_t : public object_t {
     std::vector<VkFramebuffer>  vk_fbuffs;      /* needs separate object framebuffer_t */
@@ -944,9 +1140,19 @@ private:
  * - begin_rpass(fbs, img_idx): Begin a render pass using the specified framebuffers.
  * - bind_vert_buffs(first_bind, buffs): Bind vertex buffers.
  * - bind_idx_buff(ibuff, offset, idx_type): Bind an index buffer.
- * - bind_desc_set(bind_point, pl, desc_set): Bind a descriptor set for the pipeline.
+ * - bind_desc_set(bind_point, pl, desc_set): Bind a descriptor set for the pipeline, as set 0.
+ * - bind_desc_sets(bind_point, pl, first_set, desc_sets): Bind consecutive descriptor sets,
+ *   the first of them as set number first_set.
+ * - push_consts(pl, stages, offset, size, data): Record push constant values for the stages.
+ * - copy_buff(dst, dst_off, src, src_off, sz): Record a copy between two buffers; it runs when
+ *   the command buffer is submitted, and nothing waits for it here.
  * - draw(pl, vert_cnt): Issue a non-indexed draw call.
  * - draw_idx(pl, vert_cnt): Issue an indexed draw call.
+ * - begin_rpass_clear(fbs, img_idx, clear): Begin a render pass that clears to a given colour.
+ * - bind_pipeline(pl): Bind a graphics pipeline for the draws recorded after it.
+ * - draw_inst(...), draw_idx_inst(...): Draw with the bound pipeline, at offsets and instanced.
+ * - set_line_width(width): Set the width of the lines drawn after it.
+ * - copy_swc_img_to_buff(swc, img_idx, dst): Record a copy of a swapchain image into a buffer.
  * - end_rpass(): End the current render pass.
  * - end(): Finish recording commands.
  * - reset(): Reset the command buffer for reuse.
@@ -957,6 +1163,8 @@ private:
  *   - Parameters:
  *     - cmdpool: Reference to the cmdpool_t object from which this buffer will be allocated.
  *     - host_free: Optional flag indicating whether the buffer is host-allocated (default: false).
+ *
+ * @date 21-10-2026-06:06
  */
 struct cmdbuff_t : public object_t {
     VkCommandBuffer     vk_buff;
@@ -979,9 +1187,68 @@ struct cmdbuff_t : public object_t {
             std::vector<std::pair<ref_t<buffer_t>, VkDeviceSize>> buffs);
     void bind_desc_set(VkPipelineBindPoint bind_point, ref_t<pipeline_layout_t> pl,
             ref_t<desc_set_t> desc_set);
+
+    /*! Binds `desc_sets` to the pipeline layout `pl`, the first as set number `first_set` and
+    each next one as the following number. @date 21-10-2026-03:56 */
+    void bind_desc_sets(VkPipelineBindPoint bind_point, ref_t<pipeline_layout_t> pl,
+            uint32_t first_set, const std::vector<ref_t<desc_set_t>>& desc_sets);
+
+    /*! Records `size` bytes from `data` as the push constants of `stages`, starting at byte
+    `offset`; the bytes are copied while recording, so `data` may change afterwards.
+    @date 21-10-2026-03:56 */
+    void push_consts(ref_t<pipeline_layout_t> pl, VkShaderStageFlags stages, uint32_t offset,
+            uint32_t size, const void *data);
+
+    /*! Records a copy of `sz` bytes from `src` at `src_off` to `dst` at `dst_off`. It makes no
+    fence and does not wait: the copy runs when this buffer is submitted, and the caller orders it
+    against other work. Throws when a range falls outside its buffer; a copy of 0 bytes records
+    nothing. @date 21-10-2026-03:56 */
+    void copy_buff(ref_t<buffer_t> dst, VkDeviceSize dst_off, ref_t<buffer_t> src,
+            VkDeviceSize src_off, VkDeviceSize sz);
+
     void bind_idx_buff(ref_t<buffer_t> ibuff, uint64_t off, VkIndexType idx_type);
     void draw(ref_t<pipeline_t> pl, uint64_t vert_cnt);
     void draw_idx(ref_t<pipeline_t> pl, uint64_t vert_cnt);
+
+    /*! Begins the render pass of `fbs` on its framebuffer `img_idx`, as begin_rpass() does, but
+    clears the colour to `clear`, red, green, blue and alpha, rather than to opaque black.
+    @date 21-10-2026-04:43 */
+    void begin_rpass_clear(ref_t<framebuffs_t> fbs, uint32_t img_idx,
+            const std::array<float, 4>& clear);
+
+    /*! Binds the graphics pipeline `pl` and sets the viewport and the scissor to the whole extent
+    of its swapchain; the draws recorded after it use them until another pipeline is bound.
+    @date 21-10-2026-04:43 */
+    void bind_pipeline(ref_t<pipeline_t> pl);
+
+    /*! Draws `vert_cnt` vertices from `first_vert` of the bound vertex buffers, `inst_cnt` times
+    from instance `first_inst`, with the pipeline bound last; it binds nothing itself.
+    @date 21-10-2026-04:43 */
+    void draw_inst(uint32_t vert_cnt, uint32_t inst_cnt, uint32_t first_vert,
+            uint32_t first_inst);
+
+    /*! Draws `idx_cnt` indices from `first_idx` of the bound index buffer, each added to
+    `vert_off`, `inst_cnt` times from instance `first_inst`, with the pipeline bound last; it
+    binds nothing itself. @date 21-10-2026-04:43 */
+    void draw_idx_inst(uint32_t idx_cnt, uint32_t inst_cnt, uint32_t first_idx, int32_t vert_off,
+            uint32_t first_inst);
+
+    /*! Sets the width, in pixels, of the lines drawn after it; every pipeline_t takes it as
+    dynamic state. A width other than 1 needs the device's wideLines feature.
+    @date 21-10-2026-04:43 */
+    void set_line_width(float width);
+
+    /*! Records a copy of image `img_idx` of `swc` into `dst`, its rows one after the other from
+    the top, each pixel the bytes of the swapchain's format: 4 for the 8-bit and the packed 10-bit
+    formats, 8 for the 16-bit ones; a swapchain of any other format throws. The image must be
+    ready to present, as a render pass of renderpass_t leaves it, drawn by commands recorded
+    before it in this buffer or submitted earlier on the same queue, which the copy waits for; and
+    the swapchain must have been made with VK_IMAGE_USAGE_TRANSFER_SRC_BIT among its extra uses.
+    The image is left ready to present, and the copy is made visible to the host once this
+    buffer's submission completes. `dst` must hold width * height pixels of the swapchain's
+    extent; a smaller one throws. @date 21-10-2026-06:06 */
+    void copy_swc_img_to_buff(ref_t<swapchain_t> swc, uint32_t img_idx, ref_t<buffer_t> dst);
+
     void end_rpass();
     void end();
 
@@ -1490,11 +1757,36 @@ private:
     vc::ret_t uninit();
 };
 
-/*! TODO: desc */
+/*!
+ * @brief Wraps a Vulkan pipeline layout: the descriptor sets and push constants a graphics or
+ * compute pipeline's shaders read.
+ *
+ * Core:
+ *   - Set number i of the shaders (`layout(set = i, ...)`) is described by
+ *     `m_desc_set_layouts[i]`; descriptor sets are bound against it with
+ *     cmdbuff_t::bind_desc_set or bind_desc_sets.
+ *   - Each range of `m_push_ranges` names the stages that read push constants in its bytes;
+ *     cmdbuff_t::push_consts records their values.
+ *
+ * Detail:
+ *   - Push constant bytes are few: Vulkan guarantees 128 and the driver's
+ *     maxPushConstantsSize says how many more it allows.
+ *
+ * @param desc_set_layout   The single set layout, for set 0; the layout's device is used.
+ * @param dev               The device, for a layout of any number of sets, none included.
+ * @param desc_set_layouts  The set layouts, in set order.
+ * @param push_ranges       The push constant ranges; none by default.
+ *
+ * @date 21-10-2026-03:56
+ */
 struct pipeline_layout_t : public object_t {
-    VkPipelineLayout            vk_pipeline_layout;
+    /* Null until made, as is m_device until set, so that a creation refused part way destroys
+    nothing in uninit(). 21-10-2026-04:25 */
+    VkPipelineLayout                        vk_pipeline_layout = VK_NULL_HANDLE;
 
-    ref_t<desc_set_layout_t>    m_desc_set_layout;
+    ref_t<device_t>                         m_device;
+    std::vector<ref_t<desc_set_layout_t>>   m_desc_set_layouts;
+    std::vector<VkPushConstantRange>        m_push_ranges;
 
     pipeline_layout_t(object_t::Private priv) : object_t(priv) {}
     virtual ~pipeline_layout_t() { uninit(); }
@@ -1502,8 +1794,59 @@ struct pipeline_layout_t : public object_t {
     virtual object_type_e type_id() const override { return VKU_TYPE_PIPELINE_LAYOUT; }
     static object_type_e type_id_static() { return VKU_TYPE_PIPELINE_LAYOUT; }
 
-    static ref_t<pipeline_layout_t> create(ref_t<desc_set_layout_t> bindings_initer);
+    static ref_t<pipeline_layout_t> create(ref_t<desc_set_layout_t> desc_set_layout,
+            const std::vector<VkPushConstantRange>& push_ranges = {});
+    static ref_t<pipeline_layout_t> create(ref_t<device_t> dev,
+            const std::vector<ref_t<desc_set_layout_t>>& desc_set_layouts,
+            const std::vector<VkPushConstantRange>& push_ranges = {});
     virtual std::string to_string() const override;
+
+private:
+    vc::ret_t init();
+    vc::ret_t uninit();
+};
+
+/*!
+ * @brief Wraps a Vulkan pipeline cache, which lets the driver skip compiling a pipeline it has
+ * built before, in this run or, through a file, in an earlier one.
+ *
+ * Core:
+ *   - A pipeline given this cache at creation reuses what the cache holds and adds what it
+ *     compiled.
+ *   - With a path, creation starts from the file's contents and save() writes the cache back to
+ *     it; without one, the cache lives only as long as this object.
+ *
+ * Detail:
+ *   - A file that is missing, or that another GPU or driver wrote, is ignored and the cache
+ *     starts empty, so a stale file costs one slow build and nothing else.
+ *   - save() writes a temporary file beside the path and renames it over the path, so a save cut
+ *     short leaves the previous file whole.
+ *
+ * @param dev   The device whose pipelines use the cache.
+ * @param path  The file the cache is loaded from and saved to; empty for none.
+ *
+ * @date 21-10-2026-03:56
+ */
+struct pipeline_cache_t : public object_t {
+    /* Null until made, as is m_device until set, so that a creation refused part way destroys
+    nothing in uninit(). 21-10-2026-04:25 */
+    VkPipelineCache     vk_cache = VK_NULL_HANDLE;
+
+    ref_t<device_t>     m_device;
+    std::string         m_path;
+
+    pipeline_cache_t(object_t::Private priv) : object_t(priv) {}
+    virtual ~pipeline_cache_t() { uninit(); }
+
+    virtual object_type_e type_id() const override { return VKU_TYPE_PIPELINE_CACHE; }
+    static object_type_e type_id_static() { return VKU_TYPE_PIPELINE_CACHE; }
+
+    static ref_t<pipeline_cache_t> create(ref_t<device_t> dev, const std::string& path = "");
+    virtual std::string to_string() const override;
+
+    /*! Writes the cache's contents to m_path; throws when m_path is empty or cannot be written.
+    @date 21-10-2026-03:56 */
+    void save();
 
 private:
     vc::ret_t init();
@@ -1764,8 +2107,46 @@ inline glslang_resource_t spirv_resources = {};
 
 inline void spirv_uninit();
 inline void spirv_init();
-inline spirv_t spirv_compile(vku_shader_stage_e vk_stage, const char *code);
+
+/*!
+ * @brief Compiles GLSL source for one shader stage into SPIR-V.
+ *
+ * Core:
+ *   - A source glslang refuses throws vku::except_t, whether preprocessing, parsing or linking
+ *     refused it.
+ *   - When `err_log` is given it receives glslang's own log of the compile: on a failure, the
+ *     errors with their line numbers, written before the exception is thrown; on a success, the
+ *     warnings, often none.
+ *
+ * @param stage    The shader stage the source is compiled for.
+ * @param code     The GLSL source, NUL terminated.
+ * @param err_log  Optional; replaced by glslang's log of this compile.
+ *
+ * @return The SPIR-V words, tagged with `stage`.
+ *
+ * @date 21-10-2026-03:56
+ */
+inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code,
+        std::string *err_log = nullptr);
 inline int spirv_save(const spirv_t& code, const char *filepath);
+
+/*! Appends glslang's info and debug logs to `log` when `log` is not null; an empty log adds
+ * nothing. @date 21-10-2026-06:06 */
+inline void spirv_log_append(std::string *log, const char *info, const char *debug);
+
+/*! Reads the whole file at `path` into `out`; answers false when the file cannot be opened or
+ * read. @date 21-10-2026-06:06 */
+inline bool read_file_bytes(const std::string& path, std::vector<char>& out);
+
+/*! Throws vku::except_t naming the first feature `feats` requires that `phy_dev` lacks, or the
+ * first structure `feats` holds that Vulkan 1.2 absorbed into VkPhysicalDeviceVulkan12Features.
+ * @date 21-10-2026-06:06 */
+inline void check_device_features(VkPhysicalDevice phy_dev, const device_features_t& feats);
+
+/*! Links the structures of `feats.m_chain` one to the next and answers the first, or nullptr
+ * when there are none; a VkPhysicalDeviceVulkan12Features is left out, since the device chains
+ * its own. @date 21-10-2026-06:06 */
+inline void *link_device_features(const device_features_t& feats);
 
 inline uint32_t find_memory_type(ref_t<device_t> dev,
         uint32_t type_filter, VkMemoryPropertyFlags properties, size_t sz);
@@ -1890,6 +2271,57 @@ inline VkDescriptorSetLayoutBinding ssbo_t::get_desc_set(uint32_t binding,
         .stageFlags = stage,
         .pImmutableSamplers = nullptr,
     };
+}
+
+/* spec_consts_t
+================================================================================================= */
+
+template <typename T>
+inline spec_consts_t &spec_consts_t::set(uint32_t constant_id, const T &value) {
+    static_assert(std::is_trivially_copyable_v<T>,
+            "a specialization constant is copied byte for byte");
+    /* A C++ bool is one byte, and Vulkan reads a bool constant as a VkBool32 of four, so a bool
+    is stored as that. 21-10-2026-06:06 */
+    if constexpr (std::is_same_v<T, bool>)
+        return set(constant_id, (VkBool32)(value ? VK_TRUE : VK_FALSE));
+    /* A replaced value's old bytes stay in m_data unused; no entry points at them anymore.
+    21-10-2026-03:56 */
+    std::erase_if(m_entries, [constant_id](const VkSpecializationMapEntry &e) {
+        return e.constantID == constant_id;
+    });
+    m_entries.push_back(VkSpecializationMapEntry{
+        .constantID = constant_id,
+        .offset = (uint32_t)m_data.size(),
+        .size = sizeof(T),
+    });
+    auto bytes = (const uint8_t *)&value;
+    m_data.insert(m_data.end(), bytes, bytes + sizeof(T));
+    return *this;
+}
+
+inline const VkSpecializationInfo *spec_consts_t::get_info(VkSpecializationInfo &info) const {
+    if (m_entries.empty())
+        return nullptr;
+    info = VkSpecializationInfo{
+        .mapEntryCount = (uint32_t)m_entries.size(),
+        .pMapEntries = m_entries.data(),
+        .dataSize = m_data.size(),
+        .pData = m_data.data(),
+    };
+    return &info;
+}
+
+/* device_features_t
+================================================================================================= */
+
+template <typename T>
+inline T &device_features_t::add(const T &feature_struct) {
+    static_assert(std::is_trivially_copyable_v<T>, "a feature structure is plain data");
+    static_assert(!std::is_same_v<T, VkPhysicalDeviceFeatures2>,
+            "Vulkan 1.0 features are asked through device_features_t::m_core");
+    auto copy = std::make_shared<T>(feature_struct);
+    m_chain.push_back(chained_t{ .ptr = copy, .size = sizeof(T) });
+    return *copy;
 }
 
 /* binding_t
@@ -2332,13 +2764,15 @@ inline std::string surface_t::to_string() const {
 
 /* TODO: device_t should only depend on instance, not on surface */
 inline ref_t<device_t> device_t::create(ref_t<instance_t> inst, ref_t<surface_t> surf,
-        std::vector<std::string> exts, std::vector<std::string> layers)
+        std::vector<std::string> exts, std::vector<std::string> layers,
+        const device_features_t &features)
 {
     auto ret = std::make_shared<device_t>(object_t::Private{type_id_static()});
     ret->m_instance = inst;
     ret->m_surface = surf;
     ret->m_extensions = exts;
     ret->m_layers = layers;
+    ret->m_features = features;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -2350,7 +2784,7 @@ inline vc::ret_t device_t::init() {
     VK_ASSERT(vkEnumeratePhysicalDevices(m_instance->vk_instance, &dev_cnt, NULL));
 
     if (dev_cnt == 0) {
-        DBG("Failed to find a GPU with Vulkan support!")
+        DBG("Failed to find a GPU with Vulkan support!");
         throw vku::except_t(VK_ERROR_UNKNOWN);
     }
 
@@ -2388,15 +2822,19 @@ inline vc::ret_t device_t::init() {
             .queueCount = m_que_fams.max_graphics_queue_cnt,
             .pQueuePriorities = queue_prio.data()
         },
-        VkDeviceQueueCreateInfo {
+    };
+    /* A GPU whose one family both draws and presents, as many outside AMD's do, gets that family
+    once: Vulkan refuses a family named twice, and its queue 0 then presents. 21-10-2026-04:43 */
+    if (m_que_fams.present_id != m_que_fams.graphics_id) {
+        dev_ques.push_back(VkDeviceQueueCreateInfo {
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             .pNext = nullptr,
             .flags = 0,
             .queueFamilyIndex = (uint32_t)m_que_fams.present_id,
             .queueCount = 1,
             .pQueuePriorities = queue_prio.data() /* only one and gpu_queue_cnt at least 1 so ok */
-        }
-    };
+        });
+    }
 
     VkPhysicalDeviceFeatures dev_feat{};
     vkGetPhysicalDeviceFeatures(vk_phy_dev, &dev_feat);
@@ -2405,9 +2843,10 @@ inline vc::ret_t device_t::init() {
     for (auto &e : m_extensions)
         dev_exts.push_back(e.c_str());
 
-    std::vector<const char*> dev_layers = { "VK_LAYER_KHRONOS_validation" };
-    for (auto &l : m_layers)
-        dev_layers.push_back(l.c_str());
+    /* Device layers are deprecated and ignored by Vulkan, which takes the instance's layers for
+    every device, and the loader warns of any named here; so m_layers is kept but no longer sent,
+    and the validation layer this list always named is the instance's to enable.
+    21-10-2026-05:07 */
 
     dev_feat.samplerAnisotropy = VK_TRUE;
 
@@ -2427,20 +2866,27 @@ inline vc::ret_t device_t::init() {
     the request struct. */
     vkGetPhysicalDeviceFeatures2(vk_phy_dev, &supported_feat2);
 
+    /* The features the creator asked for are checked before the device is made, for the same
+    crash, and their structures join the chain only after the query above, which would otherwise
+    overwrite them with everything the GPU supports. 21-10-2026-03:56 */
+    check_device_features(vk_phy_dev, m_features);
+    vk11_features.pNext = link_device_features(m_features);
+
     VkDeviceCreateInfo dev_info {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .pNext = &vk11_features,
         .flags = 0,
         .queueCreateInfoCount = (uint32_t)dev_ques.size(),
         .pQueueCreateInfos = dev_ques.data(),
-        .enabledLayerCount = (uint32_t)dev_layers.size(),
-        .ppEnabledLayerNames = dev_layers.data(),
+        .enabledLayerCount = 0,
+        .ppEnabledLayerNames = nullptr,
         .enabledExtensionCount = (uint32_t)dev_exts.size(),
         .ppEnabledExtensionNames = dev_exts.data(),
         .pEnabledFeatures = &dev_feat,
     };
 
     VK_ASSERT(vkCreateDevice(vk_phy_dev, &dev_info, NULL, &vk_dev));
+    vk_features = dev_feat;
 
     vk_graphics_que.resize(m_que_fams.max_graphics_queue_cnt);
     for (uint32_t i = 0; i < m_que_fams.max_graphics_queue_cnt; i++) {
@@ -2457,6 +2903,10 @@ inline vc::ret_t device_t::uninit() {
     return VK_SUCCESS;
 }
 
+inline void device_t::wait_idle() {
+    VK_ASSERT(vkDeviceWaitIdle(vk_dev));
+}
+
 inline std::string device_t::to_string() const {
     return std::format("vku::device[{}]: m_surface={}", (void*)this, (void*)m_surface.get());
 }
@@ -2464,10 +2914,13 @@ inline std::string device_t::to_string() const {
 /* swapchain_t
 ================================================================================================= */
 
-inline ref_t<swapchain_t> swapchain_t::create(ref_t<device_t> dev, ref_t<surface_t> surf) {
+inline ref_t<swapchain_t> swapchain_t::create(ref_t<device_t> dev, ref_t<surface_t> surf,
+        const swapchain_opts_t &opts)
+{
     auto ret = std::make_shared<swapchain_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     ret->m_surface = surf;
+    ret->m_opts = opts;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -2475,23 +2928,28 @@ inline ref_t<swapchain_t> swapchain_t::create(ref_t<device_t> dev, ref_t<surface
 inline vc::ret_t swapchain_t::init() {
     if (!m_device || !m_surface)
         throw except_t("Invalid internal ptr");
-    FnScope err_scope;
+    /* A throw part way lets go of what was made so far, through uninit(), which passes over
+    what is still null. 21-10-2026-06:06 */
+    FnScope err_scope([this]{ uninit(); });
     auto sc_detail = get_swapchain_details(m_device->vk_phy_dev, m_surface->vk_surface);
 
-    /* choose format */
+    /* choose format: the one m_opts asks for, by default B8G8R8A8_SRGB, when the surface offers
+    it (made an option on 21-10-2026-04:43) */
     vk_surf_fmt = sc_detail.formats[0];
     for (const auto &f : sc_detail.formats)
-        if (f.format == VK_FORMAT_B8G8R8A8_SRGB && f.colorSpace ==
-                VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
-        {
+        if (f.format == m_opts.m_format && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
             vk_surf_fmt = f;
-        }
 
-    /* choose presentation mode */
+    /* choose presentation mode: the one m_opts asks for, by default MAILBOX, when the surface
+    offers it, else FIFO (made an option on 21-10-2026-04:43) */
     vk_present_mode = VK_PRESENT_MODE_FIFO_KHR;
     for (const auto& pm : sc_detail.present_modes)
-        if (pm == VK_PRESENT_MODE_MAILBOX_KHR)
+        if (pm == m_opts.m_present_mode)
             vk_present_mode = pm;
+
+    if ((sc_detail.capab.supportedUsageFlags & m_opts.m_extra_usage) != m_opts.m_extra_usage)
+        throw except_t(std::format("The surface does not offer the image use {}",
+                vulkan_utils::to_string((VkImageUsageFlagBits)m_opts.m_extra_usage)));
 
     /* choose swap extent */
     vk_extent = choose_extent(m_surface->m_window->get_window(), sc_detail.capab);
@@ -2513,7 +2971,7 @@ inline vc::ret_t swapchain_t::init() {
         .imageColorSpace = vk_surf_fmt.colorSpace,
         .imageExtent = vk_extent,
         .imageArrayLayers = 1,
-        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | m_opts.m_extra_usage,
         .imageSharingMode      = qf_arr.size() > 1 ? VK_SHARING_MODE_CONCURRENT
                                                    : VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = qf_arr.size() > 1 ? 2u : 0u,
@@ -2525,8 +2983,12 @@ inline vc::ret_t swapchain_t::init() {
         .oldSwapchain = VK_NULL_HANDLE,
     };
 
-    VK_ASSERT(vkCreateSwapchainKHR(m_device->vk_dev, &sc_info, NULL, &vk_swapchain));
-    err_scope([&]{ vkDestroySwapchainKHR(m_device->vk_dev, vk_swapchain, NULL); });
+    /* Each handle is made into a local and kept only once made, since Vulkan leaves the output
+    of a failed creation undefined, and uninit() would destroy whatever it held.
+    21-10-2026-06:33 */
+    VkSwapchainKHR made_swc = VK_NULL_HANDLE;
+    VK_ASSERT(vkCreateSwapchainKHR(m_device->vk_dev, &sc_info, NULL, &made_swc));
+    vk_swapchain = made_swc;
 
     img_cnt = 0;
     VK_ASSERT(vkGetSwapchainImagesKHR(m_device->vk_dev, vk_swapchain, &img_cnt, NULL));
@@ -2563,9 +3025,9 @@ inline vc::ret_t swapchain_t::init() {
                 .layerCount = 1,
             },
         };
-        VK_ASSERT(vkCreateImageView(m_device->vk_dev, &iv_info, NULL, &vk_sc_image_views[i]));
-        err_scope([i, this]{ 
-            vkDestroyImageView(m_device->vk_dev, vk_sc_image_views[i], NULL); });
+        VkImageView made_view = VK_NULL_HANDLE;
+        VK_ASSERT(vkCreateImageView(m_device->vk_dev, &iv_info, NULL, &made_view));
+        vk_sc_image_views[i] = made_view;
     }
 
     /* TODO: is this still a problem? TODO: this is problematic, here depth_imag is dependent on
@@ -2581,9 +3043,16 @@ inline vc::ret_t swapchain_t::init() {
 }
 
 inline vc::ret_t swapchain_t::uninit() {
+    if (!m_device)
+        return VK_SUCCESS;
+    /* Every handle is forgotten once destroyed, so a second uninit(), as the destructor's after a
+    failed init(), destroys nothing again. 21-10-2026-06:06 */
     for (auto &iv : vk_sc_image_views)
         vkDestroyImageView(m_device->vk_dev, iv, NULL);
+    vk_sc_image_views.clear();
+    vk_sc_images.clear();
     vkDestroySwapchainKHR(m_device->vk_dev, vk_swapchain, NULL);
+    vk_swapchain = VK_NULL_HANDLE;
     return VK_SUCCESS;
 }
 
@@ -2619,12 +3088,8 @@ inline vc::ret_t shader_t::init() {
     if (!m_device)
         throw except_t("Invalid m_device null");
     if (m_init_from_path) {
-        std::ifstream file(m_path, std::ios::binary | std::ios::ate);
-        std::streamsize size = file.tellg();
-
-        file.seekg(0, std::ios::beg);
-        std::vector<char> buffer(size);
-        if (!file.read(buffer.data(), size)) {
+        std::vector<char> buffer;
+        if (!read_file_bytes(m_path, buffer)) {
             DBG("Failed to read shader data");
             throw vku::except_t(VK_ERROR_UNKNOWN);
         }
@@ -2729,14 +3194,19 @@ inline vc::ret_t renderpass_t::init() {
         .pPreserveAttachments = nullptr,
     };
 
+    /* Every framebuffer shares the swapchain's one depth image, so a render pass clearing it
+    waits for the depth writes of the render pass submitted before it, which end in the late
+    fragment tests; without them in the source scope, two frames in flight could write the depth
+    image at once, which synchronization validation reported. 21-10-2026-05:15 */
     VkSubpassDependency dependency {
         .srcSubpass = VK_SUBPASS_EXTERNAL,
         .dstSubpass = 0,
-        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |   
-                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
         .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        .srcAccessMask = 0,
+        .srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
         .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
         .dependencyFlags = 0,
@@ -2782,7 +3252,10 @@ inline ref_t<pipeline_t> pipeline_t::create(
         const std::vector<ref_t<shader_t>> &shaders,
         VkPrimitiveTopology topology,
         vertex_input_desc_t input_desc,
-        ref_t<pipeline_layout_t> pipeline_layout)
+        ref_t<pipeline_layout_t> pipeline_layout,
+        const spec_consts_t &spec_consts,
+        ref_t<pipeline_cache_t> cache,
+        const pipeline_state_t &state)
 {
     auto ret = std::make_shared<pipeline_t>(object_t::Private{type_id_static()});
     ret->m_width = width;
@@ -2792,6 +3265,9 @@ inline ref_t<pipeline_t> pipeline_t::create(
     ret->m_topology = topology;
     ret->m_input_desc = input_desc;
     ret->m_pipeline_layout = pipeline_layout;
+    ret->m_spec_consts = spec_consts;
+    ret->m_pipeline_cache = cache;
+    ret->m_state = state;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -2800,6 +3276,9 @@ inline vc::ret_t pipeline_t::init() {
     if (!m_renderpass || !m_pipeline_layout)
         throw except_t("Invalid internal pointers");
     FnScope err_scope;
+
+    VkSpecializationInfo spec_info;
+    const VkSpecializationInfo *spec_ptr = m_spec_consts.get_info(spec_info);
 
     std::vector<VkPipelineShaderStageCreateInfo> shader_stages;
     for (auto sh : m_shaders) {
@@ -2812,7 +3291,7 @@ inline vc::ret_t pipeline_t::init() {
             .stage               = get_shader_type(sh->m_type),
             .module              = sh->vk_shader,
             .pName               = "main",
-            .pSpecializationInfo = nullptr,
+            .pSpecializationInfo = spec_ptr,
         });
         DBG("Added shader: %p, type: %x ",
                 sh->vk_shader, get_shader_type(sh->m_type));
@@ -2882,8 +3361,8 @@ inline vc::ret_t pipeline_t::init() {
         .depthClampEnable           = VK_FALSE,
         .rasterizerDiscardEnable    = VK_FALSE,
         .polygonMode                = VK_POLYGON_MODE_FILL,
-        .cullMode                   = VK_CULL_MODE_NONE, // VK_CULL_MODE_BACK_BIT,
-        .frontFace                  = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .cullMode                   = m_state.m_cull_mode,
+        .frontFace                  = m_state.m_front_face,
         .depthBiasEnable            = VK_FALSE,
         .depthBiasConstantFactor    = 0.0f,
         .depthBiasClamp             = 0.0f,
@@ -2903,13 +3382,17 @@ inline vc::ret_t pipeline_t::init() {
         .alphaToOneEnable       = VK_FALSE,
     };
 
+    /* m_state blends by the source's alpha, or writes the colour as it is, the default
+    (21-10-2026-04:43) */
     VkPipelineColorBlendAttachmentState blend_attachment {
-        .blendEnable            = VK_FALSE,
-        .srcColorBlendFactor    = VK_BLEND_FACTOR_ONE,
-        .dstColorBlendFactor    = VK_BLEND_FACTOR_ZERO,
+        .blendEnable            = m_state.m_blend ? VK_TRUE : VK_FALSE,
+        .srcColorBlendFactor    = m_state.m_blend ? VK_BLEND_FACTOR_SRC_ALPHA : VK_BLEND_FACTOR_ONE,
+        .dstColorBlendFactor    = m_state.m_blend ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+                                                  : VK_BLEND_FACTOR_ZERO,
         .colorBlendOp           = VK_BLEND_OP_ADD,
-        .srcAlphaBlendFactor    = VK_BLEND_FACTOR_ONE,
-        .dstAlphaBlendFactor    = VK_BLEND_FACTOR_ZERO,
+        .srcAlphaBlendFactor    = m_state.m_blend ? VK_BLEND_FACTOR_SRC_ALPHA : VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor    = m_state.m_blend ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+                                                  : VK_BLEND_FACTOR_ZERO,
         .alphaBlendOp           = VK_BLEND_OP_ADD,
         .colorWriteMask         =
                 VK_COLOR_COMPONENT_R_BIT |
@@ -2933,9 +3416,9 @@ inline vc::ret_t pipeline_t::init() {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .depthTestEnable = VK_TRUE,
-        .depthWriteEnable = VK_TRUE,
-        .depthCompareOp = VK_COMPARE_OP_LESS,
+        .depthTestEnable = m_state.m_depth_test ? VK_TRUE : VK_FALSE,
+        .depthWriteEnable = m_state.m_depth_write ? VK_TRUE : VK_FALSE,
+        .depthCompareOp = m_state.m_depth_op,
         .depthBoundsTestEnable = VK_FALSE,
         .stencilTestEnable = VK_FALSE,
         .front = {},
@@ -2967,7 +3450,8 @@ inline vc::ret_t pipeline_t::init() {
     };
 
     VK_ASSERT(vkCreateGraphicsPipelines(m_renderpass->m_swapchain->m_device->vk_dev,
-            VK_NULL_HANDLE, 1, &pipeline_info, NULL, &vk_pipeline));
+            m_pipeline_cache ? m_pipeline_cache->vk_cache : VK_NULL_HANDLE,
+            1, &pipeline_info, NULL, &vk_pipeline));
     err_scope.disable();
     DBG("Created Pipeline: %p", this);
     return VK_SUCCESS;
@@ -2996,12 +3480,16 @@ inline std::string pipeline_t::to_string() const {
 inline ref_t<compute_pipeline_t> compute_pipeline_t::create(
         ref_t<device_t> dev,
         ref_t<shader_t> shader,
-        ref_t<pipeline_layout_t> pipeline_layout)
+        ref_t<pipeline_layout_t> pipeline_layout,
+        const spec_consts_t &spec_consts,
+        ref_t<pipeline_cache_t> cache)
 {
     auto ret = std::make_shared<compute_pipeline_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
     ret->m_shader = shader;
     ret->m_pipeline_layout = pipeline_layout;
+    ret->m_spec_consts = spec_consts;
+    ret->m_pipeline_cache = cache;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -3015,6 +3503,7 @@ inline vc::ret_t compute_pipeline_t::init() {
         throw vku::except_t("compute_pipeline needs a compute shader");
     }
 
+    VkSpecializationInfo spec_info;
     VkPipelineShaderStageCreateInfo shader_info {
         .sType                  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
         .pNext                  = nullptr,
@@ -3022,7 +3511,7 @@ inline vc::ret_t compute_pipeline_t::init() {
         .stage                  = get_shader_type(m_shader->m_type),
         .module                 = m_shader->vk_shader,
         .pName                  = "main",
-        .pSpecializationInfo    = nullptr,
+        .pSpecializationInfo    = m_spec_consts.get_info(spec_info),
     };
 
     VkComputePipelineCreateInfo pipeline_info {
@@ -3035,8 +3524,9 @@ inline vc::ret_t compute_pipeline_t::init() {
         .basePipelineIndex  = 0,
     };
 
-    VK_ASSERT(vkCreateComputePipelines(
-            m_device->vk_dev, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &vk_pipeline));
+    VK_ASSERT(vkCreateComputePipelines(m_device->vk_dev,
+            m_pipeline_cache ? m_pipeline_cache->vk_cache : VK_NULL_HANDLE,
+            1, &pipeline_info, NULL, &vk_pipeline));
     DBG("Created Compute Pipeline: %p", this);
 
     err_scope.disable();
@@ -3068,7 +3558,9 @@ inline vc::ret_t framebuffs_t::init() {
         throw except_t("Invalid m_renderpass");
     vk_fbuffs.resize(m_renderpass->m_swapchain->vk_sc_image_views.size());
 
-    FnScope err_scope;
+    /* A throw part way lets go of the framebuffers made so far, through uninit().
+    21-10-2026-06:06 */
+    FnScope err_scope([this]{ uninit(); });
     for (size_t i = 0; i < vk_fbuffs.size(); i++) {
         VkImageView attachs[] = {
             m_renderpass->m_swapchain->vk_sc_image_views[i],
@@ -3087,11 +3579,12 @@ inline vc::ret_t framebuffs_t::init() {
             .layers = 1,
         };
 
+        /* The framebuffer is kept only once made, since Vulkan leaves the output of a failed
+        creation undefined, and uninit() would destroy whatever it held. 21-10-2026-06:33 */
+        VkFramebuffer made_fb = VK_NULL_HANDLE;
         VK_ASSERT(vkCreateFramebuffer(m_renderpass->m_swapchain->m_device->vk_dev,
-                &fbuff_info, NULL, &vk_fbuffs[i]));
-        err_scope([this, i] { 
-            vkDestroyFramebuffer(m_renderpass->m_swapchain->m_device->vk_dev, vk_fbuffs[i], NULL);
-        });
+                &fbuff_info, NULL, &made_fb));
+        vk_fbuffs[i] = made_fb;
     }
 
     DBG("Created Framebuffs %p", this);
@@ -3101,8 +3594,13 @@ inline vc::ret_t framebuffs_t::init() {
 }
 
 inline vc::ret_t framebuffs_t::uninit() {
+    if (!m_renderpass)
+        return VK_SUCCESS;
+    /* The framebuffers are forgotten once destroyed, so a second uninit() destroys nothing
+    again; a null one, never made, is passed over by Vulkan. 21-10-2026-06:06 */
     for (auto fbuff : vk_fbuffs)
         vkDestroyFramebuffer(m_renderpass->m_swapchain->m_device->vk_dev, fbuff, NULL);
+    vk_fbuffs.clear();
     return VK_SUCCESS;
 }
 
@@ -3195,11 +3693,17 @@ inline void cmdbuff_t::begin(VkCommandBufferUsageFlags flags) {
 }
 
 inline void cmdbuff_t::begin_rpass(ref_t<framebuffs_t> fbs, uint32_t img_idx) {
+    begin_rpass_clear(fbs, img_idx, {0.0f, 0.0f, 0.0f, 1.0f});
+}
+
+inline void cmdbuff_t::begin_rpass_clear(ref_t<framebuffs_t> fbs, uint32_t img_idx,
+        const std::array<float, 4>& clear)
+{
     if (!fbs)
         throw except_t("Invalid fbs param");
     VkClearValue clear_color[] = {
         {
-            .color = {{ 0.0f, 0.0f, 0.0f, 1.0f }},
+            .color = {{ clear[0], clear[1], clear[2], clear[3] }},
         },
         {
             .depthStencil = { 1.0f, 0 },
@@ -3243,10 +3747,60 @@ inline void cmdbuff_t::bind_desc_set(VkPipelineBindPoint bind_point,
 {
     if (!pl || !desc_set)
         throw except_t("Invalid null param");
-    DBGVVV("bind desc_set: %p with layout: %p bind_point: %d",
-            desc_set->vk_desc_set, pl->vk_pipeline_layout, bind_point);
-    vkCmdBindDescriptorSets(vk_buff, bind_point, pl->vk_pipeline_layout, 0, 1,
-            &desc_set->vk_desc_set, 0, nullptr);
+    bind_desc_sets(bind_point, pl, 0, {desc_set});
+}
+
+inline void cmdbuff_t::bind_desc_sets(VkPipelineBindPoint bind_point,
+        ref_t<pipeline_layout_t> pl, uint32_t first_set,
+        const std::vector<ref_t<desc_set_t>>& desc_sets)
+{
+    if (!pl)
+        throw except_t("Invalid null param");
+    std::vector<VkDescriptorSet> vk_sets;
+    for (auto &ds : desc_sets) {
+        if (!ds)
+            throw except_t("Invalid null param");
+        DBGVVV("bind desc_set: %p with layout: %p bind_point: %d",
+                ds->vk_desc_set, pl->vk_pipeline_layout, bind_point);
+        vk_sets.push_back(ds->vk_desc_set);
+    }
+    if (vk_sets.empty())
+        return;
+    vkCmdBindDescriptorSets(vk_buff, bind_point, pl->vk_pipeline_layout, first_set,
+            (uint32_t)vk_sets.size(), vk_sets.data(), 0, nullptr);
+}
+
+inline void cmdbuff_t::push_consts(ref_t<pipeline_layout_t> pl, VkShaderStageFlags stages,
+        uint32_t offset, uint32_t size, const void *data)
+{
+    if (!pl || !data)
+        throw except_t("Invalid null param");
+    vkCmdPushConstants(vk_buff, pl->vk_pipeline_layout, stages, offset, size, data);
+}
+
+inline void cmdbuff_t::copy_buff(ref_t<buffer_t> dst, VkDeviceSize dst_off, ref_t<buffer_t> src,
+        VkDeviceSize src_off, VkDeviceSize sz)
+{
+    if (!dst)
+        throw except_t("Invalid dst buff");
+    if (!src)
+        throw except_t("Invalid src buff");
+    /* Each range is checked by subtraction, which cannot wrap as a sum of offset and size can,
+    so a size near 2^64, as Lua's -16 arrives, is refused too. 21-10-2026-06:06 */
+    if (sz > src->m_size || src_off > src->m_size - sz
+            || sz > dst->m_size || dst_off > dst->m_size - sz)
+        throw except_t(std::format("Invalid copy of {} bytes from {} of {} to {} of {}",
+                sz, src_off, src->m_size, dst_off, dst->m_size));
+    /* Vulkan refuses a copy region of 0 bytes, so copying nothing records nothing.
+    21-10-2026-03:56 */
+    if (sz == 0)
+        return;
+    VkBufferCopy copy_region{
+        .srcOffset = src_off,
+        .dstOffset = dst_off,
+        .size = sz
+    };
+    vkCmdCopyBuffer(vk_buff, src->vk_buff, dst->vk_buff, 1, &copy_region);
 }
 
 inline void cmdbuff_t::bind_idx_buff(ref_t<buffer_t> ibuff, uint64_t off,
@@ -3276,6 +3830,155 @@ inline void cmdbuff_draw_helper(VkCommandBuffer vk_buff, ref_t<pipeline_t> pl) {
         .extent = pl->m_renderpass->m_swapchain->vk_extent
     };
     vkCmdSetScissor(vk_buff, 0, 1, &scissor);
+}
+
+inline void cmdbuff_t::bind_pipeline(ref_t<pipeline_t> pl) {
+    cmdbuff_draw_helper(vk_buff, pl);
+}
+
+inline void cmdbuff_t::draw_inst(uint32_t vert_cnt, uint32_t inst_cnt, uint32_t first_vert,
+        uint32_t first_inst)
+{
+    vkCmdDraw(vk_buff, vert_cnt, inst_cnt, first_vert, first_inst);
+}
+
+inline void cmdbuff_t::draw_idx_inst(uint32_t idx_cnt, uint32_t inst_cnt, uint32_t first_idx,
+        int32_t vert_off, uint32_t first_inst)
+{
+    vkCmdDrawIndexed(vk_buff, idx_cnt, inst_cnt, first_idx, vert_off, first_inst);
+}
+
+inline void cmdbuff_t::set_line_width(float width) {
+    vkCmdSetLineWidth(vk_buff, width);
+}
+
+/* Answers a barrier that moves the colour image `img` from layout `from` to layout `to`,
+ordering the accesses `src` before the accesses `dst`. 21-10-2026-04:43 */
+inline VkImageMemoryBarrier colour_img_barrier(VkImage img, VkImageLayout from, VkImageLayout to,
+        VkAccessFlags src, VkAccessFlags dst)
+{
+    return VkImageMemoryBarrier {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = src,
+        .dstAccessMask = dst,
+        .oldLayout = from,
+        .newLayout = to,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = img,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    };
+}
+
+/* Answers how many bytes a texel of the swapchain format `fmt` takes: 4 for the 8-bit and the
+packed 10-bit formats surfaces offer, 8 for the 16-bit ones, and 0 for a format not listed here.
+21-10-2026-06:06 */
+inline uint32_t swc_texel_bytes(VkFormat fmt) {
+    switch (fmt) {
+        case VK_FORMAT_B8G8R8A8_UNORM:
+        case VK_FORMAT_B8G8R8A8_SRGB:
+        case VK_FORMAT_R8G8B8A8_UNORM:
+        case VK_FORMAT_R8G8B8A8_SRGB:
+        case VK_FORMAT_A8B8G8R8_UNORM_PACK32:
+        case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
+        case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+            return 4;
+        case VK_FORMAT_R16G16B16A16_UNORM:
+        case VK_FORMAT_R16G16B16A16_SFLOAT:
+            return 8;
+        default:
+            return 0;
+    }
+}
+
+/* Throws vku::except_t unless image `img_idx` of `swc` can be copied whole into `dst`: the image
+exists, its format is one swc_texel_bytes() knows, and `dst` holds every texel of it.
+21-10-2026-06:06 */
+inline void check_swc_copy(ref_t<swapchain_t> swc, uint32_t img_idx, ref_t<buffer_t> dst) {
+    if (!swc || !dst)
+        throw except_t("Invalid null param");
+    if (img_idx >= swc->vk_sc_images.size())
+        throw except_t(std::format("Invalid swapchain image {} of {}", img_idx,
+                swc->vk_sc_images.size()));
+    uint32_t texel = swc_texel_bytes(swc->vk_surf_fmt.format);
+    if (texel == 0)
+        throw except_t(std::format("A swapchain image of format {} cannot be copied: its texel "
+                "size is not known", (int)swc->vk_surf_fmt.format));
+    VkExtent2D ext = swc->vk_extent;
+    if (dst->m_size < (size_t)ext.width * ext.height * texel)
+        throw except_t(std::format("A buffer of {} bytes cannot hold a picture {} by {} of {} "
+                "bytes a pixel", dst->m_size, ext.width, ext.height, texel));
+}
+
+/* Answers the barrier that moves swapchain image `img` from ready to present to ready to be
+copied from. It waits for every command submitted before it on the queue, the render pass that
+drew the image and its wait for the image's acquiring among them, so synchronization validation
+sees an unbroken chain. 21-10-2026-06:06 */
+inline ref_t<dependency_info_t> swc_copy_begin_dep(VkImage img) {
+    return dependency_info_t::create(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, {}, {}, {colour_img_barrier(img,
+            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT)});
+}
+
+/* Answers the barrier after swapchain image `img` was copied into buffer `dst`: the image moves
+back to ready to present, and the bytes the copy wrote become visible to the host.
+21-10-2026-06:06 */
+inline ref_t<dependency_info_t> swc_copy_end_dep(VkImage img, VkBuffer dst) {
+    VkBufferMemoryBarrier to_host {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = dst,
+        .offset = 0,
+        .size = VK_WHOLE_SIZE,
+    };
+    return dependency_info_t::create(VK_PIPELINE_STAGE_TRANSFER_BIT,
+            (VkPipelineStageFlagBits)(VK_PIPELINE_STAGE_HOST_BIT |
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT), {}, {to_host}, {colour_img_barrier(img,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            VK_ACCESS_TRANSFER_READ_BIT, 0)});
+}
+
+/* Answers the region that copies a whole colour image of extent `ext` to the start of a buffer,
+its rows one after the other. 21-10-2026-06:06 */
+inline VkBufferImageCopy whole_img_region(VkExtent2D ext) {
+    return VkBufferImageCopy {
+        .bufferOffset = 0,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+        .imageOffset = {0, 0, 0},
+        .imageExtent = {ext.width, ext.height, 1},
+    };
+}
+
+inline void cmdbuff_t::copy_swc_img_to_buff(ref_t<swapchain_t> swc, uint32_t img_idx,
+        ref_t<buffer_t> dst)
+{
+    check_swc_copy(swc, img_idx, dst);
+    VkImage img = swc->vk_sc_images[img_idx];
+    VkBufferImageCopy region = whole_img_region(swc->vk_extent);
+    pipeline_barrier(swc_copy_begin_dep(img));
+    vkCmdCopyImageToBuffer(vk_buff, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst->vk_buff, 1,
+            &region);
+    pipeline_barrier(swc_copy_end_dep(img, dst->vk_buff));
 }
 
 inline void cmdbuff_t::draw(ref_t<pipeline_t> pl, uint64_t vert_cnt) {
@@ -4191,28 +4894,48 @@ inline std::string desc_set_layout_t::to_string() const {
 /* pipeline_layout_t:
 ================================================================================================= */
 
-inline ref_t<pipeline_layout_t> pipeline_layout_t::create(ref_t<desc_set_layout_t> desc_set_layout) {
+inline ref_t<pipeline_layout_t> pipeline_layout_t::create(
+        ref_t<desc_set_layout_t> desc_set_layout,
+        const std::vector<VkPushConstantRange>& push_ranges)
+{
+    if (!desc_set_layout)
+        throw except_t("Invalid m_desc_set_layout ref");
+    return create(desc_set_layout->m_device, {desc_set_layout}, push_ranges);
+}
+
+inline ref_t<pipeline_layout_t> pipeline_layout_t::create(ref_t<device_t> dev,
+        const std::vector<ref_t<desc_set_layout_t>>& desc_set_layouts,
+        const std::vector<VkPushConstantRange>& push_ranges)
+{
     auto ret = std::make_shared<pipeline_layout_t>(object_t::Private{type_id_static()});
-    ret->m_desc_set_layout = desc_set_layout;
+    ret->m_device = dev;
+    ret->m_desc_set_layouts = desc_set_layouts;
+    ret->m_push_ranges = push_ranges;
 
     VK_ASSERT(ret->init());
     return ret;
 }
 
 inline vc::ret_t pipeline_layout_t::init() {
-    if (!m_desc_set_layout)
-        throw except_t("Invalid m_desc_set_layout ref");
+    if (!m_device)
+        throw except_t("Invalid m_device ref");
+    std::vector<VkDescriptorSetLayout> vk_set_layouts;
+    for (auto &dsl : m_desc_set_layouts) {
+        if (!dsl)
+            throw except_t("Invalid m_desc_set_layout ref");
+        vk_set_layouts.push_back(dsl->vk_desc_set_layout);
+    }
     VkPipelineLayoutCreateInfo pipeline_layout_info {
         .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .pNext                  = nullptr,
         .flags                  = 0,
-        .setLayoutCount         = 1,
-        .pSetLayouts            = &m_desc_set_layout->vk_desc_set_layout,
-        .pushConstantRangeCount = 0,
-        .pPushConstantRanges    = NULL,
+        .setLayoutCount         = (uint32_t)vk_set_layouts.size(),
+        .pSetLayouts            = vk_set_layouts.empty() ? nullptr : vk_set_layouts.data(),
+        .pushConstantRangeCount = (uint32_t)m_push_ranges.size(),
+        .pPushConstantRanges    = m_push_ranges.empty() ? nullptr : m_push_ranges.data(),
     };
 
-    VK_ASSERT(vkCreatePipelineLayout(m_desc_set_layout->m_device->vk_dev, &pipeline_layout_info,
+    VK_ASSERT(vkCreatePipelineLayout(m_device->vk_dev, &pipeline_layout_info,
             NULL, &vk_pipeline_layout));
     DBGVV("Allocated pipeline layout: %p", vk_pipeline_layout);
     DBG("Created Pipeline Layout %p", this);
@@ -4220,13 +4943,106 @@ inline vc::ret_t pipeline_layout_t::init() {
 }
 
 inline vc::ret_t pipeline_layout_t::uninit() {
-    vkDestroyPipelineLayout(m_desc_set_layout->m_device->vk_dev, vk_pipeline_layout, NULL);
+    if (m_device)
+        vkDestroyPipelineLayout(m_device->vk_dev, vk_pipeline_layout, NULL);
     return VK_SUCCESS;
 }
 
 inline std::string pipeline_layout_t::to_string() const {
-    return std::format("vku::desc_set_layout_t[{}]: m_desc_set_layout={}",
-            (void*)this, (void*)m_desc_set_layout.get());
+    std::string layouts_str = "[";
+    for (auto &dsl : m_desc_set_layouts)
+        layouts_str += std::format("{}, ", (void*)dsl.get());
+    layouts_str += "]";
+    return std::format("vku::pipeline_layout_t[{}]: m_device={} m_desc_set_layouts={} "
+            "push_ranges={}", (void*)this, (void*)m_device.get(), layouts_str,
+            m_push_ranges.size());
+}
+
+/* pipeline_cache_t:
+================================================================================================= */
+
+inline ref_t<pipeline_cache_t> pipeline_cache_t::create(ref_t<device_t> dev,
+        const std::string& path)
+{
+    auto ret = std::make_shared<pipeline_cache_t>(object_t::Private{type_id_static()});
+    ret->m_device = dev;
+    ret->m_path = path;
+
+    VK_ASSERT(ret->init());
+    return ret;
+}
+
+/* Answers whether `data` is a pipeline cache this device's driver wrote, by its header: the
+driver identifies the GPU, its own build and the layout of the cache there. 21-10-2026-03:56 */
+inline bool pipeline_cache_data_fits(VkPhysicalDevice phy_dev, const std::vector<char>& data) {
+    VkPipelineCacheHeaderVersionOne header;
+    if (data.size() < sizeof(header))
+        return false;
+    memcpy(&header, data.data(), sizeof(header));
+
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(phy_dev, &props);
+    return header.headerSize >= sizeof(header)
+            && header.headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE
+            && header.vendorID == props.vendorID
+            && header.deviceID == props.deviceID
+            && !memcmp(header.pipelineCacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE);
+}
+
+inline vc::ret_t pipeline_cache_t::init() {
+    if (!m_device)
+        throw except_t("Invalid m_device ref");
+    std::vector<char> data;
+    if (!m_path.empty() && read_file_bytes(m_path, data)
+            && !pipeline_cache_data_fits(m_device->vk_phy_dev, data))
+    {
+        DBG("Pipeline cache file [%s] was written for another GPU or driver, starting empty",
+                m_path.c_str());
+        data.clear();
+    }
+    VkPipelineCacheCreateInfo cache_info {
+        .sType              = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+        .pNext              = nullptr,
+        .flags              = 0,
+        .initialDataSize    = data.size(),
+        .pInitialData       = data.empty() ? nullptr : data.data(),
+    };
+    VK_ASSERT(vkCreatePipelineCache(m_device->vk_dev, &cache_info, NULL, &vk_cache));
+    DBG("Created Pipeline Cache %p from %zu bytes", this, data.size());
+    return VK_SUCCESS;
+}
+
+inline vc::ret_t pipeline_cache_t::uninit() {
+    if (m_device)
+        vkDestroyPipelineCache(m_device->vk_dev, vk_cache, NULL);
+    return VK_SUCCESS;
+}
+
+inline std::string pipeline_cache_t::to_string() const {
+    return std::format("vku::pipeline_cache_t[{}]: m_device={} m_path={}",
+            (void*)this, (void*)m_device.get(), m_path);
+}
+
+inline void pipeline_cache_t::save() {
+    if (m_path.empty())
+        throw except_t("The pipeline cache has no path to be saved to");
+    size_t sz = 0;
+    VK_ASSERT(vkGetPipelineCacheData(m_device->vk_dev, vk_cache, &sz, nullptr));
+    std::vector<char> data(sz);
+    VK_ASSERT(vkGetPipelineCacheData(m_device->vk_dev, vk_cache, &sz, data.data()));
+
+    std::string tmp_path = m_path + ".tmp";
+    {
+        std::ofstream file(tmp_path, std::ios::binary | std::ios::trunc);
+        file.write(data.data(), sz);
+        if (!file.good())
+            throw except_t(std::format("Failed to write the pipeline cache to {}", tmp_path));
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp_path, m_path, ec);
+    if (ec)
+        throw except_t(std::format("Failed to move {} over {}: {}", tmp_path, m_path,
+                ec.message()));
 }
 
 /* desc_set_initializer_t:
@@ -4460,14 +5276,14 @@ inline void wait_semaphores(const std::vector<ref_t<sem_t>> &sems, const std::ve
 
 
 inline void aquire_next_img(ref_t<swapchain_t> swc, ref_t<sem_t> sem,
-        uint32_t *img_idx)
+        uint32_t *img_idx, uint64_t timeout_ns)
 {
     if (!swc)
         throw except_t("Invalid swc ref");
     if (!sem)
         throw except_t("Invalid sem ref");
     VK_ASSERT(vkAcquireNextImageKHR(swc->m_device->vk_dev, swc->vk_swapchain,
-            UINT64_MAX, sem->vk_sem, VK_NULL_HANDLE, img_idx));
+            timeout_ns, sem->vk_sem, VK_NULL_HANDLE, img_idx));
 }
 
 inline void submit_cmdbuff(
@@ -4611,13 +5427,7 @@ inline void copy_buff(ref_t<cmdpool_t> cp, ref_t<buffer_t> dst,
 
     if (!existing_cbuff)
         cbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-    VkBufferCopy copy_region{
-        .srcOffset = 0,
-        .dstOffset = 0,
-        .size = sz
-    };
-    vkCmdCopyBuffer(cbuff->vk_buff, src->vk_buff, dst->vk_buff,
-            1, &copy_region);
+    cbuff->copy_buff(dst, 0, src, 0, sz);
 
     if (!existing_cbuff) {
         cbuff->end();
@@ -5787,7 +6597,10 @@ inline VkExtent2D choose_extent(GLFWwindow *window, VkSurfaceCapabilitiesKHR cap
     };
 
     ret.width  = std::clamp(ret.width,  capab.minImageExtent.width,  capab.maxImageExtent.width);
-    ret.height = std::clamp(ret.height, capab.minImageExtent.height, capab.minImageExtent.height);
+    /* The height is clamped to the surface's range, as the width is; before 21-10-2026-04:43 it
+    was clamped to the least height alone, which only a surface that leaves the extent to the
+    program, as Wayland's does, reached. */
+    ret.height = std::clamp(ret.height, capab.minImageExtent.height, capab.maxImageExtent.height);
 
     return ret;
 }
@@ -5863,11 +6676,196 @@ inline int spirv_save(const spirv_t& code, const char *filepath) {
     return file.good() ? 0 : -1;
 }
 
+inline void spirv_log_append(std::string *log, const char *info, const char *debug) {
+    if (!log)
+        return;
+    for (const char *text : {info, debug}) {
+        if (!text || !*text)
+            continue;
+        *log += text;
+        if (log->back() != '\n')
+            *log += '\n';
+    }
+}
+
+inline bool read_file_bytes(const std::string& path, std::vector<char>& out) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open())
+        return false;
+    std::streamsize size = file.tellg();
+    if (size < 0)
+        return false;
+    out.resize(size);
+    file.seekg(0, std::ios::beg);
+    return (bool)file.read(out.data(), size);
+}
+
+/* core_feature_names holds the names of VkPhysicalDeviceFeatures' members, in the order Vulkan
+declares them, so that a missing feature can be named. 21-10-2026-06:06 */
+inline const char *core_feature_names[] = {
+    "robustBufferAccess", "fullDrawIndexUint32", "imageCubeArray", "independentBlend",
+    "geometryShader", "tessellationShader", "sampleRateShading", "dualSrcBlend", "logicOp",
+    "multiDrawIndirect", "drawIndirectFirstInstance", "depthClamp", "depthBiasClamp",
+    "fillModeNonSolid", "depthBounds", "wideLines", "largePoints", "alphaToOne",
+    "multiViewport", "samplerAnisotropy", "textureCompressionETC2", "textureCompressionASTC_LDR",
+    "textureCompressionBC", "occlusionQueryPrecise", "pipelineStatisticsQuery",
+    "vertexPipelineStoresAndAtomics", "fragmentStoresAndAtomics",
+    "shaderTessellationAndGeometryPointSize", "shaderImageGatherExtended",
+    "shaderStorageImageExtendedFormats", "shaderStorageImageMultisample",
+    "shaderStorageImageReadWithoutFormat", "shaderStorageImageWriteWithoutFormat",
+    "shaderUniformBufferArrayDynamicIndexing", "shaderSampledImageArrayDynamicIndexing",
+    "shaderStorageBufferArrayDynamicIndexing", "shaderStorageImageArrayDynamicIndexing",
+    "shaderClipDistance", "shaderCullDistance", "shaderFloat64", "shaderInt64", "shaderInt16",
+    "shaderResourceResidency", "shaderResourceMinLod", "sparseBinding", "sparseResidencyBuffer",
+    "sparseResidencyImage2D", "sparseResidencyImage3D", "sparseResidency2Samples",
+    "sparseResidency4Samples", "sparseResidency8Samples", "sparseResidency16Samples",
+    "sparseResidencyAliased", "variableMultisampleRate", "inheritedQueries",
+};
+static_assert(std::size(core_feature_names) * sizeof(VkBool32) == sizeof(VkPhysicalDeviceFeatures),
+        "core_feature_names must name every member of VkPhysicalDeviceFeatures");
+
+/* Answers the VkBool32 members of a feature structure, read from byte `begin` to byte `end`.
+21-10-2026-03:56 */
+inline std::vector<VkBool32> feature_bools(const void *feature_struct, size_t begin, size_t end) {
+    std::vector<VkBool32> ret((end - begin) / sizeof(VkBool32));
+    memcpy(ret.data(), (const char *)feature_struct + begin, ret.size() * sizeof(VkBool32));
+    return ret;
+}
+
+/* Answers the index of the first member `want` sets to VK_TRUE that `have` does not, or -1 when
+`have` holds all of `want`. `have` is what the GPU wrote over slots filled with ones: a slot it
+left untouched is the structure's tail padding, not a member, unless it left every slot untouched,
+which means it does not know the structure and supports none of it. 21-10-2026-03:56 */
+inline int first_missing_feature(const std::vector<VkBool32>& want,
+        const std::vector<VkBool32>& have)
+{
+    bool known = std::any_of(have.begin(), have.end(), [](VkBool32 b) { return b <= VK_TRUE; });
+    for (size_t i = 0; i < want.size(); i++) {
+        bool is_member = !known || have[i] <= VK_TRUE;
+        if (is_member && want[i] == VK_TRUE && have[i] != VK_TRUE)
+            return (int)i;
+    }
+    return -1;
+}
+
+/* Answers, for each structure of `feats.m_chain`, a twin of the same sType, filled with ones, in
+which the GPU has written VK_TRUE or VK_FALSE over every member it knows. 21-10-2026-03:56 */
+inline std::vector<std::vector<uint64_t>> query_feature_chain(VkPhysicalDevice phy_dev,
+        const device_features_t& feats)
+{
+    std::vector<std::vector<uint64_t>> twins;
+    for (auto &c : feats.m_chain) {
+        twins.emplace_back((c.size + sizeof(uint64_t) - 1) / sizeof(uint64_t), ~0ull);
+        auto twin = (VkBaseOutStructure *)twins.back().data();
+        twin->sType = ((const VkBaseOutStructure *)c.ptr.get())->sType;
+        twin->pNext = nullptr;
+    }
+    VkPhysicalDeviceFeatures2 query {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+        .pNext = nullptr,
+        .features = {},
+    };
+    for (auto it = twins.rbegin(); it != twins.rend(); ++it) {
+        auto twin = (VkBaseOutStructure *)it->data();
+        twin->pNext = (VkBaseOutStructure *)query.pNext;
+        query.pNext = twin;
+    }
+    vkGetPhysicalDeviceFeatures2(phy_dev, &query);
+    return twins;
+}
+
+/* Answers the name of the feature structure of `stype` when Vulkan 1.2 absorbed it into
+VkPhysicalDeviceVulkan12Features, or nullptr when it did not. 21-10-2026-06:06 */
+inline const char *absorbed_by_vulkan12(VkStructureType stype) {
+    switch (stype) {
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES:
+            return "VkPhysicalDevice8BitStorageFeatures";
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES:
+            return "VkPhysicalDeviceShaderAtomicInt64Features";
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES:
+            return "VkPhysicalDeviceShaderFloat16Int8Features";
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES:
+            return "VkPhysicalDeviceDescriptorIndexingFeatures";
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES:
+            return "VkPhysicalDeviceScalarBlockLayoutFeatures";
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES:
+            return "VkPhysicalDeviceImagelessFramebufferFeatures";
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFORM_BUFFER_STANDARD_LAYOUT_FEATURES:
+            return "VkPhysicalDeviceUniformBufferStandardLayoutFeatures";
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_EXTENDED_TYPES_FEATURES:
+            return "VkPhysicalDeviceShaderSubgroupExtendedTypesFeatures";
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SEPARATE_DEPTH_STENCIL_LAYOUTS_FEATURES:
+            return "VkPhysicalDeviceSeparateDepthStencilLayoutsFeatures";
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES:
+            return "VkPhysicalDeviceHostQueryResetFeatures";
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES:
+            return "VkPhysicalDeviceTimelineSemaphoreFeatures";
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES:
+            return "VkPhysicalDeviceBufferDeviceAddressFeatures";
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES:
+            return "VkPhysicalDeviceVulkanMemoryModelFeatures";
+        default:
+            return nullptr;
+    }
+}
+
+/* Throws vku::except_t naming the first structure of `feats.m_chain` that Vulkan 1.2 absorbed,
+since the device chains its own VkPhysicalDeviceVulkan12Features and Vulkan refuses a chain
+holding both. 21-10-2026-06:06 */
+inline void refuse_absorbed_features(const device_features_t& feats) {
+    for (auto &c : feats.m_chain) {
+        auto stype = ((const VkBaseOutStructure *)c.ptr.get())->sType;
+        if (const char *name = absorbed_by_vulkan12(stype))
+            throw except_t(std::format("{} cannot be asked for: Vulkan 1.2 absorbed it, so its "
+                    "features are asked through VkPhysicalDeviceVulkan12Features", name));
+    }
+}
+
+inline void check_device_features(VkPhysicalDevice phy_dev, const device_features_t& feats) {
+    refuse_absorbed_features(feats);
+    VkPhysicalDeviceFeatures have_core;
+    vkGetPhysicalDeviceFeatures(phy_dev, &have_core);
+    int missing = first_missing_feature(
+            feature_bools(&feats.m_core, 0, sizeof(VkPhysicalDeviceFeatures)),
+            feature_bools(&have_core, 0, sizeof(VkPhysicalDeviceFeatures)));
+    if (missing >= 0)
+        throw except_t(std::format("The GPU lacks the device feature {}",
+                core_feature_names[missing]));
+
+    auto twins = query_feature_chain(phy_dev, feats);
+    for (size_t i = 0; i < feats.m_chain.size(); i++) {
+        auto &c = feats.m_chain[i];
+        auto stype = ((const VkBaseOutStructure *)c.ptr.get())->sType;
+        missing = first_missing_feature(
+                feature_bools(c.ptr.get(), sizeof(VkBaseOutStructure), c.size),
+                feature_bools(twins[i].data(), sizeof(VkBaseOutStructure), c.size));
+        if (missing >= 0)
+            throw except_t(std::format("The GPU lacks member {} (counted from 0) of the feature "
+                    "structure of sType {}", missing, (int)stype));
+    }
+}
+
+inline void *link_device_features(const device_features_t& feats) {
+    void *head = nullptr;
+    for (auto it = feats.m_chain.rbegin(); it != feats.m_chain.rend(); ++it) {
+        auto s = (VkBaseOutStructure *)it->ptr.get();
+        if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES)
+            continue;
+        s->pNext = (VkBaseOutStructure *)head;
+        head = s;
+    }
+    return head;
+}
+
 #ifdef VKU_HAS_NEW_GLSLANG
 
-inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
+inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code,
+        std::string *err_log)
+{
     VK_ASSERT(init());
     DBG("NEW GLSLANG COMPILE");
+    if (err_log)
+        err_log->clear();
 
     glslang_stage_t gs_stage;
     switch (vku_stage) {
@@ -5911,6 +6909,8 @@ inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
         DBG("info_log: %s", glslang_shader_get_info_log(shader));
         DBG("debug_log: %s", glslang_shader_get_info_debug_log(shader));
         DBG("source_code: %s", input.code);
+        spirv_log_append(err_log, glslang_shader_get_info_log(shader),
+                glslang_shader_get_info_debug_log(shader));
         glslang_shader_delete(shader);
         throw vku::except_t("GLSL preprocessing failed");
     }
@@ -5924,7 +6924,12 @@ inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
         return ret;
     };
 
-    if (!glslang_shader_parse(shader, &input)) {
+    /* The shader's log is read once, after parsing, since it also holds what preprocessing
+    wrote. 21-10-2026-03:56 */
+    bool parsed = glslang_shader_parse(shader, &input);
+    spirv_log_append(err_log, glslang_shader_get_info_log(shader),
+            glslang_shader_get_info_debug_log(shader));
+    if (!parsed) {
         DBG("GLSL parsing failed");
         DBG("%s", glslang_shader_get_info_log(shader));
         DBG("%s", glslang_shader_get_info_debug_log(shader));
@@ -5936,7 +6941,11 @@ inline spirv_t spirv_compile(vku_shader_stage_e vku_stage, const char *code) {
     glslang_program_t* program = glslang_program_create();
     glslang_program_add_shader(program, shader);
 
-    if (!glslang_program_link(program, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT)) {
+    bool linked = glslang_program_link(program,
+            GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT);
+    spirv_log_append(err_log, glslang_program_get_info_log(program),
+            glslang_program_get_info_debug_log(program));
+    if (!linked) {
         DBG("%s", glslang_program_get_info_log(program));
         DBG("%s", glslang_program_get_info_debug_log(program));
         glslang_program_delete(program);
@@ -6078,8 +7087,10 @@ inline void spirv_uninit() {
 
 #else /* VKU_HAS_NEW_GLSLANG */
 
-inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code) {
+inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code, std::string *err_log) {
     VK_ASSERT(init());
+    if (err_log)
+        err_log->clear();
 
     EShLanguage esh_stage;
     switch (stage) {
@@ -6101,14 +7112,18 @@ inline spirv_t spirv_compile(vku_shader_stage_e stage, const char *code) {
     EShMessages messages = (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules);
 
     shader.setStrings(shader_strings, 1);
-    if (!shader.parse(&spirv_resources, 100, false, messages)) {
+    bool parsed = shader.parse(&spirv_resources, 100, false, messages);
+    spirv_log_append(err_log, shader.getInfoLog(), shader.getInfoDebugLog());
+    if (!parsed) {
         DBG("Parse Failed(Log): [%s]", shader.getInfoLog());
         DBG("Parse Failed(Dbg): [%s]", shader.getInfoDebugLog());
         throw vku::except_t(VK_ERROR_UNKNOWN);
     }
 
     program.addShader(&shader);
-    if (!program.link(messages)) {
+    bool linked = program.link(messages);
+    spirv_log_append(err_log, program.getInfoLog(), program.getInfoDebugLog());
+    if (!linked) {
         DBG("Link Failed(Log): [%s]", shader.getInfoLog());
         DBG("Link Failed(Dbg): [%s]", shader.getInfoDebugLog());
         throw vku::except_t(VK_ERROR_UNKNOWN);
@@ -6237,17 +7252,15 @@ inline uint32_t find_memory_type(ref_t<device_t> dev,
     VkPhysicalDeviceMemoryProperties mem_props;
     vkGetPhysicalDeviceMemoryProperties(dev->vk_phy_dev, &mem_props);
 
-    int to_ret = -1;
+    /* Vulkan lists memory types in the driver's order of preference, so the first type that fits
+    is the one to take, type 0 included; taking the last one put device-local buffers in a small
+    host-visible heap. 21-10-2026-02:44 */
     for (uint32_t i = 0; i < mem_props.memoryTypeCount; i++) {
-        if (type_filter & (1 << i)
+        if (type_filter & (1u << i)
                 && (mem_props.memoryTypes[i].propertyFlags & properties) == properties
                 && mem_props.memoryHeaps[mem_props.memoryTypes[i].heapIndex].size >= sz)
-        {
-            to_ret = i;
-        }
+            return i;
     }
-    if (to_ret > 0)
-        return to_ret;
 
     DBG("Couldn't find suitable memory type");
     throw vku::except_t(VK_ERROR_UNKNOWN);
