@@ -214,13 +214,15 @@ inline void present(
         std::vector<ref_t<sem_t>> wait_sems,
         uint32_t img_idx);
 
-/* if no command buffer is provided, one will be allocated from the command pool */
+/* if no command buffer is provided, one will be allocated from the command pool; the copy lands
+at dst_off in dst, at its start when left out. 21-10-2026-06:59 */
 inline void copy_buff(
         ref_t<cmdpool_t> cp,
         ref_t<buffer_t> dst,
         ref_t<buffer_t> src,
         VkDeviceSize sz,
-        ref_t<cmdbuff_t> /* optional */ cbuff);
+        ref_t<cmdbuff_t> /* optional */ cbuff,
+        VkDeviceSize dst_off = 0);
 
 vc::ref_t<vku::image_t> load_image(vc::ref_t<vku::cmdpool_t> cp, std::string path);
 
@@ -375,7 +377,8 @@ struct pipeline_state_t {
 
 /*!
  * @brief Holds what a program asks of a swapchain beyond vku's own choices: the format of its
- * images, how they are presented, and what else they are used for.
+ * images, how they are presented, what else they are used for, and how many samples each pixel
+ * is drawn with.
  *
  * Core:
  *   - `m_format` is taken when the surface offers it in the sRGB non-linear colour space; else the
@@ -385,15 +388,28 @@ struct pipeline_state_t {
  *   - `m_extra_usage` is asked of the images beside their use as colour attachments, such as
  *     VK_IMAGE_USAGE_TRANSFER_SRC_BIT to read a picture back; a use the surface does not offer
  *     makes swapchain_t::create throw.
- *   - The defaults, B8G8R8A8_SRGB and MAILBOX, are what swapchain_t chose before these options
- *     existed.
+ *   - `m_samples` is how many samples each pixel is drawn with. At 1 sample the render pass draws
+ *     straight into the swapchain's images. Above 1 the swapchain also holds a multisampled colour
+ *     image, its depth image takes as many samples, and the render pass draws into those two and
+ *     resolves the colour into the swapchain's image, which smooths the edges of what is drawn;
+ *     the swapchain's images are presented and copied as at 1 sample (added 21-10-2026-23:10).
+ *   - The defaults, B8G8R8A8_SRGB, MAILBOX and 1 sample, are what swapchain_t chose before these
+ *     options existed.
  *
- * @date 21-10-2026-04:43
+ * Detail:
+ *   - A count the device cannot draw both colour and depth with, by its
+ *     framebufferColorSampleCounts and framebufferDepthSampleCounts, is lowered to the highest
+ *     count below it that the device can, as a format or a present mode the surface lacks gives
+ *     way to one it has; swapchain_t::vk_samples tells the count in use. A value that is not a
+ *     count of samples, a power of two from 1 to 64, makes swapchain_t::create throw, naming it.
+ *
+ * @date 21-10-2026-23:10
  */
 struct swapchain_opts_t {
-    VkFormat            m_format       = VK_FORMAT_B8G8R8A8_SRGB;
-    VkPresentModeKHR    m_present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
-    VkImageUsageFlags   m_extra_usage  = 0;
+    VkFormat                m_format       = VK_FORMAT_B8G8R8A8_SRGB;
+    VkPresentModeKHR        m_present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
+    VkImageUsageFlags       m_extra_usage  = 0;
+    VkSampleCountFlagBits   m_samples      = VK_SAMPLE_COUNT_1_BIT;
 };
 
 struct vertex_input_desc_t {
@@ -773,30 +789,42 @@ private:
  * Members:
  * - m_device: Reference to a device_t object. The device used to create and manage 
  *   the swapchain.
- * - m_depth_imag: Reference to a depth image used for depth testing (automatically created).
+ * - m_depth_imag: The depth image the render pass tests against, the size of the swapchain's
+ *   images and holding vk_samples samples a pixel (automatically created).
  * - m_depth_view: Reference to an image view for the depth image (automatically created).
- * - m_opts: The format, present mode and extra image use the creator asked for
- *   (see swapchain_opts_t).
+ * - m_msaa_imag, m_msaa_view: Above one sample, the multisampled colour image the render pass
+ *   draws into and resolves into the swapchain's image, and its view; null at one sample
+ *   (added 21-10-2026-23:10).
+ * - vk_samples: How many samples each pixel is drawn with: m_opts.m_samples, or the highest
+ *   count below it that the device can draw (added 21-10-2026-23:10).
+ * - m_opts: The format, present mode, extra image use and count of samples the creator asked
+ *   for (see swapchain_opts_t).
  *
  * Init: create(device, surface, opts)
  *   - Parameters:
  *     - device: Reference to the device_t object.
  *     - surface: The surface_t the images are presented to.
- *     - opts: The format, present mode and extra use wanted; vku's own choices by default.
+ *     - opts: The format, present mode, extra use and samples wanted; vku's own choices by
+ *       default.
+ *   - Throws vku::except_t when opts asks for a use the surface lacks, or for a count that is not
+ *     a count of samples.
  *
  * Notes:
- * - Chooses the surface format and present mode from opts, among what the surface offers, and
- *   the image count itself.
+ * - Chooses the surface format, present mode and count of samples from opts, among what the
+ *   surface and the device offer, and the image count itself.
  * - Provides access to the swapchain images and their views for rendering.
  * - uninit() may be called more than once, and init() after it makes the swapchain again; an
  *   init() that throws leaves nothing made (changed 21-10-2026-06:06).
+ * - uninit() lets go of the depth image and the multisampled colour image as well, and init()
+ *   makes them again at the swapchain's new size (changed 21-10-2026-23:10).
  *
- * @date 21-10-2026-06:06
+ * @date 21-10-2026-23:10
  */
 struct swapchain_t : public object_t {
     VkSurfaceFormatKHR          vk_surf_fmt;
     VkPresentModeKHR            vk_present_mode;
     VkExtent2D                  vk_extent;
+    VkSampleCountFlagBits       vk_samples = VK_SAMPLE_COUNT_1_BIT;
     /* Null until made, and again once uninit() destroyed it, so that a creation refused part
     way, or an uninit() run twice, destroys nothing twice. 21-10-2026-06:06 */
     VkSwapchainKHR              vk_swapchain = VK_NULL_HANDLE;
@@ -804,6 +832,8 @@ struct swapchain_t : public object_t {
     std::vector<VkImageView>    vk_sc_image_views;
     ref_t<image_t>              m_depth_imag;
     ref_t<img_view_t>           m_depth_view;
+    ref_t<image_t>              m_msaa_imag;
+    ref_t<img_view_t>           m_msaa_view;
 
     ref_t<device_t>             m_device;
     ref_t<surface_t>            m_surface;
@@ -823,6 +853,10 @@ struct swapchain_t : public object_t {
     vc::ret_t uninit();
 
     uint32_t img_count() { return vk_sc_images.size(); }
+
+    /*! Answers how many samples each pixel is drawn with, vk_samples as a plain number, which is
+    how a Lua script reads it. @date 21-10-2026-23:10 */
+    uint32_t sample_count() const { return (uint32_t)vk_samples; }
 };
 
 /*!
@@ -888,6 +922,9 @@ private:
  * Members:
  * - m_swapchain: Reference to a swapchain_t object. The swapchain whose images 
  *   will be rendered into using this render pass.
+ * - vk_samples: How many samples each pixel is drawn with, the swapchain's vk_samples when the
+ *   render pass was made; a pipeline_t made for this render pass draws with as many
+ *   (added 21-10-2026-23:10).
  *
  * Init: create(swc)
  *   - Parameters:
@@ -895,11 +932,21 @@ private:
  *
  * Notes:
  * - Handles attachment descriptions, subpass definitions, and dependencies automatically.
+ * - At one sample it draws into the swapchain's image. Above one it draws into the swapchain's
+ *   multisampled colour and depth images and resolves the colour into the swapchain's image. At
+ *   any count it leaves the swapchain's image ready to present, or to be copied by
+ *   cmdbuff_t::copy_swc_img_to_buff() (added 21-10-2026-23:10).
+ * - A swapchain made again with another count of samples needs its render pass made again,
+ *   through uninit() and init(), and the pipelines and framebuffers made for it after that
+ *   (added 21-10-2026-23:10).
+ *
+ * @date 21-10-2026-23:10
  */
 struct renderpass_t : public object_t {
-    VkRenderPass        vk_render_pass;
+    VkRenderPass            vk_render_pass;
+    VkSampleCountFlagBits   vk_samples = VK_SAMPLE_COUNT_1_BIT;
 
-    ref_t<swapchain_t>  m_swapchain;
+    ref_t<swapchain_t>      m_swapchain;
 
     renderpass_t(object_t::Private priv) : object_t(priv) {}
     virtual ~renderpass_t() { uninit(); }
@@ -950,10 +997,14 @@ struct renderpass_t : public object_t {
  *     - cache: A pipeline_cache_t the driver reuses and fills while building; none by default.
  *     - state: The culling, depth test and blending; pipeline_state_t's defaults by default.
  *
+ * Notes:
+ * - The pipeline draws with as many samples a pixel as its render pass, renderpass_t::vk_samples,
+ *   so the count is asked once, of the swapchain (added 21-10-2026-23:10).
+ *
  * TODO:
  * - maybe get rid of m_width, m_height, create new objects for viewport and stuff
  *
- * @date 21-10-2026-04:43
+ * @date 21-10-2026-23:10
  */
 struct pipeline_t : public object_t {
     VkPipeline                      vk_pipeline;
@@ -1064,6 +1115,13 @@ private:
  * Notes:
  * - uninit() may be called more than once, and init() after it makes the framebuffers again; an
  *   init() that throws leaves nothing made (21-10-2026-06:06).
+ * - Each framebuffer holds what its render pass draws into: one swapchain image and the depth
+ *   image, and above one sample the multisampled colour image too (added 21-10-2026-23:10).
+ * - init() throws when the swapchain draws with another count of samples than the render pass
+ *   was made for, as once the swapchain is made again with another count and the render pass is
+ *   not (added 21-10-2026-23:10).
+ *
+ * @date 21-10-2026-23:10
  */
 struct framebuffs_t : public object_t {
     std::vector<VkFramebuffer>  vk_fbuffs;      /* needs separate object framebuffer_t */
@@ -1466,33 +1524,43 @@ private:
  *   how the image will be used.
  * - m_usage: Vulkan usage flags (e.g., VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) indicating 
  *   how the image will be used.
+ * - m_samples: How many samples each texel holds; 1 by default, more for a multisampled image a
+ *   render pass draws into (added 21-10-2026-23:10).
  *
  * Member functions:
  * - transition_layout(cmd_buff, old_layout, new_layout): Records a layout transition
  *   command for this image, changing how the GPU interprets its contents.
  * - set_data(cmd_pool, ptr, size, cmd_buff=nullptr): Copies data from a buffer into the image.
  *
- * Init: create(device, width, height, format, usage)
+ * Init: create(device, width, height, format, usage, tiling, array_layers, samples)
  *   - Parameters:
  *     - device: Reference to the device_t that will own this image.
  *     - width, height: Dimensions of the image.
  *     - format: Image format.
  *     - usage: Usage flags describing intended image use.
+ *     - tiling, array_layers: The image's tiling, optimal by default, and its count of layers, 1
+ *       by default.
+ *     - samples: How many samples each texel holds, 1 by default; above 1 the image must be of
+ *       optimal tiling, and the count one the device offers for its format and usage
+ *       (added 21-10-2026-23:10).
  *
  * TODO:
  * - add m_mem_flags? 
+ *
+ * @date 21-10-2026-23:10
  */
 struct image_t : public object_t {
-    VkImage             vk_img;
-    VkDeviceMemory      vk_img_mem;
+    VkImage                 vk_img = VK_NULL_HANDLE;
+    VkDeviceMemory          vk_img_mem = VK_NULL_HANDLE;
 
-    ref_t<device_t>     m_device;
-    uint32_t            m_width;
-    uint32_t            m_height;
-    VkFormat            m_format;
-    VkImageUsageFlags   m_usage;
-    VkImageTiling       m_tiling;
-    uint32_t            m_array_layers = 1;
+    ref_t<device_t>         m_device;
+    uint32_t                m_width;
+    uint32_t                m_height;
+    VkFormat                m_format;
+    VkImageUsageFlags       m_usage;
+    VkImageTiling           m_tiling;
+    uint32_t                m_array_layers = 1;
+    VkSampleCountFlagBits   m_samples = VK_SAMPLE_COUNT_1_BIT;
 
     image_t(object_t::Private priv) : object_t(priv) {}
     virtual ~image_t() { uninit(); }
@@ -1501,14 +1569,15 @@ struct image_t : public object_t {
     static object_type_e type_id_static() { return VKU_TYPE_IMAGE; }
 
     static ref_t<image_t> create(
-            ref_t<device_t>     dev,
-            uint32_t            width,
-            uint32_t            height,
-            VkFormat            fmt,
-            VkImageUsageFlags   usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT
-                                      | VK_IMAGE_USAGE_SAMPLED_BIT,
-            VkImageTiling       tiling = VK_IMAGE_TILING_OPTIMAL,
-            uint32_t            array_layers = 1);
+            ref_t<device_t>         dev,
+            uint32_t                width,
+            uint32_t                height,
+            VkFormat                fmt,
+            VkImageUsageFlags       usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                                          | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VkImageTiling           tiling = VK_IMAGE_TILING_OPTIMAL,
+            uint32_t                array_layers = 1,
+            VkSampleCountFlagBits   samples = VK_SAMPLE_COUNT_1_BIT);
     virtual std::string to_string() const override;
 
     /* if no command buffer is provided, one will be allocated from the command pool */
@@ -2095,6 +2164,13 @@ inline gpu_family_ids_t find_queue_families(VkPhysicalDevice dev,
         VkSurfaceKHR surface);
 
 inline VkExtent2D choose_extent(GLFWwindow *window, VkSurfaceCapabilitiesKHR capab);
+
+/*! Answers how many samples a pixel a swapchain on `phy_dev` draws with, given the count `asked`:
+ * `asked` when the device can draw both colour and depth with that many, else the highest count
+ * below it that the device can. Throws vku::except_t naming `asked` when it is not a count of
+ * samples, a power of two from 1 to 64. @date 21-10-2026-23:35 */
+inline VkSampleCountFlagBits choose_samples(VkPhysicalDevice phy_dev,
+        VkSampleCountFlagBits asked);
 
 inline int score_phydev(VkPhysicalDevice dev, VkSurfaceKHR surf);
 inline VkShaderStageFlagBits get_shader_type(vku_shader_stage_e own_type);
@@ -2914,6 +2990,24 @@ inline std::string device_t::to_string() const {
 /* swapchain_t
 ================================================================================================= */
 
+/* Makes the images the render pass of `swc` draws into beside the swapchain's own, each the size
+of those and holding swc.vk_samples samples a pixel: the depth image, and above one sample the
+multisampled colour image, which only the render pass touches. 21-10-2026-23:10 */
+inline void make_swc_targets(swapchain_t &swc) {
+    VkExtent2D ext = swc.vk_extent;
+    swc.m_depth_imag = image_t::create(swc.m_device, ext.width, ext.height, VK_FORMAT_D32_SFLOAT,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_TILING_OPTIMAL, 1,
+            swc.vk_samples);
+    swc.m_depth_view = img_view_t::create(swc.m_depth_imag, VK_IMAGE_ASPECT_DEPTH_BIT);
+    if (swc.vk_samples == VK_SAMPLE_COUNT_1_BIT)
+        return;
+    swc.m_msaa_imag = image_t::create(swc.m_device, ext.width, ext.height,
+            swc.vk_surf_fmt.format,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+            VK_IMAGE_TILING_OPTIMAL, 1, swc.vk_samples);
+    swc.m_msaa_view = img_view_t::create(swc.m_msaa_imag, VK_IMAGE_ASPECT_COLOR_BIT);
+}
+
 inline ref_t<swapchain_t> swapchain_t::create(ref_t<device_t> dev, ref_t<surface_t> surf,
         const swapchain_opts_t &opts)
 {
@@ -2950,6 +3044,10 @@ inline vc::ret_t swapchain_t::init() {
     if ((sc_detail.capab.supportedUsageFlags & m_opts.m_extra_usage) != m_opts.m_extra_usage)
         throw except_t(std::format("The surface does not offer the image use {}",
                 vulkan_utils::to_string((VkImageUsageFlagBits)m_opts.m_extra_usage)));
+
+    /* choose sample count: the one m_opts asks for, by default 1, or the highest below it the
+    device can draw colour and depth with (added 21-10-2026-23:10) */
+    vk_samples = choose_samples(m_device->vk_phy_dev, m_opts.m_samples);
 
     /* choose swap extent */
     vk_extent = choose_extent(m_surface->m_window->get_window(), sc_detail.capab);
@@ -3032,9 +3130,7 @@ inline vc::ret_t swapchain_t::init() {
 
     /* TODO: is this still a problem? TODO: this is problematic, here depth_imag is dependent on
     dev and not on swapchain, so if we delete dev we have a double free */
-    m_depth_imag = image_t::create(m_device, vk_extent.width, vk_extent.height,
-            VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
-    m_depth_view = img_view_t::create(m_depth_imag, VK_IMAGE_ASPECT_DEPTH_BIT);
+    make_swc_targets(*this);
 
     DBG("Created Swapchain Images %p", this);
 
@@ -3045,6 +3141,12 @@ inline vc::ret_t swapchain_t::init() {
 inline vc::ret_t swapchain_t::uninit() {
     if (!m_device)
         return VK_SUCCESS;
+    /* The images the render pass draws into beside the swapchain's own go with them, so that a
+    swapchain made again for a new size does not hold the old ones meanwhile. 21-10-2026-23:10 */
+    m_msaa_view = nullptr;
+    m_msaa_imag = nullptr;
+    m_depth_view = nullptr;
+    m_depth_imag = nullptr;
     /* Every handle is forgotten once destroyed, so a second uninit(), as the destructor's after a
     failed init(), destroys nothing again. 21-10-2026-06:06 */
     for (auto &iv : vk_sc_image_views)
@@ -3142,25 +3244,31 @@ inline ref_t<renderpass_t> renderpass_t::create(ref_t<swapchain_t> swc) {
     return ret;
 }
 
-inline vc::ret_t renderpass_t::init() {
-    if (!m_swapchain)
-        throw except_t("Invalid m_swapchain null");
+/* Answers the attachments a render pass of `swc` draws into, in the order its framebuffers hold
+the views: the colour image drawn into, then the depth image, then above one sample the
+swapchain's image, which the colour resolves into; at one sample the colour image drawn into is
+the swapchain's image itself. The swapchain's image is left ready to present, its contents kept;
+the depth image, and above one sample the multisampled colour image, are left ready to be drawn
+into again, their contents dropped. 22-10-2026-01:05 */
+inline std::vector<VkAttachmentDescription> rpass_attachments(ref_t<swapchain_t> swc) {
+    bool msaa = swc->vk_samples != VK_SAMPLE_COUNT_1_BIT;
     VkAttachmentDescription color_attach {
         .flags = 0,
-        .format = m_swapchain->vk_surf_fmt.format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .format = swc->vk_surf_fmt.format,
+        .samples = swc->vk_samples,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .storeOp = msaa ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE,
         .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
         .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .finalLayout = msaa ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                            : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
     };
 
     VkAttachmentDescription depth_attach {
         .flags = 0,
-        .format = m_swapchain->m_depth_view->m_image->m_format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .format = swc->m_depth_view->m_image->m_format,
+        .samples = swc->vk_samples,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
@@ -3168,6 +3276,49 @@ inline vc::ret_t renderpass_t::init() {
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
         .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
     };
+    if (!msaa)
+        return {color_attach, depth_attach};
+
+    VkAttachmentDescription resolve_attach = color_attach;
+    resolve_attach.samples = VK_SAMPLE_COUNT_1_BIT;
+    resolve_attach.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    resolve_attach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    resolve_attach.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    return {color_attach, depth_attach, resolve_attach};
+}
+
+/* Answers the dependency that orders a render pass after the work submitted before it. Every
+framebuffer shares the swapchain's one depth image, and above one sample its one multisampled
+colour image, so a render pass clearing them waits for the writes the render pass submitted before
+it made to them, which end in the late fragment tests and in the colour output; without them in
+the source scope, two frames in flight could write those images at once, which synchronization
+validation reported for the depth image. At one sample the colour image is the swapchain's own,
+which its acquiring orders. 21-10-2026-23:12 */
+inline VkSubpassDependency rpass_dependency(bool msaa) {
+    VkAccessFlags src_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    if (msaa)
+        src_access |= VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    return VkSubpassDependency {
+        .srcSubpass = VK_SUBPASS_EXTERNAL,
+        .dstSubpass = 0,
+        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        .srcAccessMask = src_access,
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        .dependencyFlags = 0,
+    };
+}
+
+inline vc::ret_t renderpass_t::init() {
+    if (!m_swapchain)
+        throw except_t("Invalid m_swapchain null");
+    vk_samples = m_swapchain->vk_samples;
+    bool msaa = vk_samples != VK_SAMPLE_COUNT_1_BIT;
+    std::vector<VkAttachmentDescription> attachments = rpass_attachments(m_swapchain);
 
     /* indexes in color_attach vector, also in shader: layout(location = 0) out vec4 outColor */
     VkAttachmentReference color_attach_ref {
@@ -3180,6 +3331,13 @@ inline vc::ret_t renderpass_t::init() {
         .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
     };
 
+    /* Above one sample the colour drawn into attachment 0 is resolved into attachment 2, the
+    swapchain's image, at the end of the subpass. 21-10-2026-23:12 */
+    VkAttachmentReference resolve_attach_ref {
+        .attachment = 2,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+
     /* subpasses are postprocessing stages, we only use one pass for now */
     VkSubpassDescription subpass {
         .flags = 0,
@@ -3188,31 +3346,13 @@ inline vc::ret_t renderpass_t::init() {
         .pInputAttachments = nullptr,
         .colorAttachmentCount = 1,
         .pColorAttachments = &color_attach_ref,
-        .pResolveAttachments = nullptr,
+        .pResolveAttachments = msaa ? &resolve_attach_ref : nullptr,
         .pDepthStencilAttachment = &depth_attach_ref,
         .preserveAttachmentCount = 0,
         .pPreserveAttachments = nullptr,
     };
 
-    /* Every framebuffer shares the swapchain's one depth image, so a render pass clearing it
-    waits for the depth writes of the render pass submitted before it, which end in the late
-    fragment tests; without them in the source scope, two frames in flight could write the depth
-    image at once, which synchronization validation reported. 21-10-2026-05:15 */
-    VkSubpassDependency dependency {
-        .srcSubpass = VK_SUBPASS_EXTERNAL,
-        .dstSubpass = 0,
-        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        .srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        .dependencyFlags = 0,
-    };
-
-    std::array<VkAttachmentDescription, 2> attachments = {color_attach, depth_attach};
+    VkSubpassDependency dependency = rpass_dependency(msaa);
     VkRenderPassCreateInfo render_pass_info {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
         .pNext = nullptr,
@@ -3370,11 +3510,13 @@ inline vc::ret_t pipeline_t::init() {
         .lineWidth                  = 1.0f,
     };
 
+    /* The pipeline draws with as many samples a pixel as the render pass it is made for, so its
+    caller does not repeat the count (21-10-2026-23:12) */
     VkPipelineMultisampleStateCreateInfo multisample_info {
         .sType                  = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .pNext                  = nullptr,
         .flags                  = 0,
-        .rasterizationSamples   = VK_SAMPLE_COUNT_1_BIT,
+        .rasterizationSamples   = m_renderpass->vk_samples,
         .sampleShadingEnable    = VK_FALSE,
         .minSampleShading       = 1.0f,
         .pSampleMask            = NULL,
@@ -3553,37 +3695,52 @@ inline ref_t<framebuffs_t> framebuffs_t::create(ref_t<renderpass_t> rp){
     return ret;
 }
 
+/* Answers the views framebuffer `i` of swapchain `swc` holds, in the order of its render pass's
+attachments: swapchain image `i` and the depth image, or above one sample the multisampled colour
+image, the depth image and swapchain image `i`, which the colour resolves into. 21-10-2026-23:12 */
+inline std::vector<VkImageView> fbuff_views(ref_t<swapchain_t> swc, size_t i) {
+    VkImageView depth = swc->m_depth_view->vk_view;
+    if (swc->vk_samples == VK_SAMPLE_COUNT_1_BIT)
+        return {swc->vk_sc_image_views[i], depth};
+    return {swc->m_msaa_view->vk_view, depth, swc->vk_sc_image_views[i]};
+}
+
 inline vc::ret_t framebuffs_t::init() {
     if (!m_renderpass)
         throw except_t("Invalid m_renderpass");
-    vk_fbuffs.resize(m_renderpass->m_swapchain->vk_sc_image_views.size());
+    ref_t<swapchain_t> swc = m_renderpass->m_swapchain;
+    /* A swapchain made again with another count of samples no longer fits a render pass made
+    before it, whose attachments hold the old count, so the mismatch is refused by name here
+    rather than by Vulkan. 21-10-2026-23:12 */
+    if (swc->vk_samples != m_renderpass->vk_samples) {
+        uint32_t made = (uint32_t)m_renderpass->vk_samples;
+        throw except_t(std::format("The render pass was made for {} sample{} a pixel and its "
+                "swapchain now draws with {}; the render pass must be made again first",
+                made, made == 1 ? "" : "s", (uint32_t)swc->vk_samples));
+    }
+    vk_fbuffs.resize(swc->vk_sc_image_views.size());
 
     /* A throw part way lets go of the framebuffers made so far, through uninit().
     21-10-2026-06:06 */
     FnScope err_scope([this]{ uninit(); });
     for (size_t i = 0; i < vk_fbuffs.size(); i++) {
-        VkImageView attachs[] = {
-            m_renderpass->m_swapchain->vk_sc_image_views[i],
-            m_renderpass->m_swapchain->m_depth_view->vk_view
-        };
-        
+        std::vector<VkImageView> attachs = fbuff_views(swc, i);
         VkFramebufferCreateInfo fbuff_info {
             .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .pNext = nullptr,
             .flags = 0,
             .renderPass = m_renderpass->vk_render_pass,
-            .attachmentCount = 2,
-            .pAttachments = attachs,
-            .width = m_renderpass->m_swapchain->vk_extent.width,
-            .height = m_renderpass->m_swapchain->vk_extent.height,
+            .attachmentCount = (uint32_t)attachs.size(),
+            .pAttachments = attachs.data(),
+            .width = swc->vk_extent.width,
+            .height = swc->vk_extent.height,
             .layers = 1,
         };
 
         /* The framebuffer is kept only once made, since Vulkan leaves the output of a failed
         creation undefined, and uninit() would destroy whatever it held. 21-10-2026-06:33 */
         VkFramebuffer made_fb = VK_NULL_HANDLE;
-        VK_ASSERT(vkCreateFramebuffer(m_renderpass->m_swapchain->m_device->vk_dev,
-                &fbuff_info, NULL, &made_fb));
+        VK_ASSERT(vkCreateFramebuffer(swc->m_device->vk_dev, &fbuff_info, NULL, &made_fb));
         vk_fbuffs[i] = made_fb;
     }
 
@@ -4327,7 +4484,8 @@ inline ref_t<image_t> image_t::create(
         VkFormat fmt,
         VkImageUsageFlags usage,
         VkImageTiling tiling,
-        uint32_t array_layers)
+        uint32_t array_layers,
+        VkSampleCountFlagBits samples)
 {
     auto ret = std::make_shared<image_t>(object_t::Private{type_id_static()});
     ret->m_device = dev;
@@ -4337,6 +4495,7 @@ inline ref_t<image_t> image_t::create(
     ret->m_usage = usage;
     ret->m_tiling = tiling;
     ret->m_array_layers = array_layers;
+    ret->m_samples = samples;
     VK_ASSERT(ret->init());
     return ret;
 }
@@ -4357,7 +4516,7 @@ inline vc::ret_t image_t::init() {
         },
         .mipLevels = 1,
         .arrayLayers = m_array_layers,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .samples = m_samples,
         .tiling = m_tiling,
         .usage = m_usage,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
@@ -4366,8 +4525,13 @@ inline vc::ret_t image_t::init() {
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
 
-    VK_ASSERT(vkCreateImage(m_device->vk_dev, &image_info, nullptr, &vk_img));
-    FnScope err_scope([&]{ vkDestroyImage(m_device->vk_dev, vk_img, nullptr); });
+    /* The image and its memory are each made into a local and kept only once made, since Vulkan
+    leaves the output of a failed creation undefined; a throw after the image is made lets go of
+    what was made, once, through uninit(). 22-10-2026-02:54 */
+    VkImage made_img = VK_NULL_HANDLE;
+    VK_ASSERT(vkCreateImage(m_device->vk_dev, &image_info, nullptr, &made_img));
+    vk_img = made_img;
+    FnScope err_scope([this]{ uninit(); });
 
     VkMemoryRequirements mem_req;
     vkGetImageMemoryRequirements(m_device->vk_dev, vk_img, &mem_req);
@@ -4380,7 +4544,9 @@ inline vc::ret_t image_t::init() {
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mem_req.size),
     };
 
-    VK_ASSERT(vkAllocateMemory(m_device->vk_dev, &alloc_info, nullptr, &vk_img_mem));
+    VkDeviceMemory made_mem = VK_NULL_HANDLE;
+    VK_ASSERT(vkAllocateMemory(m_device->vk_dev, &alloc_info, nullptr, &made_mem));
+    vk_img_mem = made_mem;
     VK_ASSERT(vkBindImageMemory(m_device->vk_dev, vk_img, vk_img_mem, 0));
 
     DBG("Created Image %p", this);
@@ -4389,8 +4555,14 @@ inline vc::ret_t image_t::init() {
 }
 
 inline vc::ret_t image_t::uninit() {
+    if (!m_device)
+        return VK_SUCCESS;
+    /* Each handle is forgotten once let go, so a second uninit(), as the destructor's after a
+    failed init(), lets go of nothing again. 22-10-2026-02:54 */
     vkDestroyImage(m_device->vk_dev, vk_img, nullptr);
     vkFreeMemory(m_device->vk_dev, vk_img_mem, nullptr);
+    vk_img = VK_NULL_HANDLE;
+    vk_img_mem = VK_NULL_HANDLE;
     return VK_SUCCESS;
 }
 
@@ -5412,7 +5584,7 @@ inline void present(
 }
 
 inline void copy_buff(ref_t<cmdpool_t> cp, ref_t<buffer_t> dst,
-        ref_t<buffer_t> src, VkDeviceSize sz, ref_t<cmdbuff_t> cbuff)
+        ref_t<buffer_t> src, VkDeviceSize sz, ref_t<cmdbuff_t> cbuff, VkDeviceSize dst_off)
 {
     if (!dst)
         throw except_t("Invalid dst buff");
@@ -5427,7 +5599,7 @@ inline void copy_buff(ref_t<cmdpool_t> cp, ref_t<buffer_t> dst,
 
     if (!existing_cbuff)
         cbuff->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-    cbuff->copy_buff(dst, 0, src, 0, sz);
+    cbuff->copy_buff(dst, dst_off, src, 0, sz);
 
     if (!existing_cbuff) {
         cbuff->end();
@@ -6603,6 +6775,28 @@ inline VkExtent2D choose_extent(GLFWwindow *window, VkSurfaceCapabilitiesKHR cap
     ret.height = std::clamp(ret.height, capab.minImageExtent.height, capab.maxImageExtent.height);
 
     return ret;
+}
+
+inline VkSampleCountFlagBits choose_samples(VkPhysicalDevice phy_dev,
+        VkSampleCountFlagBits asked)
+{
+    uint32_t want = (uint32_t)asked;
+    if (want == 0 || want > VK_SAMPLE_COUNT_64_BIT || (want & (want - 1)) != 0)
+        throw except_t(std::format("{} is not a count of samples: a pixel is drawn with 1, 2, 4, "
+                "8, 16, 32 or 64", want));
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(phy_dev, &props);
+    /* Vulkan marks each count of samples a device can draw with by the bit of the same value,
+    and every device can draw with one sample. 21-10-2026-23:12 */
+    VkSampleCountFlags can = props.limits.framebufferColorSampleCounts
+            & props.limits.framebufferDepthSampleCounts;
+    uint32_t got = want;
+    while (got > 1 && !(can & got))
+        got >>= 1;
+    if (got != want)
+        DBG("The device cannot draw colour and depth with %u samples a pixel, so the swapchain "
+                "draws with %u, the most it can below that", want, got);
+    return (VkSampleCountFlagBits)got;
 }
 
 inline int score_phydev(VkPhysicalDevice dev, VkSurfaceKHR surf) {

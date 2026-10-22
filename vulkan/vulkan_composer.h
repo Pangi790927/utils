@@ -649,10 +649,11 @@ inline uint32_t internal_device_wait_handle(vku::ref_t<vku::device_t> dev) {
     return vkDeviceWaitIdle(dev->vk_dev);
 }
 
+/* Copies len bytes from src in the processor's memory to dst on the card, at off bytes into dst,
+through a staging buffer, and waits for the copy. 21-10-2026-06:59 */
 inline int copy_from_cpu_to_gpu(vku::ref_t<vku::cmdpool_t> cp, vku::ref_t<vku::buffer_t> dst,
         void *src, size_t len, size_t off)
 {
-    (void)off;
     auto staging_vbuff = vku::buffer_t::create(
         cp->m_device,
         len,
@@ -662,16 +663,7 @@ inline int copy_from_cpu_to_gpu(vku::ref_t<vku::cmdpool_t> cp, vku::ref_t<vku::b
     );
     memcpy(staging_vbuff->map_data(0, len), src, len);
     staging_vbuff->unmap_data();
-
-    auto vbuff = vku::buffer_t::create(
-        cp->m_device,
-        len,
-        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_SHARING_MODE_EXCLUSIVE,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-    );
-    /* TODO: add offsets to copy_buff */
-    vku::copy_buff(cp, dst, staging_vbuff, len, nullptr);
+    vku::copy_buff(cp, dst, staging_vbuff, len, nullptr, off);
     return 0;
 }
 
@@ -888,6 +880,9 @@ inline int register_meta(vc::virt_state_t *vs) {
     // /* vkc::buffer_t
     // ----------------------------------------------------------------------------------------- */
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::swapchain_t, img_count);
+    /* A script reads how many samples each pixel is drawn with, which may be fewer than its
+    m_samples asked for. 21-10-2026-23:12 */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::swapchain_t, sample_count);
 
     // /* vkc::buffer_t
     // ----------------------------------------------------------------------------------------- */
@@ -1470,7 +1465,14 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
             auto surf = co_await resolve_obj<vku::surface_t>(vs, node["m_surface"]);
-            auto obj = vku::swapchain_t::create(dev, surf);
+            /* The optional m_samples is how many samples each pixel is drawn with, a number such
+            as 4, as swapchain_opts_t's m_samples is; 1 when left out. A Lua table given to
+            vc.create_object() takes it alike. 21-10-2026-23:12 */
+            vku::swapchain_opts_t opts;
+            opts.m_samples = node["m_samples"].is_null()
+                    ? VK_SAMPLE_COUNT_1_BIT
+                    : (VkSampleCountFlagBits)co_await resolve_int(vs, node["m_samples"]);
+            auto obj = vku::swapchain_t::create(dev, surf, opts);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }

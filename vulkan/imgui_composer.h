@@ -75,11 +75,14 @@ constexpr uint32_t IMGUI_VK_POOL_SIZE = 16;
  * Core:
  *   - ImGui reads the input of `win` and draws into subpass 0 of `rp`, on the device and the
  *     swapchain `rp` was made for, with as many images in flight as that swapchain holds.
+ *   - ImGui draws with as many samples a pixel as `rp`, renderpass_t::vk_samples; a render pass
+ *     made again for another count needs vk_shutdown() and vk_init() again, since ImGui builds
+ *     its pipeline here (added 21-10-2026-23:12).
  *   - With `install_callbacks`, ImGui's GLFW backend installs its own GLFW callbacks, which call
  *     those the program installed before, as ImGui_ImplGlfw_InitForVulkan() does.
  *   - The ImGui context must exist; a failed start leaves no backend running.
  *
- * @date 21-10-2026-04:47
+ * @date 21-10-2026-23:12
  */
 inline bool vk_init(vku::ref_t<vku::window_t> win, vku::ref_t<vku::renderpass_t> rp,
         bool install_callbacks)
@@ -104,6 +107,7 @@ inline bool vk_init(vku::ref_t<vku::window_t> win, vku::ref_t<vku::renderpass_t>
     info.ImageCount = info.MinImageCount;
     info.PipelineInfoMain.RenderPass = rp->vk_render_pass;
     info.PipelineInfoMain.Subpass = 0;
+    info.PipelineInfoMain.MSAASamples = rp->vk_samples;
     if (ImGui_ImplVulkan_Init(&info))
         return true;
     ImGui_ImplGlfw_Shutdown();
