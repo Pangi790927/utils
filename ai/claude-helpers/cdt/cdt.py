@@ -27,10 +27,10 @@ already -- and where the next turn would start.
 Usage:
     cdt [--dry]                    inside a session (`! cdt`): through cst's switch, a helper
                                    waits until it is idle, ends it, drops, and brings it back by
-                                   itself -- on Linux, through the cst.bash function as cst does
+                                   itself -- on Linux, through the cst.bash hook as cst does
     cdt SESSION.jsonl|ID [--dry]   a session no claude is writing to
 
-@date 15-10-2026-12:00, 24-10-2026-19:25
+@date 15-10-2026-12:00, 24-10-2026-19:25, 27-10-2026-18:40
 """
 
 import argparse

@@ -89,39 +89,62 @@ answers were recalled. The in-session switch is cst's own (on Linux tested live,
 `cdt/cdt.log`. Launchers `cdt` / `cdt.cmd` also live in `~/workspace/claude-utils/` (Windows) and
 as `~/.local/bin/cdt` (Linux). 24-10-2026-19:25
 
-**On Linux** (24-10-2026, Claude Code 2.1.310; this replaces the notes of 14-10-2026, which did not
-hold up). Claude Code runs a session in one of two ways, and cst ends and brings back each its own
-way; cdt uses the same switch.
+**On Linux** (24-10-2026, Claude Code 2.1.310; the shell hook since 27-10-2026, 2.1.311). Claude
+Code runs a session in one of two ways, and cst ends and brings back each its own way; cdt uses
+the same switch.
 
-- **In a terminal**, `claude` is a child of the terminal's shell. Nothing can type into another
-  terminal (TIOCSTI is off: `/proc/sys/dev/tty/legacy_tiocsti` is 0), so the helper ends the
-  session with SIGTERM, which Claude Code takes as a clean shutdown, and the `claude` function of
-  `cst/cst.bash`, sourced from `~/.bashrc`, starts it again. The function runs claude with
-  `CST_SHELL` set to its shell's pid; whenever claude exits it runs
-  `cst.py --take-request <pid> -- <args>`, which answers, once the session is rewritten, the
-  arguments to run claude with again: the same options and `--resume <id>`, without a prompt given
-  on the command line (`claude .` does not send "." again) or an option that picks, forks or
-  backgrounds a session. The helper leaves the request in `cst/requests/<id>.json`, "pending"
-  before it ends the session and "ready" after the rewrite, and the function takes only one that
-  names its own shell. cst and cdt refuse to run in a terminal session the function did not
-  start, since nothing would bring it back.
+- **In a terminal**, `claude` runs under the terminal's shell, and nothing else can type into
+  that terminal. TIOCSTI works only on a process's own controlling terminal, and Claude Code runs
+  a command in a new session that has none; kernels from 6.2 turn TIOCSTI off altogether
+  (`/proc/sys/dev/tty/legacy_tiocsti` 0). Yama (`ptrace_scope` 1) keeps ptrace and the terminal
+  emulator's pty master out of reach as well. So the helper ends the session with SIGTERM, which
+  Claude Code takes as a clean shutdown, and the shell brings it back, through the prompt hook of
+  `cst/cst.bash` (next point). cst and cdt refuse to run when no shell above the session's claude
+  has that hook, since nothing would bring it back. 27-10-2026-18:40
+- **The hook.** Sourced from `~/.bashrc`, or by hand in a shell already open, `cst/cst.bash` leaves
+  a marker, `$XDG_RUNTIME_DIR/cst/shell.<pid>`, holding the shell's start time, so that a later
+  process given the same pid never counts; and it adds `__cst_prompt` to `PROMPT_COMMAND`. cst
+  takes the nearest shell above the session's claude whose marker names it. Before it ends the
+  session, the helper leaves that shell `$XDG_RUNTIME_DIR/cst/request.<pid>`, "pending", with the
+  arguments to run claude with again: the same options, read from `/proc/<pid>/cmdline`, and
+  `--resume <id>`, without a prompt given on the command line (`claude .` does not send "."
+  again) or an option that picks, forks or backgrounds a session. After the rewrite it marks the
+  request "ready". At the first prompt after that claude has exited, the hook waits for "ready"
+  (180 s at most) and runs claude again; it loops, so a session that came back and is ended again
+  comes back as well. Any claude under the shell comes back, however it was started
+  (`command claude`, a full path, a script). In a shell already open, Ctrl+Z, `. cst/cst.bash`
+  and `fg` give the hook to a claude running there, without restarting it. The hook replaces the
+  `claude()` wrapper of 14-10-2026, which brought back only a claude started through it, in a
+  shell that had it at the time; sourcing the new `cst.bash` removes that wrapper.
+  27-10-2026-18:40
 - **In the background** (`claude --bg`, the agent view), the daemon runs the session on a terminal
   of its own, behind a `claude bg-pty-host` relay, shown only while a terminal runs
   `claude attach <id>`. The helper finds its short id in `claude agents --json`, ends it with
   `claude stop <id>` (the conversation stays; an attached terminal prints the resume hint and
   returns to its shell), and brings it back with `claude --bg --resume <session id>`, which keeps
-  the short id and the session's saved options. A terminal that attached through the function
-  attaches again by itself; any other, or the agent view, opens it again with `claude attach <id>`.
+  the short id and the session's saved options. Before the stop, the helper finds in `/proc` each
+  `claude attach <id or name>` showing the session and leaves a request for the shell above it,
+  which then runs that `claude attach` again by itself; any other terminal, or the agent view,
+  opens it again with `claude attach <id>`. `claude respawn <id>` (2.1.311) is no shortcut: it
+  stops and starts the session in one step, so the rewrite cannot come between the two, and it
+  drops attached terminals all the same (tested 27-10-2026). 27-10-2026-18:40
 - **Idle** means no write to the file for 8 s, the last message a finished answer, and
   `claude agents --json` showing the session idle. From 2.1.303 on, Claude Code answers a `!`
   command's output with a turn of its own, so that output no longer means idle by itself; for a
   version that answers none, it counts after 60 s.
 - `~/.local/bin/cst` and `~/.local/bin/cdt` are links to `cst/cst` and `cdt/cdt`, which pick
-  `python3` on Linux and `python` on Windows.
+  `python3` on Linux and `python` on Windows. Make them with `ln -s` on a machine that lacks them:
+  on pangipc `~/.local/bin/cdt` was missing (27-10-2026).
 - Tested 24-10-2026 on throwaway Haiku sessions driven through a pseudo-terminal: cst and cdt, each
-  on a terminal session and on a background one attached through the function. Each came back by
-  itself, 15 to 18 s after the `!` command (the summary by Haiku), resumed from the summary (cst)
-  or without any thinking (cdt), and recalled what was said before the switch.
+  on a terminal session and on a background one attached through the wrapper of then. Each came
+  back by itself, 15 to 18 s after the `!` command (the summary by Haiku), resumed from the summary
+  (cst) or without any thinking (cdt), and recalled what was said before the switch.
+- Tested 27-10-2026 with the hook, Claude Code 2.1.311, on throwaway Haiku sessions driven through
+  a pseudo-terminal: cst twice in a row in a terminal (the second came back without a key pressed,
+  through the hook's loop), then Ctrl+Z and `fg` in the claude the hook had started; a shell
+  without the hook (cst refused; after Ctrl+Z, `. cst/cst.bash` and `fg` it came back); cdt; and
+  cst inside a background session from a terminal attached to it, which attached again by itself.
+  Each came back 13 to 17 s after the `!` command and recalled what was said before the switch.
 - From 2.1.300 on, a session file also holds `api-request`, `api-request-blob` and
   `api-request-shape` records, a log of the requests sent. Resume still loads the conversation
   from the user/assistant chain, so the trim and the drop work as before (the tests above).
