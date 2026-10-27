@@ -316,11 +316,13 @@ struct luaw_returner_t<VkResult> {
 
 /* This is not really usefull, but an example on how to add new parameters: (obs: longer ones should
 be implemented bellow, like the functions above) */
-template <ssize_t index>
-struct luaw_param_t<VkResult, index> {
-    VkResult luaw_single_param(lua_State *L) {
+/* The stack index became an argument of luaw_single_param when virt_composer's luaw_param_t
+dropped it as a template parameter; this specialization follows. 21-10-2026-04:02 */
+template <>
+struct luaw_param_t<VkResult> : luaw_param_base_t {
+    VkResult luaw_single_param(lua_State *L, ssize_t index) {
         int valid;
-        return (VkResult)lua_tointegerx(L, index, &valid);
+        return (VkResult)lua_tointegerx(L, (int)index, &valid);
     }
 };
 
@@ -517,6 +519,31 @@ inline std::string get_file_string_content(const std::string& file_path_relative
                        (std::istreambuf_iterator<char>()));
 }
 
+/*!
+ * @brief Compiles the GLSL of a spirv node, so that a source glslang refuses is reported with
+ * glslang's own errors.
+ *
+ * Core:
+ *   - A refused source throws vku::except_t whose message is glslang's log, with the line of
+ *     each error.
+ *
+ * @param stage The shader stage the node names.
+ * @param code  The GLSL source.
+ *
+ * @return The SPIR-V vku::spirv_compile produced.
+ *
+ * @date 21-10-2026-04:23
+ */
+inline vku::spirv_t compile_glsl_node(vku_shader_stage_e stage, const std::string& code) {
+    std::string log;
+    try {
+        return vku::spirv_compile(stage, code.c_str(), &log);
+    }
+    catch (vku::except_t &) {
+        throw vku::except_t("glslang refused the shader:\n" + log);
+    }
+}
+
 inline bool build_pseudo_object_match(const std::string&, fkyaml::node& node) {
     if (node.is_mapping() && node.contains("m_shader_type")) {
         return true;
@@ -531,9 +558,9 @@ inline co::task_t build_pseudo_object_cbk(vc::virt_state_t *vs, const std::strin
         vku::spirv_t spirv;
 
         if (node.contains("m_source")) {
-            spirv = vku::spirv_compile(
+            spirv = compile_glsl_node(
                     get_from_map(vc::shader_stage_from_string, node["m_shader_type"].as_str()),
-                    node["m_source"].as_str().c_str());
+                    node["m_source"].as_str());
         }
 
         if (node.contains("m_source_path")) {
@@ -542,9 +569,9 @@ inline co::task_t build_pseudo_object_cbk(vc::virt_state_t *vs, const std::strin
                         "source-path, or spirv-path allowed)");
                 co_return -1;
             }
-            spirv = vku::spirv_compile(
+            spirv = compile_glsl_node(
                     get_from_map(vc::shader_stage_from_string, node["m_shader_type"].as_str()),
-                    get_file_string_content(node["m_source_path"].as_str()).c_str());
+                    get_file_string_content(node["m_source_path"].as_str()));
         }
 
         if (node.contains("m_spirv_path")) {
@@ -581,7 +608,7 @@ inline co::task_t build_pseudo_object_cbk(vc::virt_state_t *vs, const std::strin
         }
         
         if (!spirv.content.size()) {
-            DBG("Spirv shader can't be empty!")
+            DBG("Spirv shader can't be empty!");
             co_return -1;
         }
 
@@ -622,10 +649,11 @@ inline uint32_t internal_device_wait_handle(vku::ref_t<vku::device_t> dev) {
     return vkDeviceWaitIdle(dev->vk_dev);
 }
 
+/* Copies len bytes from src in the processor's memory to dst on the card, at off bytes into dst,
+through a staging buffer, and waits for the copy. 21-10-2026-06:59 */
 inline int copy_from_cpu_to_gpu(vku::ref_t<vku::cmdpool_t> cp, vku::ref_t<vku::buffer_t> dst,
         void *src, size_t len, size_t off)
 {
-    (void)off;
     auto staging_vbuff = vku::buffer_t::create(
         cp->m_device,
         len,
@@ -635,16 +663,7 @@ inline int copy_from_cpu_to_gpu(vku::ref_t<vku::cmdpool_t> cp, vku::ref_t<vku::b
     );
     memcpy(staging_vbuff->map_data(0, len), src, len);
     staging_vbuff->unmap_data();
-
-    auto vbuff = vku::buffer_t::create(
-        cp->m_device,
-        len,
-        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_SHARING_MODE_EXCLUSIVE,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-    );
-    /* TODO: add offsets to copy_buff */
-    vku::copy_buff(cp, dst, staging_vbuff, len, nullptr);
+    vku::copy_buff(cp, dst, staging_vbuff, len, nullptr, off);
     return 0;
 }
 
@@ -657,6 +676,61 @@ inline int copy_from_gpu_to_cpu(void *dst, vku::ref_t<vku::buffer_t> src,
 }
 
 inline void luaw_set_glfw_fields(vc::virt_state_t *vs);
+
+/*!
+ * @brief Reads the optional `m_push_ranges` of a pipeline layout node: a sequence of mappings,
+ * each with `m_stage_flags`, `m_offset` and `m_size`.
+ *
+ * @param vs    The state the node's references and numbers resolve in.
+ * @param node  The pipeline layout node.
+ *
+ * @return The push constant ranges, in the node's order; none when the node has no
+ *         `m_push_ranges`.
+ *
+ * @date 21-10-2026-04:02
+ */
+inline co::task<std::vector<VkPushConstantRange>> resolve_push_ranges(vc::virt_state_t *vs,
+        fkyaml::node& node)
+{
+    std::vector<VkPushConstantRange> ranges;
+    if (node["m_push_ranges"].is_null())
+        co_return ranges;
+    if (!node["m_push_ranges"].is_sequence())
+        throw vc::except_t("m_push_ranges must be an array");
+    for (auto& range : node["m_push_ranges"]) {
+        auto stages = vc::get_enum_val<VkShaderStageFlagBits>(range["m_stage_flags"]);
+        auto offset = co_await resolve_int(vs, range["m_offset"]);
+        auto size = co_await resolve_int(vs, range["m_size"]);
+        ranges.push_back(VkPushConstantRange{
+            .stageFlags = (VkShaderStageFlags)stages,
+            .offset = (uint32_t)offset,
+            .size = (uint32_t)size,
+        });
+    }
+    co_return ranges;
+}
+
+/*!
+ * @brief Reads a sequence of descriptor set layout references, such as a pipeline layout node's
+ * `m_desc_set_layouts`.
+ *
+ * @param vs    The state the references resolve in.
+ * @param node  The sequence; it may be empty.
+ *
+ * @return The set layouts, in the sequence's order, which is the order of their set numbers.
+ *
+ * @date 21-10-2026-04:02
+ */
+inline co::task<std::vector<vku::ref_t<vku::desc_set_layout_t>>> resolve_set_layouts(
+        vc::virt_state_t *vs, fkyaml::node& node)
+{
+    if (!node.is_sequence())
+        throw vc::except_t("m_desc_set_layouts must be an array");
+    std::vector<vku::ref_t<vku::desc_set_layout_t>> layouts;
+    for (auto& sub : node)
+        layouts.push_back(co_await resolve_obj<vku::desc_set_layout_t>(vs, sub));
+    co_return layouts;
+}
 
 inline int register_meta(vc::virt_state_t *vs) {
     DBG_SCOPE();
@@ -770,6 +844,17 @@ inline int register_meta(vc::virt_state_t *vs) {
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_desc_set,
             vc::bm_t<VkPipelineBindPoint>, vku::ref_t<vku::pipeline_layout_t>,
             vku::ref_t<vku::desc_set_t>);
+    /* A script binds several sets at once, records push constants from a cpu_buffer_t's data()
+    and records copies between buffers at offsets. 21-10-2026-04:02 */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_desc_sets,
+            vc::bm_t<VkPipelineBindPoint>, vku::ref_t<vku::pipeline_layout_t>, uint32_t,
+            std::vector<vku::ref_t<vku::desc_set_t>>);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, push_consts,
+            vku::ref_t<vku::pipeline_layout_t>, vc::bm_t<VkShaderStageFlagBits>, uint32_t,
+            uint32_t, void *);
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, copy_buff,
+            vku::ref_t<vku::buffer_t>, VkDeviceSize, vku::ref_t<vku::buffer_t>, VkDeviceSize,
+            VkDeviceSize);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, bind_idx_buff,
             vc::ref_t<vku::buffer_t>, uint64_t, vc::bm_t<VkIndexType>);
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::cmdbuff_t, draw, vku::ref_t<vku::pipeline_t>, uint64_t);
@@ -795,6 +880,9 @@ inline int register_meta(vc::virt_state_t *vs) {
     // /* vkc::buffer_t
     // ----------------------------------------------------------------------------------------- */
     VC_REGISTER_MEMBER_FUNCTION(vs, vku::swapchain_t, img_count);
+    /* A script reads how many samples each pixel is drawn with, which may be fewer than its
+    m_samples asked for. 21-10-2026-23:12 */
+    VC_REGISTER_MEMBER_FUNCTION(vs, vku::swapchain_t, sample_count);
 
     // /* vkc::buffer_t
     // ----------------------------------------------------------------------------------------- */
@@ -1377,7 +1465,14 @@ inline int register_meta(vc::virt_state_t *vs) {
         {
             auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
             auto surf = co_await resolve_obj<vku::surface_t>(vs, node["m_surface"]);
-            auto obj = vku::swapchain_t::create(dev, surf);
+            /* The optional m_samples is how many samples each pixel is drawn with, a number such
+            as 4, as swapchain_opts_t's m_samples is; 1 when left out. A Lua table given to
+            vc.create_object() takes it alike. 21-10-2026-23:12 */
+            vku::swapchain_opts_t opts;
+            opts.m_samples = node["m_samples"].is_null()
+                    ? VK_SAMPLE_COUNT_1_BIT
+                    : (VkSampleCountFlagBits)co_await resolve_int(vs, node["m_samples"]);
+            auto obj = vku::swapchain_t::create(dev, surf, opts);
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
@@ -1479,10 +1574,21 @@ inline int register_meta(vc::virt_state_t *vs) {
         [](vc::virt_state_t *vs, const std::string& node_name, fkyaml::node& node)
             -> co::task<vc::ref_t<vc::object_t>>
         {
-            /* In the future this will not be a simple redirect, but will contain multiple layouts */
-            auto desc_set_layout = co_await resolve_obj<vku::desc_set_layout_t>(
-                    vs, node["m_desc_set_layout"]);
-            auto obj = vku::pipeline_layout_t::create(desc_set_layout);
+            /* A layout of one set names it in m_desc_set_layout; a layout of any number of sets,
+            none included, names them in m_desc_set_layouts, in set order, with m_device beside
+            them. Either takes the optional m_push_ranges. 21-10-2026-04:02 */
+            auto push_ranges = co_await resolve_push_ranges(vs, node);
+            vku::ref_t<vku::pipeline_layout_t> obj;
+            if (node["m_desc_set_layouts"].is_null()) {
+                auto desc_set_layout = co_await resolve_obj<vku::desc_set_layout_t>(
+                        vs, node["m_desc_set_layout"]);
+                obj = vku::pipeline_layout_t::create(desc_set_layout, push_ranges);
+            }
+            else {
+                auto dev = co_await resolve_obj<vku::device_t>(vs, node["m_device"]);
+                auto layouts = co_await resolve_set_layouts(vs, node["m_desc_set_layouts"]);
+                obj = vku::pipeline_layout_t::create(dev, layouts, push_ranges);
+            }
             mark_dependency_solved(vs, node_name, obj->to_related<vku::object_t>());
             co_return obj->to_related<vku::object_t>();
         }
