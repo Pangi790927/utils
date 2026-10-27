@@ -156,6 +156,13 @@ def loaded_uuids(records):
         out |= more
 
 
+def when(rec):
+    """Answers a record's timestamp as a datetime, None when it has none. Moved here from cdt.py,
+    for cst's status as well. @date 15-10-2026-12:00, 27-10-2026-21:55"""
+    t = rec.get("timestamp")
+    return datetime.datetime.fromisoformat(t.replace("Z", "+00:00")) if t else None
+
+
 def content_blocks(rec, kind):
     """Answers the content blocks of type `kind` in a record's message, [] when it has none.
     @date 11-10-2026-23:39"""

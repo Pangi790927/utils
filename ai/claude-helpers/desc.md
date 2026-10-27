@@ -48,6 +48,9 @@ The tools
 | `cdt/`                        | Claude drop thought: drops the reasoning from a session, in      |
 |                               | place, every other word kept; `! cdt` does it to the session it  |
 |                               | is run from and resumes it (below).                              |
+| `statusline/`                 | A status line that shows the context in use, and what cst or cdt |
+|                               | is doing to the session, with a timer; `install.py` puts it into |
+|                               | the Claude Code settings (below).                                |
 | `paired/`                     | A copy of the game studio's runner, without the game, with a     |
 |                               | README on how to reinstate it.                                   |
 
@@ -152,6 +155,48 @@ the same switch.
 A trim loses the reasoning of the half it keeps (an API-side limit, measured 14-10-2026), so it
 lands at about 0.35 x the start with `--keep 0.5` in a session that thinks a lot; the idea of adding
 Claude Code's native compact summary is in `cst/feature-compact.md`.
+
+### statusline -- the context, and cst or cdt at work, in the status line
+
+`python3 statusline/install.py` installs it on a PC, Linux only. It sets the status line in
+`~/.claude/settings.json` (or the one under `CLAUDE_CONFIG_DIR`) to `statusline.py`, named by its
+absolute path in this checkout, re-run every second. Every other setting stays as it was, and a
+second run changes nothing. A status line set before is replaced only with `--replace`, and the
+file as it was is kept as `settings.json.bak`; `--dry` prints the result and writes nothing. After
+the checkout moves, a new run points the entry at the new place.
+
+The status line shows one of these:
+
+| Shown                                     | When                                                 |
+|-------------------------------------------|------------------------------------------------------|
+| `60k/1.0M (6%)`                           | The context in use, as of the last reply; blue under |
+|                                           | 60%, yellow under 85%, red above.                    |
+| `cst: summarizing… 0:32`, in magenta      | cst or cdt works on this session, at that step for   |
+|                                           | that long: summarizing (cst only), then waiting for  |
+|                                           | the session to be idle.                              |
+| `cst: trimmed, waiting for a reply`, or   | The session came back, and has no reply of the model |
+| `cdt: thinking dropped, …`, in cyan       | since.                                               |
+| `cst: nothing changed, see cst.log`, in   | cst or cdt stopped without changing the session;     |
+| red                                       | shown for a minute.                                  |
+
+The cst and cdt helper leaves its state in `$XDG_RUNTIME_DIR/cst/status.<session id>`
+(`set_status` in `cst.py`), and `statusline.py` reads it through `cst.py`. A "running" state whose
+helper has exited counts as none. The status goes once the session has a model reply newer than
+it.
+
+- Tested 27-10-2026 with Claude Code 2.1.311, on throwaway Haiku sessions in a pseudo-terminal
+  with the cst.bash hook and the status line given through `--settings`: `! cst` showed
+  summarizing, then waiting for idle, then `cst: trimmed, waiting for a reply` until the next
+  answer; `! cdt` the same without the summary.
+- Claude Code's own compaction is left alone: it shows its own progress ("Running PreCompact
+  hooks…", then "Compacted"). The PreCompact and PostCompact hooks a first version installed are
+  taken out by `install.py`.
+- The compaction of 27-10-2026 at 342k of 1M in a session of this repo was Claude Code's idle
+  compaction: it compacts a session left idle before its prompt cache expires, and says so in the
+  transcript ("Compacted while idle, before the prompt cache expired · turn off with
+  "idleCompaction": false").
+
+27-10-2026-21:55
 
 ### transcript.py line prefixes
 

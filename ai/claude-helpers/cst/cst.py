@@ -32,12 +32,13 @@ How steps 2 and 4 happen depends on where the session runs:
     with that hook, attaches to it again.
 
 cdt makes the same switch with another rewrite (switch() below). Do not type in the session while
-it switches. Everything is logged to cst.log beside this file.
+it switches. Everything is logged to cst.log beside this file. On Linux each step also shows in
+the session's status line, through statusline/statusline.py (set_status below).
 
 Usage:
     cst [--model M] [--keep 0.5]
 
-@date 24-10-2026-19:25, 27-10-2026-18:40
+@date 24-10-2026-19:25, 27-10-2026-18:40, 27-10-2026-21:55
 """
 
 import argparse
@@ -334,8 +335,9 @@ def write_json(path, obj):
     os.replace(tmp, path)
 
 
-def read_request(path):
-    """Answers the request in `path`, or None if it is gone or unreadable. @date 14-10-2026"""
+def read_json(path):
+    """Answers the JSON object in `path`, a request or a status, or None if it is gone or
+    unreadable. @date 14-10-2026, 27-10-2026-21:40"""
     try:
         with open(path, encoding="utf8") as f:
             return json.load(f)
@@ -343,8 +345,9 @@ def read_request(path):
         return None
 
 
-def drop_request(path):
-    """Removes the request in `path`, if any. @date 14-10-2026, 27-10-2026-18:40"""
+def drop_file(path):
+    """Removes the file at `path`, a request or a status, if any.
+    @date 14-10-2026, 27-10-2026-18:40, 27-10-2026-21:40"""
     try:
         os.remove(path)
     except OSError:
@@ -361,7 +364,7 @@ def requests_for(sid):
     for name in names:
         if not (name.startswith("request.") and name[len("request."):].isdigit()):
             continue
-        r = read_request(os.path.join(RUN, name))
+        r = read_json(os.path.join(RUN, name))
         if r and r.get("sid") == sid:
             out.append((os.path.join(RUN, name), r))
     return out
@@ -390,17 +393,17 @@ def mark_ready(sid):
 def withdraw_requests(sid):
     """Removes each request left for session `sid`. @date 27-10-2026-18:40"""
     for path, _ in requests_for(sid):
-        drop_request(path)
+        drop_file(path)
 
 
 def wait_ready(path):
     """Answers the request in `path` once it is "ready", or None when it is gone, or not ready
     within READY_WAIT_S. @date 24-10-2026-19:25"""
     t0 = time.time()
-    r = read_request(path)
+    r = read_json(path)
     while r and r.get("state") != "ready" and time.time() - t0 < READY_WAIT_S:
         time.sleep(0.5)
-        r = read_request(path)
+        r = read_json(path)
     return r if r and r.get("state") == "ready" else None
 
 
@@ -415,11 +418,11 @@ def take_request(shell):
     @date 14-10-2026, 24-10-2026-19:25, 27-10-2026-18:40
     """
     path = request_path(shell)
-    r = read_request(path)
+    r = read_json(path)
     # A request that can't be read never will be; one whose claude still runs, suspended or in
     # the background, waits for that claude to exit. 27-10-2026-18:40
     if not r:
-        drop_request(path)
+        drop_file(path)
         return None
     if alive(r.get("pid", 0)):
         return None
@@ -427,7 +430,7 @@ def take_request(shell):
         if r.get("state") != "ready" and time.time() - r.get("time", 0) <= FRESH_S:
             r = wait_ready(path) or r
     finally:
-        drop_request(path)
+        drop_file(path)
     if r.get("state") != "ready":
         print(f"cst: session {r.get('sid')} did not come back; bring it back with: claude "
               f"{shlex.join(r.get('argv') or [])}", file=sys.stderr)
@@ -448,6 +451,74 @@ def take(shell):
         return 1
     sys.stdout.write("".join(a + "\0" for a in again))
     return 0
+
+
+# --- Linux: what the helper is doing, for the status line --------------------------------------
+# The helper leaves its state in a status file named after the session, and
+# statusline/statusline.py shows it in that session's status line: "running" while it summarizes
+# or waits for the session to be idle, "back" once the session comes back, until its first reply
+# (replied_since), and "failed" when nothing changed. 27-10-2026-21:40, 27-10-2026-21:55
+
+def status_path(sid):
+    """Answers the status file of the helper that serves session `sid`. @date 27-10-2026-21:40"""
+    return os.path.join(RUN, f"status.{sid}")
+
+
+def set_status(o, state, text):
+    """Leaves for the status line the state of the helper that serves the session `o` names:
+    `state` is "running", "back" or "failed", and `text` says what it does or what came of it. A
+    status that can't be written is only logged: the switch goes on without it. Linux only.
+    @date 27-10-2026-21:40"""
+    if IS_WIN:
+        return
+    me = os.getpid()
+    try:
+        os.makedirs(RUN, exist_ok=True)
+        write_json(status_path(o.sid), {"what": o.what, "state": state, "text": text,
+                                        "since": time.time(), "pid": me, "started": started(me)})
+    except (OSError, IndexError) as e:
+        log(f"status not written: {e!r}")
+
+
+def status_of(sid):
+    """@brief Answers the state the helper that serves session `sid` left, for the status line.
+
+    A "running" status whose helper has exited is removed, and answers None.
+
+    @param sid  str - a session id
+    @return dict|None - "what" ("cst" or "cdt"), "state", "text", and "since", when that state
+            began, in Unix seconds; None when there is none
+    @date 27-10-2026-21:40
+    """
+    path = status_path(sid)
+    s = read_json(path)
+    if not isinstance(s, dict):
+        return None
+    if s.get("state") == "running":
+        try:
+            mine = alive(s.get("pid", 0)) and started(s.get("pid", 0)) == s.get("started")
+        except (OSError, IndexError):
+            mine = False
+        if not mine:
+            drop_file(path)
+            return None
+    return s
+
+
+def clear_status(sid):
+    """Removes the status left for session `sid`, if any. @date 27-10-2026-21:40"""
+    drop_file(status_path(sid))
+
+
+def replied_since(sf, since):
+    """Answers whether the session in `sf` holds a model reply written after `since`, in Unix
+    seconds: the last message is the model's, and newer. @date 27-10-2026-21:55"""
+    try:
+        last = last_message(sf) or {}
+    except (OSError, TypeError):
+        return False
+    t = ctxtrim.when(last)
+    return last.get("type") == "assistant" and t is not None and t.timestamp() > since
 
 
 # --- the switch ---------------------------------------------------------------------------------
@@ -541,33 +612,49 @@ def bring_back(o):
                                         f"claude --resume {o.sid}"))
 
 
-def switch(o, rewrite):
+def fail(o, why=None):
+    """Says in the status line that the helper for the session `o` names stopped with nothing
+    changed, and logs `why` unless it was logged already. @date 27-10-2026-21:40"""
+    if why:
+        log(f"{why} -- nothing changed")
+    set_status(o, "failed", f"nothing changed, see {os.path.basename(LOG)}")
+
+
+def switch(o, rewrite, done):
     """@brief Ends the session `o` names once it is idle, rewrites its file, and brings it back.
 
     Nothing changes when the session closes, is not idle within IDLE_WAIT_S, or its claude does
     not exit. Once claude has exited the session always comes back: rewritten, or as it was when
-    the rewrite fails.
+    the rewrite fails. Each step shows in the session's status line (set_status).
 
-    @param o        argparse.Namespace - the helper's options (helper_options)
-    @param rewrite  callable(str) -> str - rewrites the session file at the path it is given, in
-                    place, and answers a line for the log
-    @date 24-10-2026-19:25
+    @param o        argparse.Namespace - the helper's options (helper_options), with `what`, the
+                    tool's name, "cst" or "cdt"
+    @param rewrite  callable(str) -> (bool, str) - rewrites the session file at the path it is
+                    given, in place, and answers whether it changed the file, and a line for the
+                    log
+    @param done     str - what the status line says of a rewrite that changed the file
+    @date 24-10-2026-19:25, 27-10-2026-21:40
     """
     sf = find_session(o.sid)
+    set_status(o, "running", "waiting for the session to be idle")
     t0 = time.time()
     while not is_idle(sf, o.claude_pid):
         if not alive(o.claude_pid) or time.time() - t0 > IDLE_WAIT_S:
-            log("session closed or never idle -- nothing changed")
+            fail(o, "session closed or never idle")
             return
         time.sleep(2)
+    set_status(o, "running", "ending the session")
     if not end_session(o):
-        log("claude did not exit -- nothing changed")
+        fail(o, "claude did not exit")
         return
     time.sleep(1)
+    changed = False
     try:
-        log(rewrite(sf))
+        changed, line = rewrite(sf)
+        log(line)
     except Exception as e:                                              # noqa: BLE001
         log(f"rewrite failed: {e!r} -- it comes back as it was")
+    set_status(o, "back", done if changed else f"unchanged, see {os.path.basename(LOG)}")
     bring_back(o)
     log("done")
 
@@ -669,19 +756,22 @@ def summarize(o, sf):
 
 def helper(o):
     """Summarizes the older half while the session stays open, then switches the session with the
-    trim. @date 18-10-2026-18:25, 24-10-2026-19:25"""
+    trim. @date 18-10-2026-18:25, 24-10-2026-19:25, 27-10-2026-21:40"""
     log(f"=== cst helper: session {o.sid}, claude pid {o.claude_pid}, {shown(o)}")
+    set_status(o, "running", "summarizing")
     made = summarize(o, find_session(o.sid))
     if not made:
+        fail(o)
         return
     every, split, summary = made
 
     def trim(sf):
         why = ctxtrim.trim_in_place(sf, every, split, summary)
-        return (f"{why} -- nothing changed; it comes back as it was" if why else
-                f"trimmed {sf} in place: the summary is record {split}, the records before it "
-                f"a log")
-    switch(o, trim)
+        if why:
+            return False, f"{why} -- nothing changed; it comes back as it was"
+        return True, (f"trimmed {sf} in place: the summary is record {split}, the records "
+                      f"before it a log")
+    switch(o, trim, "trimmed")
 
 
 def main(argv):
@@ -700,10 +790,12 @@ def main(argv):
     if o.take_request:
         return take(o.take_request)
     if o.helper:
+        o.what = "cst"
         try:
             helper(o)
         except Exception as e:                                          # noqa: BLE001
             log(f"helper failed: {e!r} -- the session file is untouched unless logged above")
+            set_status(o, "failed", f"the helper failed, see {os.path.basename(LOG)}")
         return 0
     here = this_session("cst")
     if not here:

@@ -34,7 +34,6 @@ Usage:
 """
 
 import argparse
-import datetime
 import json
 import os
 import sys
@@ -84,12 +83,6 @@ def is_edit(rec):
     return bool(rec.get("isCompactSummary")) or rec.get("subtype") == "compact_boundary"
 
 
-def when(rec):
-    """Answers a record's timestamp as a datetime, None when it has none. @date 15-10-2026-12:00"""
-    t = rec.get("timestamp")
-    return datetime.datetime.fromisoformat(t.replace("Z", "+00:00")) if t else None
-
-
 def context_of(rec):
     """Answers the tokens an assistant record's request ended at -- fresh, cached and written to
     the cache, plus its answer -- or 0 when it carries no usage. @date 15-10-2026-12:00"""
@@ -123,7 +116,7 @@ def survey(records):
     for r in records:
         if r.get("uuid") not in s.loaded:
             continue
-        t, blocks = when(r), thinking_of(r)
+        t, blocks = ctxtrim.when(r), thinking_of(r)
         if is_edit(r) and t and (edited is None or t > edited):
             edited = t
         if blocks:
@@ -266,13 +259,15 @@ def on_file(path, dry):
 def helper(o):
     """Switches the session cdt was run from with the drop: once it is idle it ends, its reasoning
     is dropped, and it comes back -- cst's switch, with no summary to make first.
-    @date 15-10-2026-12:00, 24-10-2026-19:25"""
+    @date 15-10-2026-12:00, 24-10-2026-19:25, 27-10-2026-21:40"""
     cst.log(f"=== cdt helper: session {o.sid}, claude pid {o.claude_pid}, {cst.shown(o)}")
 
     def drop(sf):
         s, why = drop_in_place(sf)
-        return f"{why} -- nothing changed; it comes back as it was" if why else report(s, False)
-    cst.switch(o, drop)
+        if why:
+            return False, f"{why} -- nothing changed; it comes back as it was"
+        return True, report(s, False)
+    cst.switch(o, drop, "thinking dropped")
 
 
 def in_session(dry):
@@ -307,11 +302,13 @@ def main(argv):
     cst.helper_options(p)
     o = p.parse_args(argv)
     if o.helper:
+        o.what = "cdt"
         try:
             helper(o)
         except Exception as e:                                          # noqa: BLE001
             cst.log(f"cdt helper failed: {e!r} -- the session file is untouched unless logged "
                     f"above")
+            cst.set_status(o, "failed", f"the helper failed, see {os.path.basename(LOG)}")
         return 0
     if not o.session:
         return in_session(o.dry)
