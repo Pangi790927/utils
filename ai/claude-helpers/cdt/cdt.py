@@ -25,20 +25,19 @@ made before the history ahead of it was edited, by a ctxtrim summary say, is dro
 already -- and where the next turn would start.
 
 Usage:
-    cdt [--dry]                    inside a session (`! cdt`): as cst does, a helper waits until
-                                   it is idle, types /exit, drops, and resumes it by itself
+    cdt [--dry]                    inside a session (`! cdt`): through cst's switch, a helper
+                                   waits until it is idle, ends it, drops, and brings it back by
+                                   itself -- on Linux, through the cst.bash function as cst does
     cdt SESSION.jsonl|ID [--dry]   a session no claude is writing to
 
-@date 15-10-2026-12:00
+@date 15-10-2026-12:00, 24-10-2026-19:25
 """
 
 import argparse
 import datetime
 import json
 import os
-import subprocess
 import sys
-import time
 from types import SimpleNamespace
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -265,74 +264,47 @@ def on_file(path, dry):
 
 
 def helper(o):
-    """Waits until the session is idle, types /exit, drops its reasoning once Claude has closed it,
-    and types the launch command with `--resume <id>` back -- cst's switch, with no summary to
-    make first. @date 15-10-2026-12:00"""
-    cst.log(f"=== cdt helper: session {o.sid}, claude pid {o.claude_pid}, shell pid {o.shell_pid}")
-    sf = cst.find_session(o.sid)
-    t0 = time.time()
-    while not cst.is_idle(sf):
-        if not cst.alive(o.claude_pid) or time.time() - t0 > 1800:
-            cst.log("session closed or never idle -- nothing changed")
-            return
-        time.sleep(2)
-    cst.inject(o.claude_pid, "/exit")
-    t0 = time.time()
-    while cst.alive(o.claude_pid):
-        if time.time() - t0 > 60:
-            cst.log("claude did not exit -- nothing changed")
-            return
-        time.sleep(1)
-    time.sleep(1)
-    s, why = drop_in_place(sf)
-    cst.log(f"{why} -- nothing changed; resuming as it was" if why else report(s, False))
-    cst.inject(o.shell_pid, cst.resume_command(o.cmdline, o.sid))
-    cst.log("done")
+    """Switches the session cdt was run from with the drop: once it is idle it ends, its reasoning
+    is dropped, and it comes back -- cst's switch, with no summary to make first.
+    @date 15-10-2026-12:00, 24-10-2026-19:25"""
+    cst.log(f"=== cdt helper: session {o.sid}, claude pid {o.claude_pid}, {cst.shown(o)}")
+
+    def drop(sf):
+        s, why = drop_in_place(sf)
+        return f"{why} -- nothing changed; it comes back as it was" if why else report(s, False)
+    cst.switch(o, drop)
 
 
 def in_session(dry):
     """Reports on the session cdt runs in, and unless `dry` starts the helper that drops its
-    reasoning and resumes it; answers the exit code. @date 15-10-2026-12:00"""
-    sid, cpid = os.environ.get("CLAUDE_CODE_SESSION_ID"), os.environ.get("CLAUDE_PID")
-    if not sid or not cpid:
-        print("cdt: name a session, or run it from inside one (`! cdt`); "
-              "CLAUDE_CODE_SESSION_ID / CLAUDE_PID are not set.")
+    reasoning and brings it back; answers the exit code. @date 15-10-2026-12:00, 24-10-2026-19:25"""
+    here = cst.this_session("cdt")
+    if not here:
         return 1
-    path = cst.find_session(sid)
-    if not path:
-        print(f"cdt: no session file for {sid}")
-        return 1
+    sid, cpid, path = here
     s = survey(ctxtrim.load_session(path)[1])
     print(report(s, True))
     if dry or not s.blocks:
         return 0 if s.blocks else 1
-    shell_pid, cmdline = cst.proc_info(cpid)
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("CLAUDE_CODE", "CLAUDECODE", "CLAUDE_PID"))}
-    subprocess.Popen([sys.executable, os.path.abspath(__file__), "--helper", "--sid", sid,
-                      "--claude-pid", cpid, "--shell-pid", str(shell_pid), "--cmdline", cmdline],
-                     env=env, creationflags=cst.DETACHED, close_fds=True,
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL)
-    print(f"cdt: it will /exit, drop and resume by itself in a few seconds. Do not type in this "
-          f"terminal until it is back. Log: {LOG}")
+    why = cst.launch_helper(__file__, sid, cpid, [])
+    if why:
+        print(f"cdt: {why}")
+        return 1
+    print(f"cdt: it will end, drop and come back by itself shortly. Nothing to do meanwhile; do "
+          f"not type in this session until it is back. Log: {LOG}")
     return 0
 
 
 def main(argv):
     """Drops the reasoning from the session named on the command line, or from the one cdt runs
-    in. @date 15-10-2026-12:00"""
+    in. @date 15-10-2026-12:00, 24-10-2026-19:25"""
     p = argparse.ArgumentParser(description="Drop the reasoning from a Claude Code session, in "
                                             "place, keeping everything else word for word.")
     p.add_argument("session", nargs="?",
                    help="a session .jsonl or its id, one no claude is writing to; left out, the "
                         "session cdt runs in")
     p.add_argument("--dry", action="store_true", help="only report what it would drop")
-    p.add_argument("--helper", action="store_true", help=argparse.SUPPRESS)
-    p.add_argument("--sid", help=argparse.SUPPRESS)
-    p.add_argument("--claude-pid", type=int, help=argparse.SUPPRESS)
-    p.add_argument("--shell-pid", type=int, help=argparse.SUPPRESS)
-    p.add_argument("--cmdline", help=argparse.SUPPRESS)
+    cst.helper_options(p)
     o = p.parse_args(argv)
     if o.helper:
         try:

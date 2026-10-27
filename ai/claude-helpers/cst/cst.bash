@@ -1,42 +1,24 @@
-# cst.bash -- Linux: brings a session trimmed by cst back in the terminal it was shown in.
-# Sourced from ~/.bashrc: . ~/workspace/utils/ai/claude-helpers/cst/cst.bash
+# cst.bash -- Linux: brings a Claude Code session that cst or cdt ended back in the terminal that
+# showed it. Sourced from ~/.bashrc: . ~/workspace/utils/ai/claude-helpers/cst/cst.bash
 #
-# Under Claude Code's daemon, cst can end a session (it types /exit through the session's relay)
-# but can't type into the shell of the terminal that showed it. So this wraps `claude`: whenever
-# it exits, `cst --take-request` tells whether cst ended a session started in this directory just
-# now (waiting while cst rewrites it); if so, it starts `claude` again with the same arguments and
-# `--resume <that id>`. Otherwise it returns at once, with claude's exit code. See cst.py.
-# 14-10-2026
+# Nothing can type into another terminal on Linux, so cst and cdt can end a session but not start
+# it again there. This function wraps `claude`: it runs claude with CST_SHELL set to this shell's
+# pid, which tells cst the session can come back, and whenever claude exits it asks cst whether
+# cst or cdt ended that session -- the one this claude showed, or the background one it attached
+# to with `claude attach`. If so, it waits while the session is rewritten, then runs claude again:
+# resuming the session with the same options (without a prompt given on the command line), or
+# attaching to it again. Otherwise it returns at once, with claude's exit code. See cst.py.
+# 14-10-2026, 24-10-2026-19:25
 
-CST_PY="$HOME/workspace/utils/ai/claude-helpers/cst/cst.py"
+CST_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cst.py"
 
 claude() {
-    local args=("$@")
-    local rc sid
+    local args=("$@") again rc
     while true; do
-        command claude "${args[@]}"
+        CST_SHELL=$$ command claude "${args[@]}"
         rc=$?
-        sid=$(python3 "$CST_PY" --take-request "$PWD" 2>/dev/null) || return $rc
-        [ -n "$sid" ] || return $rc
-
-        # the same arguments, without an earlier resume/continue (a --resume without an id
-        # opens the picker, so only an argument that isn't an option is taken as its id)
-        local next=() i=0 a
-        while [ $i -lt ${#args[@]} ]; do
-            a=${args[$i]}
-            i=$((i + 1))
-            case "$a" in
-                --resume|-r|--session-id)
-                    if [ $i -lt ${#args[@]} ] && [ "${args[$i]#-}" = "${args[$i]}" ]; then
-                        i=$((i + 1))
-                    fi
-                    continue ;;
-                --resume=*|--session-id=*|--continue|-c)
-                    continue ;;
-            esac
-            next+=("$a")
-        done
-        args=("${next[@]}" --resume "$sid")
-        echo "cst: resuming the trimmed session $sid"
+        mapfile -d '' -t again < <(python3 "$CST_PY" --take-request "$$" -- "${args[@]}")
+        [ ${#again[@]} -gt 0 ] || return $rc
+        args=("${again[@]}")
     done
 }

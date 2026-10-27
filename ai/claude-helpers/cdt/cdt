@@ -1,5 +1,9 @@
 #!/bin/sh
 # cdt -- drop the reasoning from a Claude Code session, in place; run from one, it resumes it.
 # Usage, inside a session: ! cdt [--dry]    or, for a closed one: cdt SESSION.jsonl|ID [--dry]
-# 15-10-2026
-exec python "$USERPROFILE/workspace/utils/ai/claude-helpers/cdt/cdt.py" "$@"
+# Windows (Git Bash): python from %USERPROFILE%; Linux: python3 from $HOME, linked as
+# ~/.local/bin/cdt. 15-10-2026, Linux 24-10-2026-19:25
+if [ -n "$USERPROFILE" ]; then
+    exec python "$USERPROFILE/workspace/utils/ai/claude-helpers/cdt/cdt.py" "$@"
+fi
+exec python3 "$HOME/workspace/utils/ai/claude-helpers/cdt/cdt.py" "$@"

@@ -11,29 +11,33 @@ detached helper and returns at once. The helper:
      conversation, summarizes only above the split) while the session stays open; only the part
      resume loads counts -- from Claude Code's newest compact boundary, or an earlier trim's
      summary, on;
-  2. waits until the session is idle, then types `/exit` into it (no focus needed);
+  2. waits until the session is idle, then ends it;
   3. once Claude has exited, trims the file in place with ctxtrim, under the same session id:
      the summary goes in at the split as the new root, the older half stays in the file as a log
      that resume no longer loads, and the turns written while the summary was made are kept --
      only once it has checked that resume, walking back from the last message, reaches that
      summary;
-  4. brings the session back with `--resume <same id>` in the same terminal.
+  4. brings the session back, under the same id, where it was shown.
 
-How steps 2 and 4 happen depends on the system:
-  - Windows: `/exit` and then the original launch command are typed into the console (inject.ps1).
-  - Linux: Claude Code runs the session under its daemon, on a terminal of its own behind a relay
-    socket, and nothing links it to the terminal that shows it. `/exit` is typed through that
-    relay (SIGTERM if the relay refuses), and the session comes back through the `claude`
-    wrapper of cst.bash (sourced from ~/.bashrc): when its `claude` exits, it asks
-    `cst --take-request` whether cst ended a session in its directory just now, and if so starts
-    `claude <same arguments> --resume <id>`. Without the wrapper: `claude --resume <id>` by hand.
+How steps 2 and 4 happen depends on where the session runs:
+  - Windows: `/exit`, then the launch command with `--resume <id>`, are typed into its console
+    (inject.ps1).
+  - Linux, a session in a terminal: nothing can type into another terminal there, so the helper
+    ends it with SIGTERM, which Claude Code takes as a clean shutdown, and the `claude` function of
+    cst.bash, sourced from ~/.bashrc, starts it again in the same terminal with `--resume <id>`.
+    cst refuses to run in a terminal session that function did not start, since nothing would
+    bring it back.
+  - Linux, a background session (`claude --bg`, the agent view): `claude stop <id>`, then
+    `claude --bg --resume <id>`; a terminal that showed it through `claude attach`, run by that
+    same function, attaches to it again.
 
-Do not type in that terminal while it switches. Everything is logged to cst.log beside this file.
+cdt makes the same switch with another rewrite (switch() below). Do not type in the session while
+it switches. Everything is logged to cst.log beside this file.
 
 Usage:
     cst [--model M] [--keep 0.5]
 
-@date 18-10-2026-18:25
+@date 24-10-2026-19:25
 """
 
 import argparse
@@ -42,8 +46,6 @@ import json
 import os
 import shlex
 import signal
-import socket
-import struct
 import subprocess
 import sys
 import time
@@ -56,11 +58,20 @@ import ctxtrim      # noqa: E402
 IS_WIN = os.name == "nt"
 INJECT = os.path.join(HELPERS, "paired", "inject.ps1")
 LOG = os.path.join(HERE, "cst.log")
-REQUESTS = os.path.join(HERE, "requests")   # Linux: resume requests for the cst.bash wrapper
+REQUESTS = os.path.join(HERE, "requests")   # Linux: what the cst.bash function brings back
 DETACHED = 0x00000008 | 0x00000200      # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 QUIET_S = 8                             # seconds without a write before the session counts idle
-FRESH_S = 15                            # a request older than this is not for a `claude` exiting now
-READY_WAIT_S = 120                      # how long the wrapper waits for a pending trim to finish
+# The same after a `!` command's output, which Claude Code answers with a turn of its own from
+# 2.1.303 on, but an older one may not. 24-10-2026-19:25
+BANG_QUIET_S = 60
+IDLE_WAIT_S = 1800                      # how long the helper waits for the session to be idle
+EXIT_WAIT_S = 60                        # how long it waits for claude to exit once ended
+FRESH_S = 60                            # a request older than this is not for a claude exiting now
+READY_WAIT_S = 180                      # how long the function waits for the rewrite to finish
+STALE_S = 3600                          # a request nobody took in this long is removed
+# What the helper, and every claude it runs, must not inherit from the session cst runs in: its
+# identity, and the marks of a command inside a session or a background job. 24-10-2026-19:25
+INHERITED = ("CLAUDE_CODE", "CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "CLAUDE_JOB_DIR", "CST_")
 
 
 def log(msg):
@@ -130,116 +141,117 @@ def inject(pid, text):
     log(f"typed into pid {pid}: {text!r} (exit {r.returncode})")
 
 
-# --- Linux: the terminal relay of a session -----------------------------------------------------
-# Under Claude Code's daemon a session runs on a terminal of its own, owned by a relay process
-# (`claude bg-pty-host --bg-pty-host <socket> ...`, the parent of CLAUDE_PID). Its socket speaks
-# frames of [uint32 BE length][uint8 kind][payload]: kind 0 carries raw terminal bytes (what a
-# client sends is typed into the session), kind 1 a JSON control message ({"t": "hello"}, "live",
-# "ping"/"pong", "auth"/"auth-required", "resize", "kill", "exit"). A new client gets "hello" (with
-# the Claude Code version), the screen so far, then "live". Typing is dropped with
-# "auth-required" when the relay has a token and the client didn't send it. Seen in Claude Code
-# 2.1.295; this is undocumented, so every failure here falls back to SIGTERM. 14-10-2026
-
-RELAY_DATA = 0
-RELAY_CTRL = 1
-
-
-def relay_socket(claude_pid):
-    """Answers the relay socket of the session run by `claude_pid`, or None when that process is
-    not under a relay (Claude Code started without its daemon). @date 14-10-2026"""
-    ppid, _ = proc_info(claude_pid)
-    _, cmdline = proc_info(ppid)
-    argv = shlex.split(cmdline)
-    if "--bg-pty-host" in argv:
-        i = argv.index("--bg-pty-host")
-        if i + 1 < len(argv) and os.path.exists(argv[i + 1]):
-            return argv[i + 1]
-    return None
-
-
-def relay_frame(kind, payload):
-    """Answers one relay frame: `payload` is bytes for RELAY_DATA, a dict for RELAY_CTRL.
-    @date 14-10-2026"""
-    if kind == RELAY_CTRL:
-        payload = json.dumps(payload).encode("utf8")
-    return struct.pack(">IB", len(payload), kind) + payload
-
-
-def relay_read(sock, buf, until=None, timeout=5):
-    """Reads relay frames until a control message with t == `until` (or the timeout, or the end of
-    the connection); answers pings. Returns (the control messages seen, the rest of the buffer).
-    @date 14-10-2026"""
-    seen = []
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        while len(buf) >= 5:
-            n, kind = struct.unpack(">IB", buf[:5])
-            if len(buf) < 5 + n:
-                break
-            payload, buf = buf[5:5 + n], buf[5 + n:]
-            if kind != RELAY_CTRL:
-                continue                                # the screen; nothing to do with it
-            ctrl = json.loads(payload.decode("utf8", "replace"))
-            seen.append(ctrl)
-            if ctrl.get("t") == "ping":
-                sock.sendall(relay_frame(RELAY_CTRL, {"t": "pong"}))
-            if until and ctrl.get("t") == until:
-                return seen, buf
-        sock.settimeout(max(0.05, deadline - time.time()))
-        try:
-            chunk = sock.recv(65536)
-        except socket.timeout:
-            break
-        if not chunk:
-            break
-        buf += chunk
-    return seen, buf
-
-
-def relay_type(path, text):
-    """Types `text`, then Enter, into the session behind relay socket `path`, like a terminal
-    client does. Answers whether the relay took it. @date 14-10-2026"""
+def run_claude(args, cwd):
+    """Runs `claude <args>` in `cwd` and answers its exit code and what it printed, as one line
+    for the log. @date 24-10-2026-19:25"""
     try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.connect(path)
-            seen, buf = relay_read(s, b"", until="live")
-            hello = next((c for c in seen if c.get("t") == "hello"), {})
-            if not any(c.get("t") == "live" for c in seen):
-                log(f"relay {path}: no 'live' from it (got {[c.get('t') for c in seen]})")
-                return False
-            s.sendall(relay_frame(RELAY_DATA, text.encode("utf8")))
-            time.sleep(0.5)                             # typed, then Enter a moment later
-            s.sendall(relay_frame(RELAY_DATA, b"\r"))
-            seen, _ = relay_read(s, buf, until="auth-required", timeout=1.5)
-            if any(c.get("t") == "auth-required" for c in seen):
-                log(f"relay {path}: typing refused (auth-required)")
-                return False
-            log(f"typed into relay {path} (Claude Code {hello.get('version', '?')}): {text!r}")
-            return True
-    except (OSError, ValueError) as e:
-        log(f"relay {path}: {e!r}")
+        r = subprocess.run(["claude"] + args, cwd=cwd, capture_output=True, text=True,
+                           timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"failed: {e!r}"
+    return f"exit {r.returncode}: {' '.join((r.stdout + r.stderr).split())[:300]}"
+
+
+# --- where a session runs -----------------------------------------------------------------------
+# Claude Code on Linux runs a session either in the terminal it was started in, as a child of that
+# terminal's shell, or in the background under its daemon (`claude --bg`, the agent view): on a
+# terminal of its own, owned by a `claude bg-pty-host` relay, shown only while a terminal runs
+# `claude attach <id>`. `claude agents --json` lists both kinds, with the background ones' short
+# ids. Seen in 2.1.310. 24-10-2026-19:25
+
+def agent_entry(pid):
+    """Answers what `claude agents --json` lists for the session run by process `pid` -- its `kind`
+    (interactive or background), short `id`, `status` (idle or busy) and `name` -- or None when it
+    is not listed or there is no list. @date 24-10-2026-19:25"""
+    try:
+        r = subprocess.run(["claude", "agents", "--json"], capture_output=True, text=True,
+                           timeout=30)
+        return next((s for s in json.loads(r.stdout)
+                     if isinstance(s, dict) and s.get("pid") == int(pid)), None)
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+        return None
+
+
+def under_relay(pid):
+    """Answers whether process `pid` runs on a terminal of Claude Code's daemon, as a background
+    session does (Linux). @date 24-10-2026-19:25"""
+    try:
+        return "bg-pty-host" in proc_info(proc_info(pid)[0])[1]
+    except (OSError, IndexError, ValueError):
         return False
 
 
-# --- Linux: resume requests for the cst.bash wrapper --------------------------------------------
+# --- how a session is started again -------------------------------------------------------------
+# How `claude` reads its options, from 2.1.310's --help: these take no value, these take every
+# value up to the next option, and any other takes one, as --model does. They tell an option's
+# value from a prompt given on the command line, which the session must not get again when it
+# comes back. A relaunch leaves out NOT_AGAIN: it resumes the session itself, interactively.
+# 24-10-2026-19:25
+NO_VALUE = {
+    "--allow-dangerously-skip-permissions", "--ax-screen-reader", "--bg", "--background", "--bare",
+    "--brief", "--chrome", "-c", "--continue", "--dangerously-skip-permissions", "--desktop",
+    "--disable-slash-commands", "--exclude-dynamic-system-prompt-sections", "--fork-session",
+    "--forward-subagent-text", "-h", "--help", "--ide", "--include-hook-events",
+    "--include-partial-messages", "--no-chrome", "--no-session-persistence", "-p", "--print",
+    "--replay-user-messages", "--restricted", "--safe-mode", "--strict-mcp-config", "--tmux",
+    "--verbose", "-v", "--version"}
+MANY_VALUES = {"--add-dir", "--allowedTools", "--allowed-tools", "--betas", "--disallowedTools",
+               "--disallowed-tools", "--file", "--mcp-config", "--tools"}
+NOT_AGAIN = {"-r", "--resume", "-c", "--continue", "--session-id", "--fork-session", "-p",
+             "--print", "--bg", "--background"}
+
+
+def relaunch_args(args, sid):
+    """Answers the arguments that start session `sid` again the way `args` started claude: the
+    same options, without a prompt given on the command line or an option that picks, forks or
+    backgrounds a session, and with `--resume <sid>`. @date 24-10-2026-19:25"""
+    out, i = [], 0
+    while i < len(args):
+        a, i = args[i], i + 1
+        if a == "--":
+            break                                       # the rest is a prompt. 24-10-2026-19:25
+        if not a.startswith("-") or a == "-":
+            continue                                    # a prompt. 24-10-2026-19:25
+        name = a.split("=", 1)[0]
+        most = 0 if name in NO_VALUE or "=" in a else len(args) if name in MANY_VALUES else 1
+        j = i
+        while j < len(args) and j - i < most and not args[j].startswith("-"):
+            j += 1
+        if name not in NOT_AGAIN:
+            out += args[i - 1:j]
+        i = j
+    return out + ["--resume", sid]
+
+
+def resume_command(cmdline, sid):
+    """Answers the command that starts session `sid` again, from `cmdline`, the command line its
+    claude was started with: see relaunch_args (Windows). @date 10-10-2026, 24-10-2026-19:25"""
+    toks = [t.strip('"') for t in shlex.split(cmdline, posix=False)][1:]
+    return " ".join(["claude"] + [f'"{t}"' if " " in t else t for t in relaunch_args(toks, sid)])
+
+
+# --- Linux: requests for the cst.bash function --------------------------------------------------
 
 def request_path(sid):
-    """Answers the file of the resume request for session `sid`. @date 14-10-2026"""
+    """Answers the file of the request for session `sid`. @date 14-10-2026"""
     return os.path.join(REQUESTS, sid + ".json")
 
 
-def write_request(sid, cwd, state):
-    """Writes the resume request for session `sid`, started in `cwd`: "pending" while cst ends and
-    rewrites it, "ready" when it can be resumed. Written whole, then renamed. @date 14-10-2026"""
+def write_request(o, state):
+    """Writes the request for session `o.sid`: "pending" while it is ended and rewritten, "ready"
+    once it can come back. It names what showed the session: the shell of the cst.bash function
+    that ran its claude (`o.shell`), or for a background session its short id and name. Written
+    whole, then renamed. @date 14-10-2026, 24-10-2026-19:25"""
     os.makedirs(REQUESTS, exist_ok=True)
-    tmp = request_path(sid) + ".tmp"
+    tmp = request_path(o.sid) + ".tmp"
     with open(tmp, "w", encoding="utf8") as f:
-        json.dump({"sid": sid, "cwd": cwd, "state": state, "time": time.time()}, f)
-    os.replace(tmp, request_path(sid))
+        json.dump({"sid": o.sid, "state": state, "time": time.time(), "shell": o.shell,
+                   "bg": o.bg_id, "name": o.bg_name}, f)
+    os.replace(tmp, request_path(o.sid))
 
 
 def drop_request(sid):
-    """Removes the resume request for session `sid`, if any. @date 14-10-2026"""
+    """Removes the request for session `sid`, if any. @date 14-10-2026"""
     try:
         os.remove(request_path(sid))
     except OSError:
@@ -255,120 +267,280 @@ def read_request(path):
         return None
 
 
-def take_request(cwd):
-    """For the cst.bash wrapper, right after its `claude` exited in `cwd`: answers the session id
-    to resume when cst ended a session started in `cwd` just now (waiting for its rewrite to
-    finish), and consumes that request; None when there is none. @date 14-10-2026"""
-    cwd = os.path.realpath(cwd)
+def wait_ready(path):
+    """Answers the request in `path` once it is "ready", or None when it is gone, or not ready
+    within READY_WAIT_S. @date 24-10-2026-19:25"""
+    t0 = time.time()
+    r = read_request(path)
+    while r and r.get("state") != "ready" and time.time() - t0 < READY_WAIT_S:
+        time.sleep(0.5)
+        r = read_request(path)
+    return r if r and r.get("state") == "ready" else None
+
+
+def is_for(r, shell, args):
+    """Answers whether request `r` is for the claude that the cst.bash function of shell `shell`
+    ran with `args`, and that has just exited: the session it showed in its terminal, or, run as
+    `claude attach <id or part of the name>`, that background session. @date 24-10-2026-19:25"""
+    if time.time() - r.get("time", 0) > FRESH_S:
+        return False
+    if args[:1] == ["attach"] and len(args) > 1 and args[1]:
+        return bool(r.get("bg")) and (args[1] == r["bg"]
+                                      or args[1].lower() in (r.get("name") or "").lower())
+    return r.get("shell") == shell
+
+
+def take_request(shell, args):
+    """@brief For the cst.bash function of shell `shell`, right after a claude it ran with `args`
+    exited: answers the arguments to run claude with again when cst or cdt ended the session that
+    claude showed, once that session is rewritten, and consumes the request.
+
+    @param shell  str - the function's shell, as it set CST_SHELL for that claude
+    @param args   list[str] - the arguments that claude was run with
+    @return list[str]|None - None when the session was not ended by cst or cdt, or did not come
+            back in time (then it says so on stderr)
+    @date 14-10-2026, 24-10-2026-19:25
+    """
     try:
-        names = os.listdir(REQUESTS)
+        names = sorted(n for n in os.listdir(REQUESTS) if n.endswith(".json"))
     except OSError:
         return None
     for name in names:
-        if not name.endswith(".json"):
+        r = read_request(os.path.join(REQUESTS, name))
+        if r and time.time() - r.get("time", 0) > STALE_S:
+            drop_request(r.get("sid", ""))
+        if not r or not is_for(r, shell, args):
             continue
-        path = os.path.join(REQUESTS, name)
-        r = read_request(path)
-        if not r or os.path.realpath(r.get("cwd", "")) != cwd:
-            continue
-        if time.time() - r.get("time", 0) > FRESH_S:
-            continue
-        t0 = time.time()
-        while r and r.get("state") != "ready" and time.time() - t0 < READY_WAIT_S:
-            time.sleep(0.5)
-            r = read_request(path)
-        if not r or r.get("state") != "ready":
+        sid = r["sid"]
+        if not wait_ready(request_path(sid)):
+            print(f"cst: session {sid} did not come back; resume it with: claude --resume {sid}",
+                  file=sys.stderr)
             return None
-        drop_request(r["sid"])
-        return r["sid"]
+        drop_request(sid)
+        print(f"cst: bringing back session {sid}", file=sys.stderr)
+        return list(args) if r.get("bg") else relaunch_args(args, sid)
     return None
 
 
-# --- the helper ---------------------------------------------------------------------------------
+def take(shell, args):
+    """Prints, each followed by a NUL, the arguments the cst.bash function runs claude with again,
+    and answers 0; answers 1 when there is nothing to bring back. @date 24-10-2026-19:25"""
+    try:
+        again = take_request(shell, args)
+    except KeyboardInterrupt:
+        return 1
+    if not again:
+        return 1
+    sys.stdout.write("".join(a + "\0" for a in again))
+    return 0
 
-def is_idle(sf):
-    """Answers whether the session in `sf` is idle: no write for QUIET_S seconds, and its last
-    message is either the model's finished turn or the output of a `!` command. @date 10-10-2026"""
-    if time.time() - os.path.getmtime(sf) < QUIET_S:
+
+# --- the switch ---------------------------------------------------------------------------------
+
+def last_message(sf):
+    """Answers the last user or assistant record of the session file `sf`, or None.
+    @date 24-10-2026-19:25"""
+    with open(sf, "rb") as f:
+        end = f.seek(0, os.SEEK_END)
+        size = 1 << 16
+        while True:
+            start = max(0, end - size)
+            f.seek(start)
+            lines = f.read(end - start).split(b"\n")[1 if start else 0:]
+            for line in reversed(lines):
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and r.get("type") in ("user", "assistant"):
+                    return r
+            if not start:
+                return None
+            size *= 4
+
+
+def is_idle(sf, pid):
+    """Answers whether the session in `sf`, run by process `pid`, is idle: nothing written to its
+    file for QUIET_S seconds, its last message a finished answer of the model -- or the output of
+    a `!` command, after BANG_QUIET_S, for a Claude Code that answers none -- and its status idle
+    where `claude agents --json` lists it. @date 10-10-2026, 24-10-2026-19:25"""
+    quiet = time.time() - os.path.getmtime(sf)
+    if quiet < QUIET_S:
         return False
-    last = None
-    for line in open(sf, encoding="utf8", errors="replace"):
-        try:
-            o = json.loads(line)
-        except ValueError:
-            continue
-        if o.get("type") in ("user", "assistant"):
-            last = o
-    if not last:
+    last = last_message(sf) or {}
+    m = last.get("message") or {}
+    if last.get("type") == "assistant":
+        if m.get("stop_reason") != "end_turn":
+            return False
+    elif not (isinstance(m.get("content"), str) and "<bash-stdout>" in m["content"]
+              and quiet >= BANG_QUIET_S):
         return False
-    m = last.get("message", {})
-    if last["type"] == "assistant":
-        return m.get("stop_reason") == "end_turn"
-    c = m.get("content")
-    return isinstance(c, str) and "<bash-stdout>" in c
+    entry = agent_entry(pid)
+    return entry is None or entry.get("status") == "idle"
 
 
-def resume_command(cmdline, sid):
-    """Answers the session's original launch command with `--resume <sid>` in place of any
-    earlier resume, continue or session-id option (Windows). @date 10-10-2026"""
-    toks = [t.strip('"') for t in shlex.split(cmdline, posix=False)][1:]
-    out, skip = [], False
-    for t in toks:
-        if skip:
-            skip = False
-            continue
-        if t in ("--resume", "-r", "--session-id"):
-            skip = True
-            continue
-        if t in ("--continue", "-c"):
-            continue
-        out.append(f'"{t}"' if " " in t else t)
-    return " ".join(["claude"] + out + ["--resume", sid])
+def is_claude(pid):
+    """Answers whether process `pid` still runs claude (Linux). @date 24-10-2026-19:25"""
+    try:
+        return "claude" in proc_info(pid)[1]
+    except (OSError, IndexError, ValueError):
+        return False
 
 
 def end_session(o):
-    """Makes the idle session exit: types `/exit` into it. On Linux, first leaves a pending resume
-    request for the wrapper, and falls back to SIGTERM when the relay doesn't take the typing or
-    the session doesn't exit after it. @date 10-10-2026, Linux 14-10-2026"""
+    """Ends the idle session `o` names: types `/exit` into its console (Windows), stops it with
+    `claude stop` (Linux, background), or sends its claude SIGTERM (Linux, terminal), leaving a
+    pending request first on Linux. Answers whether claude exited within EXIT_WAIT_S; when it did
+    not, the request is withdrawn. @date 10-10-2026, 24-10-2026-19:25"""
     if IS_WIN:
         inject(o.claude_pid, "/exit")
-        return
-    write_request(o.sid, o.cwd, "pending")
-    typed = bool(o.relay) and relay_type(o.relay, "/exit")
-    if typed:
-        t0 = time.time()
-        while alive(o.claude_pid) and time.time() - t0 < 20:
-            time.sleep(0.5)
-    if alive(o.claude_pid):
-        log(f"{'/exit did not end it' if typed else 'no relay typing'} -- SIGTERM to {o.claude_pid}")
-        try:
+    else:
+        write_request(o, "pending")
+        if o.bg_id:
+            log(f"claude stop {o.bg_id}: {run_claude(['stop', o.bg_id], o.cwd)}")
+        elif is_claude(o.claude_pid):
             os.kill(o.claude_pid, signal.SIGTERM)
-        except OSError as e:
-            log(f"SIGTERM failed: {e!r}")
+            log(f"SIGTERM to claude {o.claude_pid}")
+    t0 = time.time()
+    while alive(o.claude_pid):
+        if time.time() - t0 > EXIT_WAIT_S:
+            if not IS_WIN:
+                drop_request(o.sid)
+            return False
+        time.sleep(0.5)
+    return True
 
 
 def bring_back(o):
-    """Resumes the session in its terminal: types the launch command (Windows), or marks the
-    request ready for the cst.bash wrapper (Linux). @date 10-10-2026, Linux 14-10-2026"""
+    """Brings the ended session `o` names back under its id: types the launch command with
+    `--resume <id>` into its console (Windows), or marks its request ready for the cst.bash
+    function, which starts it again in its terminal (Linux), after `claude --bg --resume <id>`
+    for a background session. @date 10-10-2026, 24-10-2026-19:25"""
     if IS_WIN:
         inject(o.shell_pid, resume_command(o.cmdline, o.sid))
         return
-    write_request(o.sid, o.cwd, "ready")
-    log(f"resume request ready for the wrapper in {o.cwd} (by hand: claude --resume {o.sid})")
+    if o.bg_id:
+        log(f"claude --bg --resume {o.sid}: {run_claude(['--bg', '--resume', o.sid], o.cwd)}")
+    write_request(o, "ready")
+    log("request ready; by hand: " + (f"claude attach {o.bg_id}" if o.bg_id else
+                                       f"claude --resume {o.sid}"))
 
 
-def helper(o):
-    """Does the trim and the switch, detached from the session it serves.
-    @date 18-10-2026-18:25"""
-    log(f"=== helper: session {o.sid}, claude pid {o.claude_pid}, "
-        + (f"shell pid {o.shell_pid}" if IS_WIN else f"relay {o.relay}, cwd {o.cwd}"))
+def switch(o, rewrite):
+    """@brief Ends the session `o` names once it is idle, rewrites its file, and brings it back.
+
+    Nothing changes when the session closes, is not idle within IDLE_WAIT_S, or its claude does
+    not exit. Once claude has exited the session always comes back: rewritten, or as it was when
+    the rewrite fails.
+
+    @param o        argparse.Namespace - the helper's options (helper_options)
+    @param rewrite  callable(str) -> str - rewrites the session file at the path it is given, in
+                    place, and answers a line for the log
+    @date 24-10-2026-19:25
+    """
     sf = find_session(o.sid)
+    t0 = time.time()
+    while not is_idle(sf, o.claude_pid):
+        if not alive(o.claude_pid) or time.time() - t0 > IDLE_WAIT_S:
+            log("session closed or never idle -- nothing changed")
+            return
+        time.sleep(2)
+    if not end_session(o):
+        log("claude did not exit -- nothing changed")
+        return
+    time.sleep(1)
+    try:
+        log(rewrite(sf))
+    except Exception as e:                                              # noqa: BLE001
+        log(f"rewrite failed: {e!r} -- it comes back as it was")
+    bring_back(o)
+    log("done")
+
+
+# --- starting the helper ------------------------------------------------------------------------
+
+def helper_options(p):
+    """Adds to parser `p` the options a helper gets about the session it serves.
+    @date 24-10-2026-19:25"""
+    p.add_argument("--helper", action="store_true", help=argparse.SUPPRESS)
+    for name, kind in (("--sid", str), ("--claude-pid", int), ("--shell-pid", int),
+                       ("--cmdline", str), ("--cwd", str), ("--shell", str), ("--bg-id", str),
+                       ("--bg-name", str)):
+        p.add_argument(name, type=kind, help=argparse.SUPPRESS)
+
+
+def shown(o):
+    """Answers where the session `o` names is shown, for the log. @date 24-10-2026-19:25"""
+    if IS_WIN:
+        return f"console of pid {o.shell_pid}"
+    return f"background session {o.bg_id}" if o.bg_id else f"terminal of shell {o.shell}"
+
+
+def this_session(name):
+    """Answers (id, claude pid, session file) of the session this command runs in; when there is
+    none, prints why, headed by `name`, and answers None. @date 24-10-2026-19:25"""
+    sid, cpid = os.environ.get("CLAUDE_CODE_SESSION_ID"), os.environ.get("CLAUDE_PID")
+    if not sid or not cpid:
+        print(f"{name}: run it from inside a Claude Code session (`! {name}`); "
+              f"CLAUDE_CODE_SESSION_ID / CLAUDE_PID are not set.")
+        return None
+    path = find_session(sid)
+    if not path:
+        print(f"{name}: no session file for {sid}")
+        return None
+    return sid, int(cpid), path
+
+
+def where(cpid):
+    """Answers the helper options that tell where the session run by `cpid` is shown and how it
+    comes back, or a str saying why it could not come back.
+    @date 24-10-2026-19:25, 24-10-2026-20:13"""
+    if IS_WIN:
+        shell_pid, cmdline = proc_info(cpid)
+        return ["--shell-pid", str(shell_pid), "--cmdline", cmdline]
+    out = ["--cwd", os.path.realpath(f"/proc/{cpid}/cwd")]
+    entry = agent_entry(cpid)
+    if (entry or {}).get("kind") == "background" or under_relay(cpid):
+        if not (entry or {}).get("id"):
+            return ("it runs in the background, but `claude agents --json` does not list it, so "
+                    "it could not be stopped and resumed")
+        return out + ["--bg-id", entry["id"], "--bg-name", entry.get("name") or ""]
+    if not os.environ.get("CST_SHELL"):
+        return (f"this claude was not started by the `claude` function of cst.bash, so nothing "
+                f"would bring the session back here. Exit it, load the function -- "
+                f"`. {os.path.join(HERE, 'cst.bash')}`, or a new terminal once ~/.bashrc sources "
+                f"it -- and run `claude --resume {os.environ.get('CLAUDE_CODE_SESSION_ID')}`, "
+                f"then run this again.")
+    return out + ["--shell", os.environ["CST_SHELL"]]
+
+
+def launch_helper(script, sid, cpid, extra):
+    """Starts `script --helper` for session `sid`, run by process `cpid`, detached from it, with
+    `extra` passed on; answers why it can't, or None once started. @date 24-10-2026-19:25"""
+    w = where(cpid)
+    if isinstance(w, str):
+        return w
+    env = {k: v for k, v in os.environ.items() if not k.startswith(INHERITED)}
+    detach = {"creationflags": DETACHED} if IS_WIN else {"start_new_session": True}
+    subprocess.Popen([sys.executable, os.path.abspath(script), "--helper", "--sid", sid,
+                      "--claude-pid", str(cpid)] + w + extra,
+                     env=env, close_fds=True, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **detach)
+    return None
+
+
+# --- cst's own: the trim ------------------------------------------------------------------------
+
+def summarize(o, sf):
+    """Answers (the session's records, the split, the summary of the half before it) for the
+    session in `sf`, or None, logged, when there is nothing to cut or the summary can't replace
+    the older half. @date 18-10-2026-18:25, 24-10-2026-19:25"""
     _, every = ctxtrim.load_session(sf)
     base = ctxtrim.live_start(every)            # resume loads from here; before it, logs
     split = base + ctxtrim.split_index(every[base:], o.keep)
     if split >= len(every):
         log("no human prompt to cut at -- nothing changed")
-        return
+        return None
     text = ctxtrim.render_with_marker(every[base:], split - base, 500)
     summary = ctxtrim.summarize_older(text, o.model)
     log(f"{len(every)} records, loaded from {base} ({len(every) - base}), split at {split}; "
@@ -376,93 +548,62 @@ def helper(o):
     bad = ctxtrim.check_summary(summary, len(text.split(ctxtrim.MARKER, 1)[0]))
     if bad:                                     # before the session is touched at all
         log(f"the summary can't replace the older half -- {bad} -- nothing changed")
+        return None
+    return every, split, summary
+
+
+def helper(o):
+    """Summarizes the older half while the session stays open, then switches the session with the
+    trim. @date 18-10-2026-18:25, 24-10-2026-19:25"""
+    log(f"=== cst helper: session {o.sid}, claude pid {o.claude_pid}, {shown(o)}")
+    made = summarize(o, find_session(o.sid))
+    if not made:
         return
+    every, split, summary = made
 
-    t0 = time.time()
-    while not is_idle(sf):
-        if not alive(o.claude_pid) or time.time() - t0 > 1800:
-            log("session closed or never idle -- nothing changed")
-            return
-        time.sleep(2)
-    end_session(o)
-    t0 = time.time()
-    while alive(o.claude_pid):
-        if time.time() - t0 > 60:
-            log("claude did not exit -- nothing changed")
-            if not IS_WIN:
-                drop_request(o.sid)
-            return
-        time.sleep(1)
-    time.sleep(1)
-
-    why = ctxtrim.trim_in_place(sf, every, split, summary)
-    log(f"{why} -- nothing changed; resuming as it was" if why else
-        f"trimmed {sf} in place: the summary is record {split}, the records before it a log")
-    bring_back(o)
-    log("done")
+    def trim(sf):
+        why = ctxtrim.trim_in_place(sf, every, split, summary)
+        return (f"{why} -- nothing changed; it comes back as it was" if why else
+                f"trimmed {sf} in place: the summary is record {split}, the records before it "
+                f"a log")
+    switch(o, trim)
 
 
 def main(argv):
-    """Starts the detached helper for the session this command runs in. @date 10-10-2026"""
+    """Starts the detached helper for the session this command runs in; or, for the cst.bash
+    function, prints what to run claude with again. @date 10-10-2026, 24-10-2026-19:25"""
     p = argparse.ArgumentParser(description="Trim the Claude Code session you are in, in place, "
                                             "and resume it by itself.")
     p.add_argument("--model", default="claude-opus-5-5", help="model that writes the summary")
     p.add_argument("--keep", type=float, default=0.5,
                    help="share of the conversation kept verbatim")
-    p.add_argument("--take-request", metavar="CWD",
-                   help="for the cst.bash wrapper: print the session to resume in CWD, if any")
-    p.add_argument("--helper", action="store_true", help=argparse.SUPPRESS)
-    p.add_argument("--sid", help=argparse.SUPPRESS)
-    p.add_argument("--claude-pid", type=int, help=argparse.SUPPRESS)
-    p.add_argument("--shell-pid", type=int, help=argparse.SUPPRESS)
-    p.add_argument("--cmdline", help=argparse.SUPPRESS)
-    p.add_argument("--relay", help=argparse.SUPPRESS)
-    p.add_argument("--cwd", help=argparse.SUPPRESS)
+    p.add_argument("--take-request", metavar="SHELL",
+                   help="for the cst.bash function: print the arguments to run claude with again "
+                        "after the claude it ran with ARGS exited, if cst or cdt ended its session")
+    p.add_argument("args", nargs="*", help=argparse.SUPPRESS)
+    helper_options(p)
     o = p.parse_args(argv)
     if o.take_request:
-        sid = take_request(o.take_request)
-        if not sid:
-            return 1
-        print(sid)
-        return 0
+        return take(o.take_request, o.args)
+    if o.args:
+        p.error(f"unexpected arguments: {' '.join(o.args)}")
     if o.helper:
         try:
             helper(o)
         except Exception as e:                                          # noqa: BLE001
             log(f"helper failed: {e!r} -- the session file is untouched unless logged above")
-            if not IS_WIN:
-                drop_request(o.sid)
         return 0
-
-    sid, cpid = os.environ.get("CLAUDE_CODE_SESSION_ID"), os.environ.get("CLAUDE_PID")
-    if not sid or not cpid:
-        print("cst: run it from inside a Claude Code session (`! cst`); "
-              "CLAUDE_CODE_SESSION_ID / CLAUDE_PID are not set.")
+    here = this_session("cst")
+    if not here:
         return 1
-    if not find_session(sid):
-        print(f"cst: no session file for {sid}")
+    sid, cpid, _ = here
+    why = launch_helper(__file__, sid, cpid, ["--model", o.model, "--keep", str(o.keep)])
+    if why:
+        print(f"cst: {why}")
         return 1
-    if IS_WIN:
-        shell_pid, cmdline = proc_info(cpid)
-        where = ["--shell-pid", str(shell_pid), "--cmdline", cmdline]
-        detach = {"creationflags": DETACHED}
-        back = "resume by itself"
-    else:
-        relay = relay_socket(cpid)
-        where = ["--cwd", os.path.realpath(f"/proc/{int(cpid)}/cwd")]
-        where += ["--relay", relay] if relay else []
-        detach = {"start_new_session": True}
-        back = (f"come back by itself through the cst.bash wrapper (without it: "
-                f"claude --resume {sid})")
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("CLAUDE_CODE", "CLAUDECODE", "CLAUDE_PID"))}
-    subprocess.Popen([sys.executable, os.path.abspath(__file__), "--helper", "--sid", sid,
-                      "--claude-pid", cpid, "--model", o.model, "--keep", str(o.keep)] + where,
-                     env=env, close_fds=True, stdin=subprocess.DEVNULL,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **detach)
-    print(f"cst: trimming session {sid[:8]} in the background (summary by {o.model}). It will "
-          f"/exit and {back} in a few minutes. Do not type in this terminal until it is back. "
-          f"Log: {LOG}")
+    print(f"cst: trimming session {sid[:8]} in the background (summary by {o.model}); it will end "
+          f"and come back by itself in a few minutes. Nothing to do meanwhile; do not type in "
+          f"this session until it is back. Log: {LOG}")
     return 0
 
 

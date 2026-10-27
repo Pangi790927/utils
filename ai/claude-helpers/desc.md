@@ -57,19 +57,21 @@ The tools
 Inside a session, `! cst [--model M] [--keep 0.5]`. It reads the session's exact id and process
 from `CLAUDE_CODE_SESSION_ID` / `CLAUDE_PID` (it refuses to run without them and never guesses by
 file times), starts a detached helper, and returns. The helper summarizes the older half while
-the session stays open, waits until it is idle, types `/exit`, trims the file in place once Claude
-has closed it (ctxtrim's trim, under the same id), and types the original launch command with
-`--resume <id>` into the same terminal. Nothing is thrown away: the older half stays in the file
-as a log that resume no longer loads, so there is no `--backup` any more (15-10-2026). Tested on a
+the session stays open, waits until it is idle, ends it, trims the file in place once Claude has
+exited (ctxtrim's trim, under the same id), and brings the session back under the same id where it
+was shown: on Windows by typing `/exit` and then the launch command with `--resume <id>` into its
+console, on Linux as told below. Nothing is thrown away: the older half stays in the file as a log
+that resume no longer loads, so there is no `--backup` any more (15-10-2026). Tested on a
 throwaway session (10-10-2026, before the trim kept the log): back in about 20 seconds with a
-Haiku summary, every early fact still known. Do not type in that terminal while it switches. Log:
-`cst/cst.log`. Launchers `cst` / `cst.cmd` also live on the PATH in `~/workspace/claude-utils/`.
+Haiku summary, every early fact still known. Do not type in the session while it switches. Log:
+`cst/cst.log`. Launchers `cst` / `cst.cmd` also live on the PATH in `~/workspace/claude-utils/`
+(Windows) and as `~/.local/bin/cst` (Linux). 24-10-2026-19:25
 
 ### cdt -- drop the reasoning
 
 `cdt SESSION.jsonl|ID` drops every thinking block from what `claude --resume` loads, in place, and
-nothing else; inside a session, `! cdt` does it to that session through cst's switch (idle,
-`/exit`, drop, resume). `--dry` only reports: how many blocks, about how many tokens of context
+nothing else; inside a session, `! cdt` does it to that session through cst's switch (idle, end,
+drop, back). `--dry` only reports: how many blocks, about how many tokens of context
 they hold, how much of that the API drops already, and where the next turn would start. No model
 is asked anything, so it is instant and free. On Opus 5.5 earlier thinking stays in the context,
 and at high effort it is most of it: swarm's max-effort Reviewer stood at 681K tokens, ~375K of
@@ -83,32 +85,46 @@ before the next turn. The rewrite is checked before it is written: resume must r
 and load the same records, less the thinking. The estimate counts a signature's ~900-character
 floor out, then ~4 characters a token. Tested 15-10-2026 on hand-made sessions and on a real Opus
 5.5 one: the resume after the drop worked, its context fell by the thinking, and the earlier
-answers were recalled. The in-session switch is cst's own; it was checked with its typing faked,
-not live. Log: `cdt/cdt.log`. Launchers `cdt` / `cdt.cmd` also live in `~/workspace/claude-utils/`.
+answers were recalled. The in-session switch is cst's own (on Linux tested live, below). Log:
+`cdt/cdt.log`. Launchers `cdt` / `cdt.cmd` also live in `~/workspace/claude-utils/` (Windows) and
+as `~/.local/bin/cdt` (Linux). 24-10-2026-19:25
 
-**On Linux** (14-10-2026) Claude Code runs a session under its daemon (`claude daemon run`), on a
-terminal of its own owned by a relay process, `claude bg-pty-host --bg-pty-host <socket>` (the
-parent of `CLAUDE_PID`). Your terminal only runs a thin client, and the relay's one client is the
-daemon, so nothing links a session to the terminal that shows it. So:
+**On Linux** (24-10-2026, Claude Code 2.1.310; this replaces the notes of 14-10-2026, which did not
+hold up). Claude Code runs a session in one of two ways, and cst ends and brings back each its own
+way; cdt uses the same switch.
 
-- `/exit` is typed through the relay socket, as a client does: frames of
-  `[uint32 BE length][uint8 kind][payload]`, kind 0 = raw terminal bytes (typed into the session),
-  kind 1 = JSON control (`hello` with the Claude Code version, the screen so far, then `live`;
-  `ping`/`pong`, `auth`/`auth-required`, `resize`, `kill`, `exit`). No token is set up on this
-  machine, so typing is accepted. Undocumented (seen in 2.1.295): if the relay refuses
-  (`auth-required`), is missing, or the session doesn't exit, cst falls back to SIGTERM.
-- The session comes back through `cst/cst.bash`, sourced from `~/.bashrc`: it wraps `claude`, and
-  when that exits it runs `cst --take-request $PWD`. cst leaves a request in `cst/requests/`
-  ("pending" before `/exit`, "ready" after the rewrite) with the session id and the directory it
-  was started in; a request for the same directory, at most 15 s old, is consumed and `claude` is
-  started again with the same arguments and `--resume <id>` (an earlier resume or continue
-  dropped). Matching on directory and time is a heuristic: exiting another `claude` in the same
-  directory within those 15 s would take the request. Without the wrapper: `claude --resume <id>`.
-- `~/.local/bin/cst` is a link to `cst/cst`, which picks `python3` on Linux and `python` on
-  Windows.
-- Not supported: sessions hosted by Claude Code's background daemon (opened from the agents view):
-  their relay refuses typing, and a session ended from outside is renamed `.orphaned` and can't be
-  resumed by id. Run cst from a session started with plain `claude` in a terminal.
+- **In a terminal**, `claude` is a child of the terminal's shell. Nothing can type into another
+  terminal (TIOCSTI is off: `/proc/sys/dev/tty/legacy_tiocsti` is 0), so the helper ends the
+  session with SIGTERM, which Claude Code takes as a clean shutdown, and the `claude` function of
+  `cst/cst.bash`, sourced from `~/.bashrc`, starts it again. The function runs claude with
+  `CST_SHELL` set to its shell's pid; whenever claude exits it runs
+  `cst.py --take-request <pid> -- <args>`, which answers, once the session is rewritten, the
+  arguments to run claude with again: the same options and `--resume <id>`, without a prompt given
+  on the command line (`claude .` does not send "." again) or an option that picks, forks or
+  backgrounds a session. The helper leaves the request in `cst/requests/<id>.json`, "pending"
+  before it ends the session and "ready" after the rewrite, and the function takes only one that
+  names its own shell. cst and cdt refuse to run in a terminal session the function did not
+  start, since nothing would bring it back.
+- **In the background** (`claude --bg`, the agent view), the daemon runs the session on a terminal
+  of its own, behind a `claude bg-pty-host` relay, shown only while a terminal runs
+  `claude attach <id>`. The helper finds its short id in `claude agents --json`, ends it with
+  `claude stop <id>` (the conversation stays; an attached terminal prints the resume hint and
+  returns to its shell), and brings it back with `claude --bg --resume <session id>`, which keeps
+  the short id and the session's saved options. A terminal that attached through the function
+  attaches again by itself; any other, or the agent view, opens it again with `claude attach <id>`.
+- **Idle** means no write to the file for 8 s, the last message a finished answer, and
+  `claude agents --json` showing the session idle. From 2.1.303 on, Claude Code answers a `!`
+  command's output with a turn of its own, so that output no longer means idle by itself; for a
+  version that answers none, it counts after 60 s.
+- `~/.local/bin/cst` and `~/.local/bin/cdt` are links to `cst/cst` and `cdt/cdt`, which pick
+  `python3` on Linux and `python` on Windows.
+- Tested 24-10-2026 on throwaway Haiku sessions driven through a pseudo-terminal: cst and cdt, each
+  on a terminal session and on a background one attached through the function. Each came back by
+  itself, 15 to 18 s after the `!` command (the summary by Haiku), resumed from the summary (cst)
+  or without any thinking (cdt), and recalled what was said before the switch.
+- From 2.1.300 on, a session file also holds `api-request`, `api-request-blob` and
+  `api-request-shape` records, a log of the requests sent. Resume still loads the conversation
+  from the user/assistant chain, so the trim and the drop work as before (the tests above).
 
 A trim loses the reasoning of the half it keeps (an API-side limit, measured 14-10-2026), so it
 lands at about 0.35 x the start with `--keep 0.5` in a session that thinks a lot; the idea of adding
