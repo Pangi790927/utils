@@ -72,3 +72,6 @@ add a line to this file saying what it is and how it is meant to be used.
 - `templates/project_init/` - setting a repo up for AI work, and starting a header-first C++
   project.
 - `examples/comments/force_release.md` - one comment in `virt_composer.cpp`, rewritten four times.
+- `remarkable/proposals/` - turns proposals (a tested change with its complete diff, written up for
+  review before it is applied) into one PDF to annotate on a reMarkable, and how to upload it and
+  get the annotated copy back.
