@@ -49,8 +49,10 @@ The tools
 |                               | place, every other word kept; `! cdt` does it to the session it  |
 |                               | is run from and resumes it (below).                              |
 | `statusline/`                 | A status line that shows the context in use, and what cst or cdt |
-|                               | is doing to the session, with a timer; `install.py` puts it into |
-|                               | the Claude Code settings (below).                                |
+|                               | is doing to the session, with a timer: `statusline.py` on Linux, |
+|                               | `windows/statusline.sh` on Windows; `install.py` and             |
+|                               | `windows/install.py` put it into the Claude Code settings        |
+|                               | (below).                                                         |
 | `paired/`                     | A copy of the game studio's runner, without the game, with a     |
 |                               | README on how to reinstate it.                                   |
 
@@ -69,6 +71,15 @@ throwaway session (10-10-2026, before the trim kept the log): back in about 20 s
 Haiku summary, every early fact still known. Do not type in the session while it switches. Log:
 `cst/cst.log`. Launchers `cst` / `cst.cmd` also live on the PATH in `~/workspace/claude-utils/`
 (Windows) and as `~/.local/bin/cst` (Linux). 24-10-2026-19:25
+
+The code is split by system. `cst/cst.py` is cst itself -- the summary and the trim -- and its
+command, and `cdt/cdt.py` is the drop and its command. The switch, and every helper that behaves
+the same on both systems, is `cst/common.py`. Ending a session and bringing it back is the driver
+of the system: `cst/driver_linux.py` (the cst.bash hook, SIGTERM) or `cst/driver_windows.py`
+(typing into the console). What those need to know about processes, and the folder of the status
+files, is `cst/system_linux.py` or `cst/system_windows.py`. Linux runs the code of the last
+commit before the split, only reorganized; the Windows driver holds what changed since.
+28-10-2026-11:45
 
 ### cdt -- drop the reasoning
 
@@ -152,18 +163,52 @@ the same switch.
   `api-request-shape` records, a log of the requests sent. Resume still loads the conversation
   from the user/assistant chain, so the trim and the drop work as before (the tests above).
 
+**On Windows** (28-10-2026, Claude Code 2.1.311). For a session in a console, the helper types
+into the console of the process that started claude, so cst and cdt refuse to run, saying why and
+what to do instead, unless that process is a cmd or PowerShell prompt that reads the console
+again once claude has exited. Refused are a claude that another program starts directly (a
+Windows Terminal profile, say), and one started by a cmd or PowerShell that runs only a script or
+one command (`cmd /c`, `powershell -Command` without `-NoExit`, a wrapper such as
+`claude-glm.cmd`), which exits with claude. Git Bash is left out, as untried. Windows has a
+status line of its own (below). 28-10-2026-01:10, 28-10-2026-10:52, 28-10-2026-11:45
+
+A background session (`claude --bg`, the agent view) runs under the same `bg-pty-host` relay as
+on Linux, and comes back the same way: `claude stop <id>`, then `claude --bg --resume <session
+id>`. A console that showed it through `claude attach`, at a cmd or PowerShell prompt, gets
+`claude attach <id>` typed into it once that `claude attach` has exited; the agent view lists the
+session again by itself. The programs the helper only asks something, such as `claude agents
+--json`, run without a console window of their own, which would otherwise flash up.
+28-10-2026-10:52
+
+- Tested 28-10-2026 by calling the check directly: it passed a claude under the VS Developer
+  PowerShell (`powershell -noe -c …`), and refused a `cmd /c`, a `powershell -Command`, Python
+  and Git Bash; a background session was told apart from it, with its short id and folder from
+  `claude agents --json`, which lists a running one with its pid and status on Windows too. The
+  switch of a background session has not run live on Windows yet, and no `! cst` or `! cdt` has
+  run on Windows since 22-10-2026.
+
 A trim loses the reasoning of the half it keeps (an API-side limit, measured 14-10-2026), so it
 lands at about 0.35 x the start with `--keep 0.5` in a session that thinks a lot; the idea of adding
 Claude Code's native compact summary is in `cst/feature-compact.md`.
 
 ### statusline -- the context, and cst or cdt at work, in the status line
 
-`python3 statusline/install.py` installs it on a PC, Linux only. It sets the status line in
-`~/.claude/settings.json` (or the one under `CLAUDE_CONFIG_DIR`) to `statusline.py`, named by its
-absolute path in this checkout, re-run every second. Every other setting stays as it was, and a
-second run changes nothing. A status line set before is replaced only with `--replace`, and the
-file as it was is kept as `settings.json.bak`; `--dry` prints the result and writes nothing. After
-the checkout moves, a new run points the entry at the new place.
+On Linux, `python3 statusline/install.py` installs `statusline.py`, the status line of the last
+commit before the split; on Windows, `python statusline/windows/install.py` installs
+`windows/statusline.sh`. Each sets the status line in `~/.claude/settings.json` (or the one under
+`CLAUDE_CONFIG_DIR`) to its command, named by its absolute path in this checkout, re-run every
+second. Every other setting stays as it was, and a second run changes nothing. A status line set
+before is replaced only with `--replace`, and the file as it was is kept as `settings.json.bak`;
+`--dry` prints the result and writes nothing. After the checkout moves, a new run points the entry
+at the new place. Reading and writing the settings is `claude_settings.py`'s, which both use.
+28-10-2026-11:45
+
+On Windows, Claude Code runs the entry in Git Bash, and `windows/statusline.sh` makes every line
+itself, with bash alone, but for the one of a running cst or cdt: only then does it start Python
+(`windows/running.py`), to learn whether the helper still runs. Starting Python every second made
+typing freeze there (below); on Linux it costs nothing, and `statusline.py` makes every line. The
+Windows install counts the Python entry of its first version as its own, and replaces it without
+`--replace`. 28-10-2026-11:45
 
 The status line shows one of these:
 
@@ -179,15 +224,49 @@ The status line shows one of these:
 | `cst: nothing changed, see cst.log`, in   | cst or cdt stopped without changing the session;     |
 | red                                       | shown for a minute.                                  |
 
-The cst and cdt helper leaves its state in `$XDG_RUNTIME_DIR/cst/status.<session id>`
-(`set_status` in `cst.py`), and `statusline.py` reads it through `cst.py`. A "running" state whose
-helper has exited counts as none. The status goes once the session has a model reply newer than
-it.
+The cst and cdt helper leaves its state in `$XDG_RUNTIME_DIR/cst/status.<session id>` on Linux
+and in `%LOCALAPPDATA%\cst\status.<session id>` on Windows (`set_status` in `cst/common.py`). A
+"running" state whose helper has exited counts as none. On Linux, `statusline.py` drops a "back"
+status once the session has a model reply newer than it, and a "failed" one after a minute. On
+Windows the helper itself stays until that reply, then removes the "back" status (`after_back` in
+`cst/driver_windows.py`), or after half an hour; `windows/statusline.sh` drops a "back" older than
+that, which only a helper that died leaves, and a "failed" one after a minute. A status line
+reading the file while the helper writes it makes the rename fail on Windows ("Access is
+denied"), so the write tries again there for a few seconds, as ctxtrim's does. 28-10-2026-11:45
 
 - Tested 27-10-2026 with Claude Code 2.1.311, on throwaway Haiku sessions in a pseudo-terminal
   with the cst.bash hook and the status line given through `--settings`: `! cst` showed
   summarizing, then waiting for idle, then `cst: trimmed, waiting for a reply` until the next
   answer; `! cdt` the same without the summary.
+- Tested 28-10-2026 on Windows, without a live switch: each state the helper leaves showed as in
+  the table above (a "running" one with an exited helper as the context), a status write waited
+  out a reader holding the file, and `install.py` on a scratch settings folder wrote the entry,
+  changed nothing on a second run, and replaced another status line only with `--replace`. The
+  Python entry of then ran under Git Bash, cmd and PowerShell, in about 0.2 s.
+- On Windows, a status line that starts Python every second makes typing in Claude Code freeze
+  now and then, for up to about a second, so the install was taken off this PC again
+  (28-10-2026). Measured in throwaway sessions by timing typed letters on the console: Python
+  every second froze it, even one that only prints `1`; `echo`, `cmd`, the old Git Bash script,
+  a 0.6 s `sleep` or a 1 s `ping` every second, and Python every 2 or 5 s, did not. Outside
+  Claude Code, while Python started every second, creating another process now and then took
+  0.35 to 1.4 s, against at most 5 ms while `cmd` did; Claude Code creates the status line's
+  Git Bash on the thread that handles typing. Real-time protection was on, so the antivirus
+  checking each Python start is the likely cause, not a proven one. A Python whose console was
+  closed while it started could also stay stuck, using no CPU; four such, left by those tests,
+  made every process start take 263 ms instead of 67 ms until they were stopped.
+  28-10-2026-10:37, 28-10-2026-10:45
+- Tested 28-10-2026 on Windows, `windows/statusline.sh`: each state showed as in the table above,
+  the context line as `statusline.py` shows it, a stale status was dropped, and a refresh took
+  about 94 ms with no Python started. In the typing test, refreshing every second, the slowest
+  letter took 29 and 38 ms in two windows, against 57 ms for the old Git Bash script with no
+  refresh, and 854 to 982 ms for the Python status line. The helper removed its "back" status at
+  a reply, left alone a status that replaced it, and gave up after BACK_SHOW_S.
+- Checked 28-10-2026 after the split, without a Linux PC: of the functions the Linux path runs,
+  29 are the committed ones unchanged; the other 18 differ only in dropping a Windows branch, or
+  in taking a value from `system_linux.py` that is the committed one there (no options for a
+  program the helper asks, a plain rename, a new session for the helper). The Linux installer
+  wrote the same settings and said the same as the committed one, in twelve cases. Not run on
+  Linux yet.
 - Claude Code's own compaction is left alone: it shows its own progress ("Running PreCompact
   hooks…", then "Compacted"). The PreCompact and PostCompact hooks a first version installed are
   taken out by `install.py`.
@@ -196,7 +275,7 @@ it.
   transcript ("Compacted while idle, before the prompt cache expired · turn off with
   "idleCompaction": false").
 
-27-10-2026-21:55
+27-10-2026-21:55, 28-10-2026-01:10, 28-10-2026-10:45, 28-10-2026-11:45
 
 ### transcript.py line prefixes
 
