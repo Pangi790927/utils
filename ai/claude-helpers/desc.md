@@ -111,7 +111,10 @@ the same switch.
   session, the helper leaves that shell `$XDG_RUNTIME_DIR/cst/request.<pid>`, "pending", with the
   arguments to run claude with again: the same options, read from `/proc/<pid>/cmdline`, and
   `--resume <id>`, without a prompt given on the command line (`claude .` does not send "."
-  again) or an option that picks, forks or backgrounds a session. After the rewrite it marks the
+  again) or an option that picks, forks or backgrounds a session. They hold `--effort` with the
+  effort the session ran at when cst or cdt started (`CLAUDE_EFFORT`), in place of any the
+  command line gave, since a level picked with `/effort`, as max is, holds for that session only
+  and a plain resume falls back to the settings (02-11-2026-11:45). After the rewrite it marks the
   request "ready". At the first prompt after that claude has exited, the hook waits for "ready"
   (180 s at most) and runs claude again; it loops, so a session that came back and is ended again
   comes back as well. Any claude under the shell comes back, however it was started
@@ -125,7 +128,9 @@ the same switch.
   `claude attach <id>`. The helper finds its short id in `claude agents --json`, ends it with
   `claude stop <id>` (the conversation stays; an attached terminal prints the resume hint and
   returns to its shell), and brings it back with `claude --bg --resume <session id>`, which keeps
-  the short id and the session's saved options. Before the stop, the helper finds in `/proc` each
+  the short id and the session's saved options, its effort among them (`respawnFlags` in
+  `~/.claude/jobs/<id>/state.json`); a flag given there would start a copy under a new id
+  (02-11-2026-11:45). Before the stop, the helper finds in `/proc` each
   `claude attach <id or name>` showing the session and leaves a request for the shell above it,
   which then runs that `claude attach` again by itself; any other terminal, or the agent view,
   opens it again with `claude attach <id>`. `claude respawn <id>` (2.1.311) is no shortcut: it

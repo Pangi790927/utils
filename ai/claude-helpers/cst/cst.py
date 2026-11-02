@@ -31,6 +31,11 @@ How steps 2 and 4 happen depends on where the session runs:
     `claude --bg --resume <id>`; a terminal that showed it through `claude attach`, in a shell
     with that hook, attaches to it again.
 
+The session comes back at the effort it ran at when cst started, which Claude Code gives its
+commands as CLAUDE_EFFORT, and not at the one in the settings: a level picked with `/effort`, as
+max is, holds for that session only. On Windows and in a terminal, the relaunch passes it as
+`--effort`; a background session keeps it among the options its daemon saves. 02-11-2026-11:45
+
 cdt makes the same switch with another rewrite (switch() below). Do not type in the session while
 it switches. Everything is logged to cst.log beside this file. On Linux each step also shows in
 the session's status line, through statusline/statusline.py (set_status below).
@@ -38,7 +43,7 @@ the session's status line, through statusline/statusline.py (set_status below).
 Usage:
     cst [--model M] [--keep 0.5]
 
-@date 24-10-2026-19:25, 27-10-2026-18:40, 27-10-2026-21:55
+@date 24-10-2026-19:25, 27-10-2026-18:40, 27-10-2026-21:55, 02-11-2026-11:45
 """
 
 import argparse
@@ -215,10 +220,13 @@ NOT_AGAIN = {"-r", "--resume", "-c", "--continue", "--session-id", "--fork-sessi
              "--print", "--bg", "--background"}
 
 
-def relaunch_args(args, sid):
+def relaunch_args(args, sid, effort=None):
     """Answers the arguments that start session `sid` again the way `args` started claude: the
     same options, without a prompt given on the command line or an option that picks, forks or
-    backgrounds a session, and with `--resume <sid>`. @date 24-10-2026-19:25"""
+    backgrounds a session, and with `--resume <sid>`. When `effort` is given, the session comes
+    back at that effort, whatever `--effort` `args` holds. @date 24-10-2026-19:25,
+    02-11-2026-11:45"""
+    skip = NOT_AGAIN | ({"--effort"} if effort else set())
     out, i = [], 0
     while i < len(args):
         a, i = args[i], i + 1
@@ -231,17 +239,19 @@ def relaunch_args(args, sid):
         j = i
         while j < len(args) and j - i < most and not args[j].startswith("-"):
             j += 1
-        if name not in NOT_AGAIN:
+        if name not in skip:
             out += args[i - 1:j]
         i = j
-    return out + ["--resume", sid]
+    return out + (["--effort", effort] if effort else []) + ["--resume", sid]
 
 
-def resume_command(cmdline, sid):
-    """Answers the command that starts session `sid` again, from `cmdline`, the command line its
-    claude was started with: see relaunch_args (Windows). @date 10-10-2026, 24-10-2026-19:25"""
+def resume_command(cmdline, sid, effort=None):
+    """Answers the command that starts session `sid` again, at `effort` when given, from
+    `cmdline`, the command line its claude was started with: see relaunch_args (Windows).
+    @date 10-10-2026, 24-10-2026-19:25, 02-11-2026-11:45"""
     toks = [t.strip('"') for t in shlex.split(cmdline, posix=False)][1:]
-    return " ".join(["claude"] + [f'"{t}"' if " " in t else t for t in relaunch_args(toks, sid)])
+    again = relaunch_args(toks, sid, effort)
+    return " ".join(["claude"] + [f'"{t}"' if " " in t else t for t in again])
 
 
 # --- Linux: the shells that bring a session back, and the requests left for them ---------------
@@ -314,11 +324,12 @@ def attach_viewers(o):
 def targets(o):
     """Answers (shell, pid, arguments) for each shell that brings the session `o` names back, once
     process `pid` has exited: the shell above its claude, which runs claude again with the same
-    options and `--resume <id>` (relaunch_args); or, for a background session, the shell above
-    each `claude attach` that shows it, which runs that `claude attach` again.
-    @date 27-10-2026-18:40"""
+    options, at the session's effort, and `--resume <id>` (relaunch_args); or, for a background
+    session, the shell above each `claude attach` that shows it, which runs that `claude attach`
+    again. @date 27-10-2026-18:40, 02-11-2026-11:45"""
     if not o.bg_id:
-        return [(o.shell, o.claude_pid, relaunch_args(argv_of(o.claude_pid)[1:], o.sid))]
+        again = relaunch_args(argv_of(o.claude_pid)[1:], o.sid, o.effort)
+        return [(o.shell, o.claude_pid, again)]
     out = []
     for pid, args in attach_viewers(o):
         shell = hooked_shell(pid)
@@ -603,8 +614,10 @@ def bring_back(o):
     whose shells start it again in their terminals (Linux), after `claude --bg --resume <id>` for
     a background session. @date 10-10-2026, 24-10-2026-19:25, 27-10-2026-18:40"""
     if IS_WIN:
-        inject(o.shell_pid, resume_command(o.cmdline, o.sid))
+        inject(o.shell_pid, resume_command(o.cmdline, o.sid, o.effort))
         return
+    # A flag given here would start a copy under a new id, so the session comes back with the
+    # options its daemon saved, its effort among them. 02-11-2026-11:45
     if o.bg_id:
         log(f"claude --bg --resume {o.sid}: {run_claude(['--bg', '--resume', o.sid], o.cwd)}")
     mark_ready(o.sid)
@@ -663,11 +676,11 @@ def switch(o, rewrite, done):
 
 def helper_options(p):
     """Adds to parser `p` the options a helper gets about the session it serves.
-    @date 24-10-2026-19:25"""
+    @date 24-10-2026-19:25, 02-11-2026-11:45"""
     p.add_argument("--helper", action="store_true", help=argparse.SUPPRESS)
     for name, kind in (("--sid", str), ("--claude-pid", int), ("--shell-pid", int),
                        ("--cmdline", str), ("--cwd", str), ("--shell", str), ("--bg-id", str),
-                       ("--bg-name", str)):
+                       ("--bg-name", str), ("--effort", str)):
         p.add_argument(name, type=kind, help=argparse.SUPPRESS)
 
 
@@ -718,10 +731,13 @@ def where(cpid):
 
 def launch_helper(script, sid, cpid, extra):
     """Starts `script --helper` for session `sid`, run by process `cpid`, detached from it, with
-    `extra` passed on; answers why it can't, or None once started. @date 24-10-2026-19:25"""
+    `extra` passed on, and the effort the session runs at, when Claude Code gives it; answers why
+    it can't, or None once started. @date 24-10-2026-19:25, 02-11-2026-11:45"""
     w = where(cpid)
     if isinstance(w, str):
         return w
+    effort = os.environ.get("CLAUDE_EFFORT")
+    w += ["--effort", effort] if effort else []
     env = {k: v for k, v in os.environ.items() if not k.startswith(INHERITED)}
     detach = {"creationflags": DETACHED} if IS_WIN else {"start_new_session": True}
     subprocess.Popen([sys.executable, os.path.abspath(script), "--helper", "--sid", sid,
