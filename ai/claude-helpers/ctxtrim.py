@@ -367,28 +367,40 @@ def record_line(rec):
     return (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf8")
 
 
+def replace_file(tmp, path):
+    """Puts the file `tmp` in place of `path` in one rename.
+
+    Windows refuses the rename while another program holds either file open - a virus scanner
+    reading the file just written, say - so it is tried again for about six seconds before the
+    refusal is raised.
+
+    @param tmp   str - the new file, beside `path`
+    @param path  str - the file it replaces
+    @date 28-10-2026-01:10
+    """
+    for wait in (0.1, 0.2, 0.4, 0.8, 1.6, 3.2, None):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if wait is None:
+                raise
+            time.sleep(wait)
+
+
 def write_lines(path, lines):
     """Writes `lines` to `path` whole or not at all: they go to a file beside it first, which then
-    replaces it in one rename. Windows refuses the rename while another program holds either file
-    open - a virus scanner reading the file just written, say - so it is tried again for about six
-    seconds before the refusal is raised.
+    takes its place (replace_file).
 
     @param path   str - the session file
     @param lines  list[bytes] - its lines, each with its line ending
-    @date 15-10-2026-03:05
+    @date 15-10-2026-03:05, 28-10-2026-01:10
     """
     tmp = path + ".trim-tmp"
     try:
         with open(tmp, "wb") as f:
             f.writelines(lines)
-        for wait in (0.1, 0.2, 0.4, 0.8, 1.6, 3.2, None):
-            try:
-                os.replace(tmp, path)
-                break
-            except PermissionError:
-                if wait is None:
-                    raise
-                time.sleep(wait)
+        replace_file(tmp, path)
     finally:
         try:
             if os.path.exists(tmp):

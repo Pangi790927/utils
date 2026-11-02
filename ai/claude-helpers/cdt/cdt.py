@@ -25,12 +25,13 @@ made before the history ahead of it was edited, by a ctxtrim summary say, is dro
 already -- and where the next turn would start.
 
 Usage:
-    cdt [--dry]                    inside a session (`! cdt`): through cst's switch, a helper
+    cdt [--dry]                    inside a session (`! cdt`): through the switch cst uses
+                                   (cst/common.py, with the driver of the system), a helper
                                    waits until it is idle, ends it, drops, and brings it back by
-                                   itself -- on Linux, through the cst.bash hook as cst does
+                                   itself
     cdt SESSION.jsonl|ID [--dry]   a session no claude is writing to
 
-@date 15-10-2026-12:00, 24-10-2026-19:25, 27-10-2026-18:40
+@date 15-10-2026-12:00, 24-10-2026-19:25, 27-10-2026-18:40, 28-10-2026-11:35
 """
 
 import argparse
@@ -44,10 +45,13 @@ HELPERS = os.path.dirname(HERE)
 sys.path.insert(0, HELPERS)
 sys.path.insert(0, os.path.join(HELPERS, "cst"))
 import ctxtrim      # noqa: E402
-import cst          # noqa: E402
+import common       # noqa: E402
 
 LOG = os.path.join(HERE, "cdt.log")
-cst.LOG = LOG       # the cst helpers cdt reuses log to cdt.log as well. 15-10-2026-12:00
+# The helpers cdt shares with cst log to cdt.log as well; the driver is the system's.
+# 15-10-2026-12:00, 28-10-2026-11:35
+common.LOG = LOG
+driver = common.driver()
 
 THINKING = ("thinking", "redacted_thinking")
 
@@ -260,20 +264,20 @@ def helper(o):
     """Switches the session cdt was run from with the drop: once it is idle it ends, its reasoning
     is dropped, and it comes back -- cst's switch, with no summary to make first.
     @date 15-10-2026-12:00, 24-10-2026-19:25, 27-10-2026-21:40"""
-    cst.log(f"=== cdt helper: session {o.sid}, claude pid {o.claude_pid}, {cst.shown(o)}")
+    common.log(f"=== cdt helper: session {o.sid}, claude pid {o.claude_pid}, {driver.shown(o)}")
 
     def drop(sf):
         s, why = drop_in_place(sf)
         if why:
             return False, f"{why} -- nothing changed; it comes back as it was"
         return True, report(s, False)
-    cst.switch(o, drop, "thinking dropped")
+    common.switch(o, drop, "thinking dropped", driver)
 
 
 def in_session(dry):
     """Reports on the session cdt runs in, and unless `dry` starts the helper that drops its
     reasoning and brings it back; answers the exit code. @date 15-10-2026-12:00, 24-10-2026-19:25"""
-    here = cst.this_session("cdt")
+    here = common.this_session("cdt")
     if not here:
         return 1
     sid, cpid, path = here
@@ -281,7 +285,7 @@ def in_session(dry):
     print(report(s, True))
     if dry or not s.blocks:
         return 0 if s.blocks else 1
-    why = cst.launch_helper(__file__, sid, cpid, [])
+    why = common.launch_helper(driver, __file__, sid, cpid, [])
     if why:
         print(f"cdt: {why}")
         return 1
@@ -299,20 +303,20 @@ def main(argv):
                    help="a session .jsonl or its id, one no claude is writing to; left out, the "
                         "session cdt runs in")
     p.add_argument("--dry", action="store_true", help="only report what it would drop")
-    cst.helper_options(p)
+    common.helper_options(p)
     o = p.parse_args(argv)
     if o.helper:
         o.what = "cdt"
         try:
             helper(o)
         except Exception as e:                                          # noqa: BLE001
-            cst.log(f"cdt helper failed: {e!r} -- the session file is untouched unless logged "
+            common.log(f"cdt helper failed: {e!r} -- the session file is untouched unless logged "
                     f"above")
-            cst.set_status(o, "failed", f"the helper failed, see {os.path.basename(LOG)}")
+            common.set_status(o, "failed", f"the helper failed, see {os.path.basename(LOG)}")
         return 0
     if not o.session:
         return in_session(o.dry)
-    path = o.session if os.path.isfile(o.session) else cst.find_session(o.session)
+    path = o.session if os.path.isfile(o.session) else common.find_session(o.session)
     if not path:
         print(f"cdt: no session file for {o.session}")
         return 1
