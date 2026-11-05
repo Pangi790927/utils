@@ -24,10 +24,14 @@ through the cst.bash hook of the terminal's shell, and driver_windows.py, by typ
 session's console; each also stops and resumes a background session. What the two share, the
 switch among it, is in common.py.
 
-The session comes back at the effort it ran at when cst started, which Claude Code gives its
-commands as CLAUDE_EFFORT, and not at the one in the settings: a level picked with `/effort`, as
-max is, holds for that session only. On Windows and in a terminal, the relaunch passes it as
-`--effort`; a background session keeps it among the options its daemon saves. 02-11-2026-11:45
+The session comes back at the effort it ran at when cst started, and not at the one in the
+settings: a level picked with `/effort`, as max is, holds for that session only. That effort is
+read from the session's file, the newest of its last reply's and a later `/effort`'s
+(common.session_effort); CLAUDE_EFFORT, which Claude Code gives a command, is only the fallback:
+it is the effort of the turn the command runs in, and a `! cst` runs in none (05-11-2026: it came
+back at the settings' xhigh from max). On Windows and in a terminal, the relaunch passes it as
+`--effort`; a background session keeps it among the options its daemon saves. 02-11-2026-11:45,
+05-11-2026-08:30
 
 cdt makes the same switch with another rewrite (common.switch). Do not type in the session while
 it switches. Everything is logged to cst.log beside this file. Each step also shows in the
@@ -120,9 +124,9 @@ def main(argv):
     here = common.this_session("cst")
     if not here:
         return 1
-    sid, cpid, _ = here
+    sid, cpid, path = here
     why = common.launch_helper(driver, __file__, sid, cpid,
-                               ["--model", o.model, "--keep", str(o.keep)])
+                               ["--model", o.model, "--keep", str(o.keep)], sf=path)
     if why:
         print(f"cst: {why}")
         return 1

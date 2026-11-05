@@ -278,6 +278,49 @@ def last_message(sf):
             size *= 4
 
 
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+SET_EFFORT = "<local-command-stdout>Set effort level to "
+
+
+def session_effort(sf):
+    """Answers the effort the session in `sf` runs at, as its file last tells it, or None: the
+    effort Claude Code wrote on the newest reply ("effort", that turn's), or the level a `/effort`
+    set after it, whichever is newer. Only `/effort`'s own output counts, a record whose whole
+    content is it: a tool's output can quote the words.
+
+    Not CLAUDE_EFFORT first: Claude Code gives a command the effort of the turn it runs in, and a
+    `! cst` typed in the session runs in none. On 05-11-2026 session 83ef2663 ran at max, set
+    with `/effort` for that session only on top of the settings' xhigh, and cst brought it back
+    with `--effort xhigh` (Pangi: "why did your effort drop to xhigh after a cst?").
+    @date 05-11-2026-08:30"""
+    with open(sf, "rb") as f:
+        end = f.seek(0, os.SEEK_END)
+        size = 1 << 16
+        while True:
+            start = max(0, end - size)
+            f.seek(start)
+            lines = f.read(end - start).split(b"\n")[1 if start else 0:]
+            for line in reversed(lines):
+                if b'"effort"' not in line and b"Set effort level to " not in line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(r, dict):
+                    continue
+                if r.get("type") == "assistant" and r.get("effort") in EFFORTS:
+                    return r["effort"]
+                m = r.get("message") if r.get("type") == "user" else None
+                c = m.get("content") if isinstance(m, dict) else None
+                if isinstance(c, str) and c.lstrip().startswith(SET_EFFORT):
+                    word = c.lstrip()[len(SET_EFFORT):].split(" ", 1)[0].rstrip(".,:;")
+                    return word if word in EFFORTS else None
+            if not start:
+                return None
+            size *= 4
+
+
 def is_idle(sf, pid):
     """Answers whether the session in `sf`, run by process `pid`, is idle: nothing written to its
     file for QUIET_S seconds, its last message a finished answer of the model -- or the output of
@@ -376,15 +419,23 @@ def this_session(name):
     return sid, int(cpid), path
 
 
-def launch_helper(drv, script, sid, cpid, extra):
+def launch_helper(drv, script, sid, cpid, extra, sf=None):
     """Starts `script --helper` for session `sid`, run by process `cpid`, detached from it, with
-    `extra` passed on, the options `drv.where` gives, and the effort the session runs at, when
-    Claude Code gives it; answers why it can't, or None once started.
-    @date 24-10-2026-19:25, 28-10-2026-11:35, 02-11-2026-11:45"""
+    `extra` passed on, the options `drv.where` gives, and the effort the session runs at: as its
+    file `sf` last tells it (session_effort), else CLAUDE_EFFORT as Claude Code gives the command;
+    answers why it can't, or None once started.
+    @date 24-10-2026-19:25, 28-10-2026-11:35, 02-11-2026-11:45, 05-11-2026-08:30"""
     w = drv.where(cpid, sid)
     if isinstance(w, str):
         return w
-    effort = os.environ.get("CLAUDE_EFFORT")
+    try:
+        effort, said = (session_effort(sf) if sf else None), "the session file"
+    except OSError:
+        effort = None
+    if not effort:
+        effort, said = os.environ.get("CLAUDE_EFFORT"), "CLAUDE_EFFORT"
+    log(f"session {sid[:8]}: effort {effort or 'not known, the settings decide'}"
+        + (f", from {said}" if effort else ""))
     w += ["--effort", effort] if effort else []
     env = {k: v for k, v in os.environ.items() if not k.startswith(INHERITED)}
     subprocess.Popen([sys.executable, os.path.abspath(script), "--helper", "--sid", sid,

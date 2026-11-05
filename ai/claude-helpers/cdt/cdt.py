@@ -285,7 +285,7 @@ def in_session(dry):
     print(report(s, True))
     if dry or not s.blocks:
         return 0 if s.blocks else 1
-    why = common.launch_helper(driver, __file__, sid, cpid, [])
+    why = common.launch_helper(driver, __file__, sid, cpid, [], sf=path)
     if why:
         print(f"cdt: {why}")
         return 1
